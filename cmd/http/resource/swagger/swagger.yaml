@@ -1,0 +1,24 @@
+swagger: "2.0"
+info:
+  title: ffxiv-census API
+  description: Starter documentation. Update using swag once handlers are defined.
+  version: "1.0"
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns application status
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: OK
+  /example:
+    get:
+      summary: Example placeholder
+      description: Demonstrates how to wire handlers
+      produces:
+        - text/plain
+      responses:
+        "200":
+          description: OK

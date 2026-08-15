@@ -1,0 +1,56 @@
+package middleware
+
+import (
+    "fmt"
+    "net/http"
+    "reflect"
+    "runtime"
+    "strings"
+
+    "github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+)
+
+type Recorder struct {
+    http.ResponseWriter
+    StatusCode int
+}
+
+func (r *Recorder) WriteHeader(code int) {
+    r.StatusCode = code
+    r.ResponseWriter.WriteHeader(code)
+}
+
+func NewRecorder(w http.ResponseWriter) *Recorder {
+    return &Recorder{
+        ResponseWriter: w,
+        StatusCode:     http.StatusOK,
+    }
+}
+
+type Middleware struct {
+    middleware []func(handler http.Handler) http.Handler
+}
+
+func NewMiddleware() *Middleware {
+    return &Middleware{}
+}
+
+func (m *Middleware) Register(middleware func(handler http.Handler) http.Handler) {
+    m.middleware = append(m.middleware, middleware)
+}
+
+func (m *Middleware) Chain(handler http.Handler) http.Handler {
+    for _, middleware := range m.middleware {
+        handler = middleware(handler)
+        logging.Info("http.middleware", fmt.Sprintf("middleware %s started", m.getFuncName(middleware)))
+    }
+    return handler
+}
+
+func (m *Middleware) getFuncName(mw func(handler http.Handler) http.Handler) string {
+    fnName := runtime.FuncForPC(reflect.ValueOf(mw).Pointer()).Name()
+    slashParts := strings.Split(fnName, "/")
+    lastSlash := slashParts[len(slashParts)-1]
+    dotParts := strings.Split(lastSlash, ".")
+    return strings.TrimSuffix(dotParts[len(dotParts)-1], "-fm")
+}

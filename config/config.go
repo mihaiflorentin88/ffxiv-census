@@ -1,0 +1,99 @@
+package config
+
+import (
+	"bytes"
+	"embed"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spf13/viper"
+)
+
+//go:embed config.toml
+var configFS embed.FS
+
+type Config struct {
+	App     AppConfig      `mapstructure:"app"`
+	Logging *LoggingConfig `mapstructure:"logging"`
+	HTTP    HTTPConfig     `mapstructure:"http"`
+	Auth    *AuthConfig    `mapstructure:"auth"`
+	Metrics *MetricsConfig `mapstructure:"metrics"`
+	MySQL   *MySQLConfig   `mapstructure:"mysql"`
+}
+
+type AppConfig struct {
+    Name string `mapstructure:"name"`
+    Env  string `mapstructure:"env"`
+}
+
+type LoggingConfig struct {
+    Default       string `mapstructure:"default"`
+    ServerDefault string `mapstructure:"server_default"`
+    Level         string `mapstructure:"level"`
+}
+
+type HTTPConfig struct {
+    Host         string `mapstructure:"host"`
+    Port         int    `mapstructure:"port"`
+    ReadTimeout  string `mapstructure:"read_timeout"`
+    WriteTimeout string `mapstructure:"write_timeout"`
+    IdleTimeout  string `mapstructure:"idle_timeout"`
+}
+
+type AuthConfig struct {
+    Enabled bool     `mapstructure:"enabled"`
+    Token   string   `mapstructure:"token"`
+    Routes  []string `mapstructure:"routes"`
+    Users   []string `mapstructure:"users"`
+}
+type MetricsConfig struct {
+	Endpoint string `mapstructure:"endpoint"`
+	Prefix   string `mapstructure:"prefix"`
+}
+type MySQLConfig struct {
+	Host            string `mapstructure:"host"`
+	Port            int    `mapstructure:"port"`
+	Database        string `mapstructure:"database"`
+	Username        string `mapstructure:"username"`
+	Password        string `mapstructure:"password"`
+	Params          string `mapstructure:"params"`
+	MaxOpenConns    int    `mapstructure:"max_open_conns"`
+	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime string `mapstructure:"conn_max_lifetime"`
+	ConnMaxIdleTime string `mapstructure:"conn_max_idle_time"`
+	DialTimeout     string `mapstructure:"dial_timeout"`
+}
+
+func (c *MySQLConfig) DialTimeoutDuration() time.Duration {
+	if c == nil || c.DialTimeout == "" {
+		return 5 * time.Second
+	}
+	d, err := time.ParseDuration(c.DialTimeout)
+	if err != nil {
+		return 5 * time.Second
+	}
+	return d
+}
+
+func NewConfig() (*Config, error) {
+	content, err := configFS.ReadFile("config.toml")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded config: %w", err)
+	}
+
+	v := viper.New()
+	v.SetConfigType("toml")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
+	if err := v.ReadConfig(bytes.NewBuffer(content)); err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+	return &cfg, nil
+}
