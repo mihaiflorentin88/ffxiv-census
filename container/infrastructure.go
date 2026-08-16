@@ -6,12 +6,15 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/metrics"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
+	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 type InfrastructureContainer struct {
-	httpClient contract.HTTPClient
-	statsd     contract.StatsdClient
+	httpClient   contract.HTTPClient
+	statsd       contract.StatsdClient
+	sqliteDriver contract.SQLiteDriver
 }
 
 func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
@@ -39,4 +42,22 @@ func (s *ServiceContainer) Statsd() contract.StatsdClient {
 	}
 	s.infrastructure.statsd = client
 	return client
+}
+
+func (s *ServiceContainer) SQLite() contract.SQLiteDriver {
+	if s.infrastructure.sqliteDriver != nil {
+		return s.infrastructure.sqliteDriver
+	}
+	cfg := s.Config().SQLite
+	if cfg == nil {
+		logging.Warn("container.sqlite", "sqlite config missing")
+		return nil
+	}
+	driver, err := sqlite.NewDriver(cfg, sqlitemigration.FS())
+	if err != nil {
+		logging.Error("container.sqlite", fmt.Sprintf("failed to create sqlite driver: %v", err))
+		return nil
+	}
+	s.infrastructure.sqliteDriver = driver
+	return driver
 }
