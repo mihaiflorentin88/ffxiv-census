@@ -24,7 +24,7 @@ func (f *FreeCompanyRepository) Upsert(ctx context.Context, rec contract.FreeCom
 	if f.UpsertErr != nil {
 		return f.UpsertErr
 	}
-	f.fcs[rec.ID] = rec
+	f.fcs[rec.ID] = cloneFreeCompany(rec)
 	return nil
 }
 
@@ -35,7 +35,7 @@ func (f *FreeCompanyRepository) Get(ctx context.Context, id string) (*contract.F
 	if !ok {
 		return nil, nil
 	}
-	cp := rec
+	cp := cloneFreeCompany(rec)
 	return &cp, nil
 }
 

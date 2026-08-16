@@ -127,3 +127,60 @@ func TestCharacterRepository_ListStale(t *testing.T) {
 		t.Errorf("stale = %+v, want only id 301", stale)
 	}
 }
+
+func TestCharacterRepository_UpsertPreservesFirstSeenAndClearsDeleted(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	firstSeen := now.Add(-48 * time.Hour)
+	rec := contract.CharacterRecord{ID: 777, Name: "A", FirstSeenAt: firstSeen, LastCensusAt: &firstSeen}
+	if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	deletedAt := now.Add(-time.Hour)
+	if err := repo.MarkDeleted(context.Background(), 777, deletedAt); err != nil {
+		t.Fatalf("MarkDeleted: %v", err)
+	}
+	// Re-upsert with a fresh census: deleted_at cleared, first_seen_at preserved.
+	reCensus := now
+	if err := repo.Upsert(context.Background(),
+		contract.CharacterRecord{ID: 777, Name: "B", FirstSeenAt: now, LastCensusAt: &reCensus}, nil); err != nil {
+		t.Fatalf("Upsert (re): %v", err)
+	}
+	got, err := repo.Get(context.Background(), 777)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected character, got nil")
+	}
+	if got.DeletedAt != nil {
+		t.Errorf("deleted_at = %v, want nil after re-upsert", got.DeletedAt)
+	}
+	if !got.FirstSeenAt.Equal(firstSeen) {
+		t.Errorf("first_seen_at = %v, want preserved %v", got.FirstSeenAt, firstSeen)
+	}
+	if got.Name != "B" {
+		t.Errorf("name = %q, want updated %q", got.Name, "B")
+	}
+}
+
+func TestCharacterRepository_UpsertReplacesJobs(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	rec := contract.CharacterRecord{ID: 888, Name: "C", FirstSeenAt: now}
+	jobs := []contract.ClassJobRecord{{CharacterID: 888, ClassJobID: 1, Name: "Gladiator", Level: 1}}
+	if err := repo.Upsert(context.Background(), rec, jobs); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	// Re-upsert with nil jobs: the job set must be wiped.
+	if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+		t.Fatalf("Upsert (re): %v", err)
+	}
+	gotJobs, err := repo.GetJobs(context.Background(), 888)
+	if err != nil {
+		t.Fatalf("GetJobs: %v", err)
+	}
+	if len(gotJobs) != 0 {
+		t.Errorf("jobs = %d, want 0 after nil-jobs upsert", len(gotJobs))
+	}
+}

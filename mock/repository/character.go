@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -9,6 +10,9 @@ import (
 )
 
 // CharacterRepository is an in-memory fake with error injection and call recording.
+// It mirrors the SQLite implementation's semantics (first_seen_at preservation,
+// deleted_at clearing, jobs replacement, stale ordering) so handler tests don't
+// drift from production behavior.
 type CharacterRepository struct {
 	mu             sync.Mutex
 	characters     map[uint32]contract.CharacterRecord
@@ -35,16 +39,14 @@ func (f *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 	if f.UpsertErr != nil {
 		return f.UpsertErr
 	}
-	if rec.FirstSeenAt.IsZero() {
-		rec.FirstSeenAt = time.Now().UTC()
+	// Mirror SQL ON CONFLICT semantics: preserve first_seen_at, clear deleted_at.
+	if existing, ok := f.characters[rec.ID]; ok {
+		rec.FirstSeenAt = existing.FirstSeenAt
 	}
-	now := time.Now().UTC()
-	rec.LastCensusAt = &now
 	rec.DeletedAt = nil
-	f.characters[rec.ID] = rec
-	if jobs != nil {
-		f.jobs[rec.ID] = append([]contract.ClassJobRecord(nil), jobs...)
-	}
+	f.characters[rec.ID] = cloneCharacter(rec)
+	// Always replace the job set (SQL deletes then re-inserts; nil -> empty).
+	f.jobs[rec.ID] = append([]contract.ClassJobRecord(nil), jobs...)
 	return nil
 }
 
@@ -58,7 +60,7 @@ func (f *CharacterRepository) Get(ctx context.Context, id uint32) (*contract.Cha
 	if !ok {
 		return nil, nil
 	}
-	cp := rec
+	cp := cloneCharacter(rec)
 	return &cp, nil
 }
 
@@ -74,8 +76,11 @@ func (f *CharacterRepository) MarkDeleted(ctx context.Context, id uint32, at tim
 	if f.MarkDeletedErr != nil {
 		return f.MarkDeletedErr
 	}
-	rec := f.characters[id]
-	rec.DeletedAt = &at
+	rec, ok := f.characters[id]
+	if !ok {
+		return nil // SQL UPDATE affects 0 rows; no phantom record
+	}
+	rec.DeletedAt = cloneTime(&at)
 	f.characters[id] = rec
 	return nil
 }
@@ -86,10 +91,13 @@ func (f *CharacterRepository) UpdateAchievementSummary(ctx context.Context, id u
 	if f.UpdateErr != nil {
 		return f.UpdateErr
 	}
-	rec := f.characters[id]
+	rec, ok := f.characters[id]
+	if !ok {
+		return nil // SQL UPDATE affects 0 rows
+	}
 	rec.AchievementsPrivate = private
-	rec.LatestAchievementID = latestID
-	rec.LatestAchievementAt = latestAt
+	rec.LatestAchievementID = cloneUint32(latestID)
+	rec.LatestAchievementAt = cloneTime(latestAt)
 	f.characters[id] = rec
 	return nil
 }
@@ -100,16 +108,36 @@ func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 	if f.ListStaleErr != nil {
 		return nil, f.ListStaleErr
 	}
-	var out []contract.CharacterRecord
+	var stale []contract.CharacterRecord
 	for _, rec := range f.characters {
 		if rec.DeletedAt != nil {
 			continue
 		}
 		if rec.LastCensusAt == nil || rec.LastCensusAt.Before(cutoff) {
-			out = append(out, rec)
+			stale = append(stale, cloneCharacter(rec))
 		}
 	}
-	return out, nil
+	// Order oldest-first (NULL last_census_at sorts first, like SQLite ASC).
+	sort.Slice(stale, func(i, j int) bool {
+		li, lj := stale[i].LastCensusAt, stale[j].LastCensusAt
+		if li == nil && lj == nil {
+			return stale[i].ID < stale[j].ID
+		}
+		if li == nil {
+			return true
+		}
+		if lj == nil {
+			return false
+		}
+		if li.Equal(*lj) {
+			return stale[i].ID < stale[j].ID
+		}
+		return li.Before(*lj)
+	})
+	if limit > 0 && len(stale) > limit {
+		stale = stale[:limit]
+	}
+	return stale, nil
 }
 
 var _ contract.CharacterRepository = (*CharacterRepository)(nil)

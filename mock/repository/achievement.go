@@ -30,7 +30,10 @@ func (f *AchievementRepository) SyncMilestones(ctx context.Context, registry []c
 		return f.SyncErr
 	}
 	for _, m := range registry {
-		f.registry[m.AchievementID] = m
+		// Mirror SQL INSERT OR IGNORE: existing rows keep their original values.
+		if _, exists := f.registry[m.AchievementID]; !exists {
+			f.registry[m.AchievementID] = cloneMilestone(m)
+		}
 	}
 	return nil
 }
@@ -40,7 +43,7 @@ func (f *AchievementRepository) ListMilestones(ctx context.Context) ([]contract.
 	defer f.mu.Unlock()
 	out := make([]contract.MilestoneAchievement, 0, len(f.registry))
 	for _, m := range f.registry {
-		out = append(out, m)
+		out = append(out, cloneMilestone(m))
 	}
 	return out, nil
 }
