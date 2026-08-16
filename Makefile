@@ -1,7 +1,7 @@
 APP_NAME := ffxiv-census
 DIST_DIR := dist
 BUILD_DIR := bin
-MAIN_PKG := ./cmd/cli
+MAIN_PKG := .
 
 .PHONY: build clean build-all \
 	build-linux-amd64 build-linux-arm64 \
