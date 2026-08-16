@@ -8,6 +8,7 @@ import (
 	"testing/fstest"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
 )
 
 func testFS() fstest.MapFS {
@@ -109,4 +110,14 @@ func TestDriver_NilConfigFails(t *testing.T) {
 	if _, err := NewDriver(nil, testFS()); err == nil {
 		t.Fatal("expected error for nil config")
 	}
+}
+
+func TestDriver_RealEmbedFS(t *testing.T) {
+	cfg := testConfig(t)
+	driver, err := NewDriver(cfg, migration.FS())
+	if err != nil {
+		t.Fatalf("NewDriver with real migration.FS(): %v", err)
+	}
+	defer driver.Close()
+	// If we get here, the embed path works
 }
