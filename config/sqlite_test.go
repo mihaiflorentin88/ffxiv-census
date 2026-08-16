@@ -22,6 +22,12 @@ func TestNewConfig_SQLiteDefaults(t *testing.T) {
 	if cfg.SQLite.MaxOpenConns != 4 {
 		t.Errorf("max_open_conns = %d, want 4", cfg.SQLite.MaxOpenConns)
 	}
+	if cfg.SQLite.MaxIdleConns != 4 {
+		t.Errorf("max_idle_conns = %d, want 4", cfg.SQLite.MaxIdleConns)
+	}
+	if cfg.SQLite.BusyTimeout != "5s" {
+		t.Errorf("busy_timeout = %q, want 5s", cfg.SQLite.BusyTimeout)
+	}
 }
 
 func TestSQLiteConfig_EnvOverride(t *testing.T) {
