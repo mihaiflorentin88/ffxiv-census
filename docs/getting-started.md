@@ -8,6 +8,8 @@ Welcome! This guide walks through local development, configuration, and deployme
 - Make (optional but recommended)
 - Docker (for containerized builds)
 
+No external database is required. SQLite is embedded and the `data/` directory is created automatically on first run.
+
 ## Bootstrap
 
 ```bash
@@ -42,23 +44,25 @@ Override via environment variables using Viper's uppercase-dotted syntax:
 
 ```bash
 ./bin/ffxiv-census server --start --port 9090
+SQLITE_PATH=/var/lib/ffxiv-census/prod.db ./bin/ffxiv-census server --start
 ```
 
 Clone or fork the repository at https://github.com/mihaiflorentin88/ffxiv-census.git before making changes.
 
-When you need infrastructure dependencies, resolve them through the service container instead of constructing adapters inline. HTTP handlers and CLI commands should ask for the accessor methods generated for the enabled adapters and pass the returned `port/contract` interfaces into domain code.
+When you need infrastructure dependencies, resolve them through the service container instead of constructing adapters inline. HTTP handlers and CLI commands should ask for `container.Load.SQLite()` and pass the returned `port/contract` interfaces into domain code. See [docs/sqlite.md](sqlite.md) for details on the storage layer.
 
 ## Project Layout
 
 ```
 ├── cmd
-│   ├── cli          # Cobra commands
-│   └── http         # HTTP server, routes, middleware, swagger
-├── config           # Viper-powered config loader + defaults
+│   ├── cli          # Cobra commands (server, migrate)
+│   └── http         # HTTP server, routes, middleware
+├── config           # Viper-powered config loader + embedded defaults
 ├── container        # Service locator wiring (infrastructure + domain)
+├── data             # SQLite database (auto-created at runtime)
 ├── domain           # Business logic (behaviour-rich types)
 ├── docs             # Living documentation (update frequently!)
-├── infrastructure   # Adapters (logging, redis, metrics)
+├── infrastructure   # Adapters (logging, sqlite, metrics)
 ├── mock             # Test doubles for contracts
 ├── port             # Contracts and DTO definitions
 └── main.go          # Thin entrypoint bootstrapping the container then running the CLI

@@ -15,6 +15,7 @@ Key documentation lives under `docs/`:
 - `docs/getting-started.md` — setup, commands, and environment notes.
 - `docs/architecture.md` — high-level system design and conventions.
 - `docs/container.md` — explains the service locator and wiring patterns.
+- `docs/sqlite.md` — SQLite storage, runtime migrations, and configuration.
 - `docs/data-contracts.md` — DTO guidance for ports and adapters.
 - `docs/logging-and-middleware.md` — describes the HTTP pipeline and logging modes.
 - `docs/ui.md` — notes on the embedded HTMX sample and how to extend it.
@@ -25,6 +26,12 @@ Key documentation lives under `docs/`:
 - `make build-all` — cross-compile for Linux, macOS, and Windows.
 - `make docker-build` — build inside Docker and persist artifacts to `dist/`.
 - `make fmt` — run `gofmt` on all Go files.
-- `go test ./...` — execute the unit test suite.
+- `make test` — execute the unit test suite.
+
+## CLI Commands
+
+- `./bin/ffxiv-census server --start --port 8080` — start the HTTP server (migrations run automatically).
+- `./bin/ffxiv-census migrate --direction up` — apply all pending SQLite migrations.
+- `./bin/ffxiv-census migrate --direction down` — roll back all migrations (destructive).
 
 Happy hacking!
