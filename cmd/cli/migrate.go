@@ -11,9 +11,7 @@ import (
 )
 
 func runMigrate(direction string) error {
-	switch direction {
-	case "up", "down":
-	default:
+	if direction != "up" && direction != "down" {
 		return fmt.Errorf("invalid direction %q, use up or down", direction)
 	}
 	driver := container.Load.SQLite()
@@ -27,13 +25,15 @@ func runMigrate(direction string) error {
 		return driver.MigrateUp(ctx)
 	case "down":
 		return driver.MigrateDown(ctx)
+	default:
+		return fmt.Errorf("invalid direction %q, use up or down", direction)
 	}
-	return nil
 }
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Runs SQLite schema migrations (up applies all pending; down rolls back all)",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		direction, _ := cmd.Flags().GetString("direction")
 		return runMigrate(direction)
