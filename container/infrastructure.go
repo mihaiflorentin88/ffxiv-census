@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/metrics"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
@@ -13,10 +14,11 @@ import (
 )
 
 type InfrastructureContainer struct {
-	httpClient   contract.HTTPClient
-	statsd       contract.StatsdClient
-	sqliteDriver contract.SQLiteDriver
-	queue        contract.Queue
+	httpClient      contract.HTTPClient
+	statsd          contract.StatsdClient
+	sqliteDriver    contract.SQLiteDriver
+	queue           contract.Queue
+	lodestoneClient contract.LodestoneClient
 }
 
 func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
@@ -85,4 +87,22 @@ func (s *ServiceContainer) Queue() contract.Queue {
 	}
 	s.infrastructure.queue = q
 	return q
+}
+
+func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
+	if s.infrastructure.lodestoneClient != nil {
+		return s.infrastructure.lodestoneClient
+	}
+	cfg := s.Config().Lodestone
+	if cfg == nil {
+		logging.Warn("container.lodestone", "lodestone config missing")
+		return nil
+	}
+	client, err := lodestone.NewClient(cfg)
+	if err != nil {
+		logging.Error("container.lodestone", fmt.Sprintf("failed to create lodestone client: %v", err))
+		return nil
+	}
+	s.infrastructure.lodestoneClient = client
+	return client
 }
