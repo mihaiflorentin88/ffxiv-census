@@ -21,7 +21,7 @@ type CharacterRepository struct {
 	UpsertCalls    int
 }
 
-func NewFake() *CharacterRepository {
+func NewCharacterFake() *CharacterRepository {
 	return &CharacterRepository{
 		characters: map[uint32]contract.CharacterRecord{},
 		jobs:       map[uint32][]contract.ClassJobRecord{},
