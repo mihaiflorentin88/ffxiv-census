@@ -5,7 +5,6 @@ import (
 	"embed"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/spf13/viper"
 )
@@ -19,7 +18,7 @@ type Config struct {
 	HTTP    HTTPConfig     `mapstructure:"http"`
 	Auth    *AuthConfig    `mapstructure:"auth"`
 	Metrics *MetricsConfig `mapstructure:"metrics"`
-	MySQL   *MySQLConfig   `mapstructure:"mysql"`
+	SQLite  *SQLiteConfig  `mapstructure:"sqlite"`
 }
 
 type AppConfig struct {
@@ -51,29 +50,12 @@ type MetricsConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 	Prefix   string `mapstructure:"prefix"`
 }
-type MySQLConfig struct {
-	Host            string `mapstructure:"host"`
-	Port            int    `mapstructure:"port"`
-	Database        string `mapstructure:"database"`
-	Username        string `mapstructure:"username"`
-	Password        string `mapstructure:"password"`
-	Params          string `mapstructure:"params"`
-	MaxOpenConns    int    `mapstructure:"max_open_conns"`
-	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-	ConnMaxLifetime string `mapstructure:"conn_max_lifetime"`
-	ConnMaxIdleTime string `mapstructure:"conn_max_idle_time"`
-	DialTimeout     string `mapstructure:"dial_timeout"`
-}
-
-func (c *MySQLConfig) DialTimeoutDuration() time.Duration {
-	if c == nil || c.DialTimeout == "" {
-		return 5 * time.Second
-	}
-	d, err := time.ParseDuration(c.DialTimeout)
-	if err != nil {
-		return 5 * time.Second
-	}
-	return d
+type SQLiteConfig struct {
+	Path         string `mapstructure:"path"`
+	MaxOpenConns int    `mapstructure:"max_open_conns"`
+	MaxIdleConns int    `mapstructure:"max_idle_conns"`
+	BusyTimeout  string `mapstructure:"busy_timeout"`
+	JournalMode  string `mapstructure:"journal_mode"`
 }
 
 func NewConfig() (*Config, error) {
