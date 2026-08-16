@@ -75,7 +75,9 @@ func TestService_UpsertCharacter_NilSafe(t *testing.T) {
 
 func TestService_ProcessAchievements(t *testing.T) {
 	svc, chars := newTestService(t)
-	svc.SyncMilestones(context.Background())
+	if err := svc.SyncMilestones(context.Background()); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
 	// The character must exist before the summary update.
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 123, Name: "X", FirstSeenAt: time.Now()}, nil)
 
