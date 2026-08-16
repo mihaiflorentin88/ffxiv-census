@@ -24,9 +24,8 @@ import (
 // Driver wraps a pooled *sql.DB and satisfies the SQLiteDriver contract.
 // Migrations run automatically (goose Up) the first time the pool is opened.
 type Driver struct {
-	cfg     *config.SQLiteConfig
-	migFS   fs.FS
-	applied bool
+	cfg   *config.SQLiteConfig
+	migFS fs.FS
 
 	once sync.Once
 	db   *sql.DB
@@ -56,6 +55,7 @@ func (d *Driver) Acquire(ctx context.Context) (*sql.DB, error) {
 }
 
 func (d *Driver) Close() error {
+	d.once.Do(func() {}) // ensure initialization is complete
 	if d.db == nil {
 		return nil
 	}
@@ -120,11 +120,7 @@ func (d *Driver) MigrateDown(ctx context.Context) error {
 
 func (d *Driver) initialise(ctx context.Context) error {
 	d.once.Do(func() {
-		if err := d.migrateUp(ctx); err != nil {
-			d.err = err
-			return
-		}
-		d.applied = true
+		d.err = d.migrateUp(ctx)
 	})
 	return d.err
 }
@@ -143,9 +139,11 @@ func (d *Driver) migrateUp(ctx context.Context) error {
 	d.db = db
 	provider, err := goose.NewProvider(database.DialectSQLite3, db, d.migFS)
 	if err != nil {
+		db.Close()
 		return fmt.Errorf("goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
+		db.Close()
 		return fmt.Errorf("goose up: %w", err)
 	}
 	d.applyPoolSettings()
