@@ -10,15 +10,20 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
 	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 type InfrastructureContainer struct {
-	httpClient      contract.HTTPClient
-	statsd          contract.StatsdClient
-	sqliteDriver    contract.SQLiteDriver
-	queue           contract.Queue
-	lodestoneClient contract.LodestoneClient
+	httpClient            contract.HTTPClient
+	statsd                contract.StatsdClient
+	sqliteDriver          contract.SQLiteDriver
+	queue                 contract.Queue
+	lodestoneClient       contract.LodestoneClient
+	characterRepository   contract.CharacterRepository
+	freeCompanyRepository contract.FreeCompanyRepository
+	achievementRepository contract.AchievementRepository
+	censusRunRepository   contract.CensusRunRepository
 }
 
 func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
@@ -105,4 +110,56 @@ func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
 	}
 	s.infrastructure.lodestoneClient = client
 	return client
+}
+
+func (s *ServiceContainer) CharacterRepository() contract.CharacterRepository {
+	if s.infrastructure.characterRepository != nil {
+		return s.infrastructure.characterRepository
+	}
+	driver := s.SQLite()
+	if driver == nil {
+		logging.Warn("container.character_repository", "sqlite driver unavailable")
+		return nil
+	}
+	s.infrastructure.characterRepository = repository.NewCharacterRepository(driver)
+	return s.infrastructure.characterRepository
+}
+
+func (s *ServiceContainer) FreeCompanyRepository() contract.FreeCompanyRepository {
+	if s.infrastructure.freeCompanyRepository != nil {
+		return s.infrastructure.freeCompanyRepository
+	}
+	driver := s.SQLite()
+	if driver == nil {
+		logging.Warn("container.free_company_repository", "sqlite driver unavailable")
+		return nil
+	}
+	s.infrastructure.freeCompanyRepository = repository.NewFreeCompanyRepository(driver)
+	return s.infrastructure.freeCompanyRepository
+}
+
+func (s *ServiceContainer) AchievementRepository() contract.AchievementRepository {
+	if s.infrastructure.achievementRepository != nil {
+		return s.infrastructure.achievementRepository
+	}
+	driver := s.SQLite()
+	if driver == nil {
+		logging.Warn("container.achievement_repository", "sqlite driver unavailable")
+		return nil
+	}
+	s.infrastructure.achievementRepository = repository.NewAchievementRepository(driver)
+	return s.infrastructure.achievementRepository
+}
+
+func (s *ServiceContainer) CensusRunRepository() contract.CensusRunRepository {
+	if s.infrastructure.censusRunRepository != nil {
+		return s.infrastructure.censusRunRepository
+	}
+	driver := s.SQLite()
+	if driver == nil {
+		logging.Warn("container.census_run_repository", "sqlite driver unavailable")
+		return nil
+	}
+	s.infrastructure.censusRunRepository = repository.NewCensusRunRepository(driver)
+	return s.infrastructure.censusRunRepository
 }
