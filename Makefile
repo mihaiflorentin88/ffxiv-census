@@ -54,12 +54,12 @@ build-windows-arm64:
 	@GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o $(DIST_DIR)/$(APP_NAME)-windows-arm64.exe $(MAIN_PKG)
 
 docker-build:
-	@echo "==> building inside Docker (golang:1.22)"
+	@echo "==> building inside Docker (golang:1.25)"
 	@mkdir -p $(DIST_DIR)
 	@docker run --rm \
 		-v $$(pwd):/src \
 		-w /src \
-		golang:1.22 \
+		golang:1.25 \
 		/bin/bash -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o $(DIST_DIR)/$(APP_NAME)-linux-amd64 $(MAIN_PKG)"
 
 docker-image:
