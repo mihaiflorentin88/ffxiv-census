@@ -30,3 +30,8 @@ max_open_conns = 4
 max_idle_conns = 4
 busy_timeout = "5s"
 journal_mode = "WAL"
+
+[queue]
+claim_batch_size = 4
+max_attempts = 5
+backoff_base_seconds = 5

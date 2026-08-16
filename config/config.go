@@ -19,6 +19,7 @@ type Config struct {
 	Auth    *AuthConfig    `mapstructure:"auth"`
 	Metrics *MetricsConfig `mapstructure:"metrics"`
 	SQLite  *SQLiteConfig  `mapstructure:"sqlite"`
+	Queue   *QueueConfig   `mapstructure:"queue"`
 }
 
 type AppConfig struct {
@@ -56,6 +57,11 @@ type SQLiteConfig struct {
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
 	BusyTimeout  string `mapstructure:"busy_timeout"`
 	JournalMode  string `mapstructure:"journal_mode"`
+}
+type QueueConfig struct {
+	ClaimBatchSize     int `mapstructure:"claim_batch_size"`
+	MaxAttempts        int `mapstructure:"max_attempts"`
+	BackoffBaseSeconds int `mapstructure:"backoff_base_seconds"`
 }
 
 func NewConfig() (*Config, error) {

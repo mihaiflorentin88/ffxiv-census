@@ -9,14 +9,14 @@ container.Load = serviceContainer
 
 ## Structure
 
-- `infrastructure.go` — lazily instantiates outbound adapters such as the SQLite driver, StatsD, outbound HTTP clients, and system helpers behind `port/contract` interfaces.
+- `infrastructure.go` — lazily instantiates outbound adapters such as the SQLite driver, queue, StatsD, outbound HTTP clients, and system helpers behind `port/contract` interfaces.
 - `infrastructure/sqlite` — hosts the SQLite driver and embedded goose migrations.
 - `domain.go` — constructs domain services (added as features are built).
 - `main.go` — fetches the embedded config and exposes helper methods.
 
 ## Usage Tips
 
-1. Always request dependencies through container accessors (e.g., `container.Load.SQLite()`, `container.Load.HTTPClient()`, `container.Load.Statsd()`).
+1. Always request dependencies through container accessors (e.g., `container.Load.SQLite()`, `container.Load.Queue()`, `container.Load.HTTPClient()`, `container.Load.Statsd()`).
 2. Keep constructors pure; inject interfaces from `port/contract`.
 3. Infrastructure accessors are lazy singletons, so the first call constructs the adapter and subsequent calls reuse it.
 4. When adding a new service, update `DomainContainer` and document it here.

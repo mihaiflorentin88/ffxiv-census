@@ -6,6 +6,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/metrics"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
 	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -15,6 +16,7 @@ type InfrastructureContainer struct {
 	httpClient   contract.HTTPClient
 	statsd       contract.StatsdClient
 	sqliteDriver contract.SQLiteDriver
+	queue        contract.Queue
 }
 
 func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
@@ -60,4 +62,27 @@ func (s *ServiceContainer) SQLite() contract.SQLiteDriver {
 	}
 	s.infrastructure.sqliteDriver = driver
 	return driver
+}
+
+func (s *ServiceContainer) Queue() contract.Queue {
+	if s.infrastructure.queue != nil {
+		return s.infrastructure.queue
+	}
+	driver := s.SQLite()
+	if driver == nil {
+		logging.Warn("container.queue", "sqlite driver unavailable, queue disabled")
+		return nil
+	}
+	cfg := s.Config().Queue
+	if cfg == nil {
+		logging.Warn("container.queue", "queue config missing")
+		return nil
+	}
+	q, err := queue.NewQueue(driver, cfg)
+	if err != nil {
+		logging.Error("container.queue", fmt.Sprintf("failed to create queue: %v", err))
+		return nil
+	}
+	s.infrastructure.queue = q
+	return q
 }
