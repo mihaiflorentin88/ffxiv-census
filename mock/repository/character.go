@@ -102,6 +102,18 @@ func (f *CharacterRepository) UpdateAchievementSummary(ctx context.Context, id u
 	return nil
 }
 
+func (f *CharacterRepository) SetAchievementsPrivate(ctx context.Context, id uint32, private bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec, ok := f.characters[id]
+	if !ok {
+		return nil // SQL UPDATE affects 0 rows
+	}
+	rec.AchievementsPrivate = private
+	f.characters[id] = rec
+	return nil
+}
+
 func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, limit int) ([]contract.CharacterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

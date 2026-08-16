@@ -139,6 +139,15 @@ func (r *CharacterRepository) UpdateAchievementSummary(ctx context.Context, id u
 	return nil
 }
 
+func (r *CharacterRepository) SetAchievementsPrivate(ctx context.Context, id uint32, private bool) error {
+	_, err := r.driver.Execute(ctx,
+		`UPDATE characters SET achievements_private = ? WHERE id = ?`, boolInt(private), id)
+	if err != nil {
+		return fmt.Errorf("set achievements private: %w", err)
+	}
+	return nil
+}
+
 func (r *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, limit int) ([]contract.CharacterRecord, error) {
 	if limit <= 0 {
 		limit = 100

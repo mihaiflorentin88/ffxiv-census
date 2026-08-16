@@ -19,6 +19,9 @@ type CharacterRepository interface {
 	// UpdateAchievementSummary sets achievements_private, latest_achievement_id,
 	// and latest_achievement_at for a character (after an achievement census).
 	UpdateAchievementSummary(ctx context.Context, id uint32, private bool, latestID *uint32, latestAt *time.Time) error
+	// SetAchievementsPrivate marks a character's achievement visibility without
+	// touching milestones or the latest-achievement fields.
+	SetAchievementsPrivate(ctx context.Context, id uint32, private bool) error
 	// ListStale returns up to limit characters whose last_census_at is before
 	// cutoff (NULL last_census_at counts as stale), ordered oldest-first.
 	ListStale(ctx context.Context, cutoff time.Time, limit int) ([]CharacterRecord, error)

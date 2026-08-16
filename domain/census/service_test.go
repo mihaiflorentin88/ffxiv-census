@@ -129,3 +129,55 @@ func TestService_IsActive(t *testing.T) {
 		t.Error("achievement 31d ago should not be active")
 	}
 }
+
+func TestService_IsActive_ZeroTime(t *testing.T) {
+	svc, _ := newTestService(t)
+	if svc.IsActive(time.Time{}) {
+		t.Error("zero time should not be active")
+	}
+}
+
+func TestService_ProcessAchievements_PreservesMilestonesOnPrivate(t *testing.T) {
+	svc, chars := newTestService(t)
+	if err := svc.SyncMilestones(context.Background()); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 7, Name: "X", FirstSeenAt: time.Now()}, nil)
+
+	// First, process public achievements so a milestone + latest are recorded.
+	earned := []*godestone.AchievementInfo{
+		{NamedEntity: &models.NamedEntity{ID: 590, Name: "My Little Chocobo"}, Date: time.Now()},
+	}
+	if _, err := svc.ProcessAchievements(context.Background(), 7, earned, &godestone.AllAchievementInfo{}); err != nil {
+		t.Fatalf("ProcessAchievements (public): %v", err)
+	}
+
+	// Now the profile goes private: milestones and latest must be preserved.
+	if _, err := svc.ProcessAchievements(context.Background(), 7, nil, &godestone.AllAchievementInfo{Private: true}); err != nil {
+		t.Fatalf("ProcessAchievements (private): %v", err)
+	}
+	got, _ := chars.Get(context.Background(), 7)
+	if !got.AchievementsPrivate {
+		t.Error("achievements_private = false, want true")
+	}
+	if got.LatestAchievementID == nil || *got.LatestAchievementID != 590 {
+		t.Errorf("latest achievement was wiped on private turn: %v", got.LatestAchievementID)
+	}
+	milestones, err := svc.achievements.ListCharacterMilestones(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("ListCharacterMilestones: %v", err)
+	}
+	if len(milestones) != 1 || milestones[0].AchievementID != 590 {
+		t.Errorf("milestones = %+v, want only 590 preserved", milestones)
+	}
+}
+
+func TestService_ProcessAchievements_EmptyRegistry(t *testing.T) {
+	svc, chars := newTestService(t)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 9, Name: "X", FirstSeenAt: time.Now()}, nil)
+
+	// No SyncMilestones: registry is empty, processing must error rather than wipe.
+	if _, err := svc.ProcessAchievements(context.Background(), 9, nil, &godestone.AllAchievementInfo{}); err == nil {
+		t.Fatal("expected error for empty milestone registry")
+	}
+}

@@ -2,6 +2,7 @@ package census
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/xivapi/godestone/v2"
@@ -80,6 +81,9 @@ func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
 func toJobRecords(char *godestone.Character) []contract.ClassJobRecord {
 	jobs := make([]contract.ClassJobRecord, 0, len(char.ClassJobs))
 	for _, j := range char.ClassJobs {
+		if j == nil {
+			continue
+		}
 		jobs = append(jobs, contract.ClassJobRecord{
 			CharacterID: char.ID,
 			ClassJobID:  classJobKey(j),
@@ -91,8 +95,10 @@ func toJobRecords(char *godestone.Character) []contract.ClassJobRecord {
 	return jobs
 }
 
-// classJobKey returns a stable per-entry key: JobID when present, else ClassID
-// (a base class has no job crystal, so JobID is 0).
+// classJobKey returns a stable per-entry key for a class/job entry. godestone
+// reports the corresponding job's ID in JobID for both classes and jobs, so
+// JobID is the primary key; ClassID (the base class) is the fallback when
+// JobID is absent.
 func classJobKey(j *godestone.ClassJob) uint8 {
 	if j.JobID != 0 {
 		return j.JobID
@@ -107,9 +113,21 @@ const defaultActivityWindow = 30 * 24 * time.Hour
 // (private flag + latest achievement, which may be any achievement). Returns the
 // milestones that matched the registry.
 func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned []*godestone.AchievementInfo, all *godestone.AllAchievementInfo) ([]contract.CharacterMilestone, error) {
+	// A private profile hides its achievements: preserve any prior milestones and
+	// latest achievement, only mark the profile private.
+	if all != nil && all.Private {
+		if err := s.characters.SetAchievementsPrivate(ctx, charID, true); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
 	registry, err := s.achievements.ListMilestones(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if len(registry) == 0 {
+		return nil, errors.New("milestone registry is empty; run SyncMilestones before processing achievements")
 	}
 	byID := make(map[uint32]contract.MilestoneAchievement, len(registry))
 	for _, m := range registry {
@@ -119,7 +137,7 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 	var milestones []contract.CharacterMilestone
 	var latest *godestone.AchievementInfo
 	for _, a := range earned {
-		if a == nil {
+		if a == nil || a.NamedEntity == nil {
 			continue
 		}
 		if _, ok := byID[a.ID]; ok {
@@ -138,7 +156,6 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 		return nil, err
 	}
 
-	private := all != nil && all.Private
 	var latestID *uint32
 	var latestAt *time.Time
 	if latest != nil {
@@ -147,7 +164,7 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 		latestID = &id
 		latestAt = &at
 	}
-	if err := s.characters.UpdateAchievementSummary(ctx, charID, private, latestID, latestAt); err != nil {
+	if err := s.characters.UpdateAchievementSummary(ctx, charID, false, latestID, latestAt); err != nil {
 		return nil, err
 	}
 	return milestones, nil
