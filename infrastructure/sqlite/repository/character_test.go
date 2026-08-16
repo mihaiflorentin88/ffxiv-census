@@ -8,8 +8,6 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-func strPtr(s string) *string { return &s }
-
 func TestCharacterRepository_UpsertAndGet(t *testing.T) {
 	repo := newTestCharacterRepo(t)
 
