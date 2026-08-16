@@ -22,6 +22,7 @@ func TestServiceContainer_SQLiteDriverCached(t *testing.T) {
 
 	first := Load.SQLite()
 	second := Load.SQLite()
+	defer second.Close()
 	if first != second {
 		t.Fatal("expected cached driver instance")
 	}
