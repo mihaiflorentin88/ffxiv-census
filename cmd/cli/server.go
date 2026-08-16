@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	httpserver "github.com/mihaiflorentin88/ffxiv-census/cmd/http"
+	"github.com/mihaiflorentin88/ffxiv-census/container"
 )
 
 var httpCmd = &cobra.Command{
@@ -29,6 +30,11 @@ var httpCmd = &cobra.Command{
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGUSR2)
 		defer stop()
+
+		// Initialize SQLite driver (triggers runtime migrations)
+		if driver := container.Load.SQLite(); driver != nil {
+			defer driver.Close()
+		}
 
 		if err := httpserver.StartServer(ctx, port, poolSize, certFile, keyFile, profile, maxRequests); err != nil {
 			return fmt.Errorf("start http server: %w", err)
