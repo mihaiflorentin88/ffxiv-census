@@ -99,3 +99,62 @@ func classJobKey(j *godestone.ClassJob) uint8 {
 	}
 	return j.ClassID
 }
+
+const defaultActivityWindow = 30 * 24 * time.Hour
+
+// ProcessAchievements filters earned achievements against the registry, persists
+// only the matching milestones, and updates the character's achievement summary
+// (private flag + latest achievement, which may be any achievement). Returns the
+// milestones that matched the registry.
+func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned []*godestone.AchievementInfo, all *godestone.AllAchievementInfo) ([]contract.CharacterMilestone, error) {
+	registry, err := s.achievements.ListMilestones(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uint32]contract.MilestoneAchievement, len(registry))
+	for _, m := range registry {
+		byID[m.AchievementID] = m
+	}
+
+	var milestones []contract.CharacterMilestone
+	var latest *godestone.AchievementInfo
+	for _, a := range earned {
+		if a == nil {
+			continue
+		}
+		if _, ok := byID[a.ID]; ok {
+			milestones = append(milestones, contract.CharacterMilestone{
+				CharacterID:   charID,
+				AchievementID: a.ID,
+				AchievedAt:    a.Date,
+			})
+		}
+		if latest == nil || a.Date.After(latest.Date) {
+			latest = a
+		}
+	}
+
+	if err := s.achievements.UpsertCharacterMilestones(ctx, charID, milestones); err != nil {
+		return nil, err
+	}
+
+	private := all != nil && all.Private
+	var latestID *uint32
+	var latestAt *time.Time
+	if latest != nil {
+		id := latest.ID
+		at := latest.Date
+		latestID = &id
+		latestAt = &at
+	}
+	if err := s.characters.UpdateAchievementSummary(ctx, charID, private, latestID, latestAt); err != nil {
+		return nil, err
+	}
+	return milestones, nil
+}
+
+// IsActive reports whether a latest-achievement timestamp falls within the
+// census activity window (default 30 days).
+func (s *Service) IsActive(latestAt time.Time) bool {
+	return !latestAt.IsZero() && time.Since(latestAt) <= defaultActivityWindow
+}
