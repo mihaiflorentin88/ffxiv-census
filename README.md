@@ -16,6 +16,9 @@ Key documentation lives under `docs/`:
 - `docs/architecture.md` — high-level system design and conventions.
 - `docs/container.md` — explains the service locator and wiring patterns.
 - `docs/sqlite.md` — SQLite storage, runtime migrations, and configuration.
+- `docs/queue.md` — the SQLite-backed durable work queue.
+- `docs/lodestone.md` — the Lodestone scraper adapter (rate limiting, retries).
+- `docs/census.md` — the census domain model, tables, and repositories.
 - `docs/data-contracts.md` — DTO guidance for ports and adapters.
 - `docs/logging-and-middleware.md` — describes the HTTP pipeline and logging modes.
 - `docs/ui.md` — notes on the embedded HTMX sample and how to extend it.
