@@ -48,9 +48,22 @@ Operational tracking of census sweeps: `started_at`, `finished_at`, `characters_
 
 ## Milestone achievement IDs
 
-Achievement IDs are the **game** achievement IDs (small sequential integers), verified against the XIVAPI Achievement sheet (`/api/sheet/Achievement/{id}`) — NOT the hex slugs used in Lodestone `playguide/db/achievement/...` URLs. godestone's `AchievementInfo.ID` is populated from the character achievement-list HTML and is this same game ID.
+Achievement IDs are the **game** achievement IDs (small sequential integers), verified against the XIVAPI Achievement sheet (`/api/sheet/Achievement/{id}`) and ffxivcollect's achievement data — NOT the hex slugs used in Lodestone `playguide/db/achievement/...` URLs. godestone's `AchievementInfo.ID` is populated from the character achievement-list HTML and is this same game ID.
 
-Verified example: `590` = "My Little Chocobo".
+The canonical registry lives in `domain/census/milestone.go` (`MilestoneSet`) and is synced to the `milestone_achievements` table via `CensusService.SyncMilestones` (idempotent `INSERT OR IGNORE`). The registry is additive — append new achievements to `MilestoneSet` and re-sync; no migration is needed.
+
+Verified entries:
+
+| Kind | ID | Expansion | Detail |
+|---|---|---|---|
+| chocobo | 590 | — | My Little Chocobo |
+| expansion_msq | 1139 | Heavensward | Looking Up |
+| expansion_msq | 1794 | Stormblood | The Measure of His Reach |
+| expansion_msq | 2298 | Shadowbringers | Shadowbringers |
+| expansion_msq | 2958 | Endwalker | That Its Chorus Might Ring for All |
+| expansion_msq | 3496 | Dawntrail | In the Glow of a New Dawn |
+
+A Realm Reborn's MSQ-completion ID and job level-cap achievements are pending verification and will be appended later.
 
 ## Repositories
 
@@ -63,9 +76,25 @@ Four contracts in `port/contract`, each with a SQLite implementation in `infrast
 
 Repositories are resolved via the service locator (`container.Load.CharacterRepository()`, etc.), which builds them from the shared `SQLiteDriver`.
 
+## CensusService
+
+`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the four repositories; the ingest handlers (next phase) call it.
+
+- `SyncMilestones(ctx)` — seeds `MilestoneSet` into the DB (idempotent).
+- `UpsertCharacter(ctx, *godestone.Character)` — converts a character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
+- `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones).
+- `IsActive(latestAt)` — true when the latest achievement is within the 30-day activity window.
+
+**DC→region mapping** (`domain/census/region.go`):
+
+| Region | Datacenters |
+|---|---|
+| NA | Aether, Primal, Crystal, Dynamis |
+| EU | Chaos, Light |
+| JP | Elemental, Gaia, Mana, Meteor |
+| OCE | Materia |
+
 ## Not yet implemented (later phases)
 
-- **DC→region derivation** — mapping a datacenter name to its region (NA/EU/JP/OCE) lives in the domain service phase, which converts godestone DTOs into `CharacterRecord`s (including filling `region`).
-- **Milestone registry data** — the canonical list of tracked achievement IDs (expansion completions, job level caps, chocobo) is defined in the domain phase and synced via `AchievementRepository.SyncMilestones`.
-- **Ingest handlers** — `id-sweep`, `character-census`, `achievement-census`, `fc-census` consume queue jobs and drive these repositories.
+- **Ingest handlers** — `id-sweep`, `character-census`, `achievement-census`, `fc-census` consume queue jobs and call `CensusService` + the repositories.
 - **Aggregate/stats queries** — population breakdowns (per race/world/DC/region, new-since-date, expansion-completed counts) will be added with the REST API phase.
