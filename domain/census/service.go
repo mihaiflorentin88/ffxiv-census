@@ -175,3 +175,28 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 func (s *Service) IsActive(latestAt time.Time) bool {
 	return !latestAt.IsZero() && time.Since(latestAt) <= defaultActivityWindow
 }
+
+// MarkCharacterDeleted records that a character no longer exists on Lodestone.
+func (s *Service) MarkCharacterDeleted(ctx context.Context, id uint32, at time.Time) error {
+	return s.characters.MarkDeleted(ctx, id, at)
+}
+
+// UpsertFreeCompany converts a Lodestone free company into a record and persists it.
+func (s *Service) UpsertFreeCompany(ctx context.Context, fc *godestone.FreeCompany) error {
+	return s.freeCompanies.Upsert(ctx, toFreeCompanyRecord(fc))
+}
+
+func toFreeCompanyRecord(fc *godestone.FreeCompany) contract.FreeCompanyRecord {
+	rec := contract.FreeCompanyRecord{
+		ID:          fc.ID,
+		Name:        fc.Name,
+		World:       fc.World,
+		Datacenter:  fc.DC,
+		MemberCount: fc.ActiveMemberCount,
+		LastSeenAt:  time.Now().UTC(),
+	}
+	if !fc.Formed.IsZero() {
+		rec.FormedAt = &fc.Formed
+	}
+	return rec
+}
