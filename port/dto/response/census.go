@@ -59,6 +59,23 @@ type FreeCompanyDetail struct {
 	MemberCount uint32 `json:"member_count"`
 }
 
+type FreeCompanyListItem struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	World       string     `json:"world"`
+	Datacenter  string     `json:"datacenter"`
+	MemberCount uint32     `json:"member_count"`
+	FormedAt    *time.Time `json:"formed_at,omitempty"`
+	LastSeenAt  time.Time  `json:"last_seen_at"`
+}
+
+type PaginatedFreeCompanies struct {
+	Items  []FreeCompanyListItem `json:"items"`
+	Total  int64                 `json:"total"`
+	Limit  int                   `json:"limit"`
+	Offset int                   `json:"offset"`
+}
+
 type BreakdownGroup struct {
 	Key    string `json:"key"`
 	Total  int64  `json:"total"`

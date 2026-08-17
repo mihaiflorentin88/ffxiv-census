@@ -6,14 +6,19 @@ import (
 )
 
 // CharacterFilter is an optional AND-combined filter for List/Count. Empty
-// fields are ignored. World/Datacenter/Region/Race match exactly; Name is a
-// case-insensitive substring match.
+// fields are ignored. World/Datacenter/Region/Race/GrandCompany/FreeCompanyID
+// match exactly; Name is a case-insensitive substring match.
 type CharacterFilter struct {
-	World      string
-	Datacenter string
-	Region     string
-	Race       string
-	Name       string
+	World         string
+	Datacenter    string
+	Region        string
+	Race          string
+	Name          string
+	GrandCompany  string
+	FreeCompanyID string
+	ActiveOnly    bool
+	SortBy        string // "id", "name", "world", "created_at", "updated_at", "achievement_points"
+	SortOrder     string // "asc", "desc"
 }
 
 // CharacterRepository persists character snapshots and their job levels.
@@ -57,10 +62,10 @@ type CharacterRepository interface {
 	// race|world|datacenter|region), with total and active counts per group.
 	// Active counts rows whose latest_achievement_at is at or after since.
 	// Groups are ordered by total count descending.
-	Breakdown(ctx context.Context, column string, since time.Time) ([]GroupCount, error)
+	Breakdown(ctx context.Context, column string, since time.Time, filter CharacterFilter) ([]GroupCount, error)
 	// NewPerDay returns non-deleted characters first seen in [since, until),
 	// counted per UTC day, ordered ascending by day.
-	NewPerDay(ctx context.Context, since, until time.Time) ([]DailyCount, error)
+	NewPerDay(ctx context.Context, since, until time.Time, filter CharacterFilter) ([]DailyCount, error)
 	// MaxID returns the maximum character ID in the repository (excluding deleted
 	// characters), or 0 if no characters exist.
 	MaxID(ctx context.Context) (uint32, error)

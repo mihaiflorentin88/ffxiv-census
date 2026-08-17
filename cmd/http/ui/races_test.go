@@ -57,4 +57,20 @@ func TestRacesHandler(t *testing.T) {
 	if !strings.Contains(body, "Race Distribution") {
 		t.Errorf("expected body to contain 'Race Distribution', got:\n%s", body)
 	}
+
+	// Filtered request: Datacenter Chaos (should exclude Miqo'te on Balmung)
+	reqFiltered := httptest.NewRequest(http.MethodGet, "/ui/races?dc=Chaos", nil)
+	recFiltered := httptest.NewRecorder()
+	rig.ctrl.Races(recFiltered, reqFiltered)
+
+	if recFiltered.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recFiltered.Code, recFiltered.Body.String())
+	}
+	bodyFiltered := recFiltered.Body.String()
+	if !strings.Contains(bodyFiltered, "Lalafell") {
+		t.Errorf("expected filtered body to contain Lalafell, got:\n%s", bodyFiltered)
+	}
+	if strings.Contains(bodyFiltered, "Miqo&#39;te") || strings.Contains(bodyFiltered, "Miqo'te") {
+		t.Errorf("expected filtered body to exclude Miqo'te on Crystal DC")
+	}
 }

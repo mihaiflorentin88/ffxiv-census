@@ -7,6 +7,37 @@
     <p class="page-desc">Global breakdown of player character choices across Eorzea's playable races.</p>
 </div>
 
+<!-- Filter Controls Panel -->
+<div class="panel" style="margin-bottom: 1.5rem;">
+    <div class="panel-body" style="padding: 1rem 1.5rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem;">
+        <form method="GET" action="/ui/races" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; width: 100%;">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Datacenter:</span>
+                <select name="dc" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
+                    <option value="">-- All Datacenters --</option>
+                    {{range .Data.Datacenters}}
+                    <option value="{{.}}" {{if eq $.Data.SelectedDC .}}selected{{end}}>{{.}}</option>
+                    {{end}}
+                </select>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">World:</span>
+                <select name="world" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
+                    <option value="">-- All Worlds --</option>
+                    {{range .Data.Worlds}}
+                    <option value="{{.}}" {{if eq $.Data.SelectedWorld .}}selected{{end}}>{{.}}</option>
+                    {{end}}
+                </select>
+            </div>
+
+            {{if or .Data.SelectedDC .Data.SelectedWorld}}
+            <a href="/ui/races" class="btn btn-outline" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; margin-left: auto;">Clear Filters</a>
+            {{end}}
+        </form>
+    </div>
+</div>
+
 <!-- Grid with Chart and Top Stats -->
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
     <!-- Doughnut Chart Panel -->
@@ -44,7 +75,7 @@
                 </div>
             </div>
             <p class="text-dim" style="font-size: 0.9rem; line-height: 1.6;">
-                Race choices reflect character creation and Fantasia usage across all datacenters. Active percentages track characters who earned achievements in the last 30 days.
+                Race choices reflect character creation and Fantasia usage{{if .Data.SelectedWorld}} on <strong>{{.Data.SelectedWorld}}</strong>{{else if .Data.SelectedDC}} on the <strong>{{.Data.SelectedDC}}</strong> datacenter{{else}} across all datacenters{{end}}. Active percentages track characters who earned achievements in the last 30 days.
             </p>
         </div>
     </div>
@@ -66,7 +97,7 @@
                     <tr>
                         <th>Race</th>
                         <th class="text-right">Total Count</th>
-                        <th>Global Share</th>
+                        <th>Distribution Share</th>
                         <th class="text-right">Active Players</th>
                         <th class="text-right">Active Ratio</th>
                     </tr>
@@ -96,7 +127,7 @@
             </table>
         </div>
         {{else}}
-        <p class="text-dim">No race census data available yet.</p>
+        <p class="text-dim">No race census data available for this selection.</p>
         {{end}}
     </div>
 </div>

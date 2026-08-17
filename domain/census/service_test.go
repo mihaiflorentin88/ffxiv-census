@@ -614,19 +614,62 @@ func TestService_Breakdown_Delegates(t *testing.T) {
 	}
 }
 
+func TestService_WorldDetail(t *testing.T) {
+	svc, chars, _, ach := newTestServiceAll(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = chars.Upsert(ctx, contract.CharacterRecord{
+		ID: 1, Name: "Char 1", World: "Balmung", Datacenter: "Crystal", Region: "NA", Race: "Hyur", FirstSeenAt: now,
+		LatestAchievementAt: &now,
+	}, nil)
+	_ = chars.Upsert(ctx, contract.CharacterRecord{
+		ID: 2, Name: "Char 2", World: "Balmung", Datacenter: "Crystal", Region: "NA", Race: "Elezen", FirstSeenAt: now,
+	}, nil)
+	_ = chars.Upsert(ctx, contract.CharacterRecord{
+		ID: 3, Name: "Char 3", World: "Mateus", Datacenter: "Crystal", Region: "NA", Race: "Hyur", FirstSeenAt: now,
+	}, nil)
+
+	ach.ChocoboCountResponse = 2
+	ach.ExpansionsResponse = []contract.ExpansionCount{{Expansion: "Endwalker", Count: 1}}
+	ach.NewCharactersResponse = []contract.DailyCount{{Day: "2026-08-17", Count: 2}}
+
+	detail, err := svc.WorldDetail(ctx, "Balmung")
+	if err != nil {
+		t.Fatalf("WorldDetail: %v", err)
+	}
+	if detail.World != "Balmung" {
+		t.Errorf("World = %q, want Balmung", detail.World)
+	}
+	if detail.TotalCharacters != 2 {
+		t.Errorf("TotalCharacters = %d, want 2", detail.TotalCharacters)
+	}
+	if detail.ActiveCharacters != 1 {
+		t.Errorf("ActiveCharacters = %d, want 1", detail.ActiveCharacters)
+	}
+	if detail.NewCharacters30d != 2 {
+		t.Errorf("NewCharacters30d = %d, want 2", detail.NewCharacters30d)
+	}
+	if len(detail.Races) != 2 {
+		t.Errorf("Races len = %d, want 2", len(detail.Races))
+	}
+	if len(detail.MSQCompletions) != 1 {
+		t.Errorf("MSQCompletions len = %d, want 1", len(detail.MSQCompletions))
+	}
+	if len(detail.NewCharactersTimeline) != 1 {
+		t.Errorf("NewCharactersTimeline len = %d, want 1", len(detail.NewCharactersTimeline))
+	}
+}
+
 func TestService_NewCharacters(t *testing.T) {
-	svc, chars := newTestService(t)
+	svc, _, _, ach := newTestServiceAll(t)
 	ctx := context.Background()
 	mk := func(day int) time.Time { return time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC) }
-	seed := func(id uint32, firstSeen time.Time) {
-		_ = chars.Upsert(ctx, contract.CharacterRecord{ID: id, Name: fmt.Sprintf("c%d", id), World: "Ultros", FirstSeenAt: firstSeen}, nil)
+
+	ach.NewCharactersResponse = []contract.DailyCount{
+		{Day: "2026-08-11", Count: 2},
+		{Day: "2026-08-13", Count: 1},
 	}
-	seed(1, mk(11))
-	seed(2, mk(11))
-	seed(3, mk(13))
-	seed(4, mk(1))  // before since: excluded
-	seed(5, mk(11)) // deleted: excluded
-	_ = chars.MarkDeleted(ctx, 5, mk(11))
 
 	got, err := svc.NewCharacters(ctx, mk(10), mk(14))
 	if err != nil {

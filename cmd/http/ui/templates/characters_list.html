@@ -7,23 +7,59 @@
     <p class="page-desc">Search and browse all player characters tracked by the Eorzea census engine.</p>
 </div>
 
-<!-- Search Panel -->
+<!-- Search & Filter Panel -->
 <div class="panel" style="margin-bottom: 1.5rem;">
     <div class="panel-body" style="padding: 1.25rem 1.5rem;">
-        <form action="/ui/characters/search" method="GET" style="display: flex; gap: 0.75rem; max-width: 600px;">
-            <input 
-                type="text" 
-                name="q" 
-                placeholder="Search character name or Lodestone ID..." 
-                class="search-input" 
-                value="{{.Data.Query}}" 
-                style="flex: 1; width: 100%;"
-                required
-            >
-            <button type="submit" class="btn btn-primary">Search</button>
-            {{if .Data.Query}}
-            <a href="/ui/characters" class="btn btn-outline">Clear</a>
-            {{end}}
+        <form action="/ui/characters" method="GET" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+            <div style="flex: 2; min-width: 240px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Character Name / ID</label>
+                <input 
+                    type="text" 
+                    name="q" 
+                    placeholder="Search character name or ID..." 
+                    class="search-input" 
+                    value="{{.Data.Query}}" 
+                    style="width: 100%;"
+                >
+            </div>
+            <div style="flex: 1; min-width: 160px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Grand Company</label>
+                <select name="grand_company" class="search-input" style="width: 100%; background: var(--bg-card); color: var(--text);">
+                    <option value="">All Grand Companies</option>
+                    <option value="Maelstrom" {{if eq .Data.GrandCompany "Maelstrom"}}selected{{end}}>Maelstrom</option>
+                    <option value="Order of the Twin Adder" {{if eq .Data.GrandCompany "Order of the Twin Adder"}}selected{{end}}>Order of the Twin Adder</option>
+                    <option value="Immortal Flames" {{if eq .Data.GrandCompany "Immortal Flames"}}selected{{end}}>Immortal Flames</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 140px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Sort By</label>
+                <select name="sort_by" class="search-input" style="width: 100%; background: var(--bg-card); color: var(--text);">
+                    <option value="id" {{if eq .Data.SortBy "id"}}selected{{end}}>ID</option>
+                    <option value="name" {{if eq .Data.SortBy "name"}}selected{{end}}>Name</option>
+                    <option value="world" {{if eq .Data.SortBy "world"}}selected{{end}}>World</option>
+                    <option value="created_at" {{if eq .Data.SortBy "created_at"}}selected{{end}}>First Seen</option>
+                    <option value="updated_at" {{if eq .Data.SortBy "updated_at"}}selected{{end}}>Last Census</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 110px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Order</label>
+                <select name="sort_order" class="search-input" style="width: 100%; background: var(--bg-card); color: var(--text);">
+                    <option value="asc" {{if eq .Data.SortOrder "asc"}}selected{{end}}>Ascending</option>
+                    <option value="desc" {{if eq .Data.SortOrder "desc"}}selected{{end}}>Descending</option>
+                </select>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem;">
+                <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                    <input type="checkbox" name="active" value="true" {{if .Data.ActiveOnly}}checked{{end}}>
+                    <span>Active only</span>
+                </label>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-primary">Filter</button>
+                {{if or .Data.Query .Data.GrandCompany .Data.ActiveOnly .Data.SortBy}}
+                <a href="/ui/characters" class="btn btn-outline">Reset</a>
+                {{end}}
+            </div>
         </form>
     </div>
 </div>

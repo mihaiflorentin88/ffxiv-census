@@ -428,22 +428,119 @@ func (s *Service) CharacterDetail(ctx context.Context, id uint32) (*CharacterDet
 	return detail, nil
 }
 
+// ListFreeCompanies returns a page of free companies matching filter and the total count.
+func (s *Service) ListFreeCompanies(ctx context.Context, f contract.FreeCompanyFilter, limit, offset int) ([]contract.FreeCompanyRecord, int64, error) {
+	fcs, err := s.freeCompanies.List(ctx, f, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := s.freeCompanies.Count(ctx, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	return fcs, total, nil
+}
+
+// FreeCompanyDetail returns the free company record for the given id, or nil if not found.
+func (s *Service) FreeCompanyDetail(ctx context.Context, id string) (*contract.FreeCompanyRecord, error) {
+	return s.freeCompanies.Get(ctx, id)
+}
+
+// WorldDetailStats aggregates high-level census facts for a specific world.
+type WorldDetailStats struct {
+	World                 string
+	Datacenter            string
+	Region                string
+	TotalCharacters       int64
+	ActiveCharacters      int64
+	NewCharacters30d      int64
+	Races                 []contract.GroupCount
+	MSQCompletions        []contract.ExpansionCount
+	NewCharactersTimeline []contract.DailyCount
+}
+
+// WorldDetail returns full census stats for a specific world.
+func (s *Service) WorldDetail(ctx context.Context, worldName string) (*WorldDetailStats, error) {
+	filter := contract.CharacterFilter{World: worldName}
+	total, err := s.characters.Count(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	filterActive := contract.CharacterFilter{World: worldName, ActiveOnly: true}
+	active, err := s.characters.Count(ctx, filterActive)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	since30d := now.Add(-30 * 24 * time.Hour)
+	new30d, err := s.achievements.CountChocoboMilestones(ctx, since30d, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	races, err := s.characters.Breakdown(ctx, "race", s.activitySince(), filter)
+	if err != nil {
+		return nil, err
+	}
+
+	msq, err := s.achievements.CountExpansionsFiltered(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	timeline, err := s.achievements.NewCharactersPerDay(ctx, since30d, now, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	dc := ""
+	region := ""
+	// If we have characters, grab the DC from the first character in the list
+	chars, err := s.characters.List(ctx, filter, 1, 0)
+	if err == nil && len(chars) > 0 {
+		dc = chars[0].Datacenter
+		region = chars[0].Region
+	}
+
+	return &WorldDetailStats{
+		World:                 worldName,
+		Datacenter:            dc,
+		Region:                region,
+		TotalCharacters:       total,
+		ActiveCharacters:      active,
+		NewCharacters30d:      new30d,
+		Races:                 races,
+		MSQCompletions:        msq,
+		NewCharactersTimeline: timeline,
+	}, nil
+}
+
 // Breakdown groups non-deleted characters by by (race|world|datacenter|region)
 // with total and activity-window counts per group. Unknown dimensions return
 // ErrInvalidDimension without touching the repository.
-func (s *Service) Breakdown(ctx context.Context, by string) ([]contract.GroupCount, error) {
+func (s *Service) Breakdown(ctx context.Context, by string, filter ...contract.CharacterFilter) ([]contract.GroupCount, error) {
 	switch by {
 	case "race", "world", "datacenter", "region":
 	default:
 		return nil, ErrInvalidDimension
 	}
-	return s.characters.Breakdown(ctx, by, s.activitySince())
+	f := contract.CharacterFilter{}
+	if len(filter) > 0 {
+		f = filter[0]
+	}
+	return s.characters.Breakdown(ctx, by, s.activitySince(), f)
 }
 
-// NewCharacters returns non-deleted characters first seen in [since, until),
-// counted per UTC day, ordered ascending by day.
-func (s *Service) NewCharacters(ctx context.Context, since, until time.Time) ([]contract.DailyCount, error) {
-	return s.characters.NewPerDay(ctx, since, until)
+// NewCharacters returns daily counts of new characters in [since, until),
+// using the early-game Chocobo milestone or first_seen_at fallback.
+func (s *Service) NewCharacters(ctx context.Context, since, until time.Time, filter ...contract.CharacterFilter) ([]contract.DailyCount, error) {
+	f := contract.CharacterFilter{}
+	if len(filter) > 0 {
+		f = filter[0]
+	}
+	return s.achievements.NewCharactersPerDay(ctx, since, until, f)
 }
 
 // ExpansionCompletions returns how many distinct characters completed each

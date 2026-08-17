@@ -159,6 +159,35 @@ paths:
           description: Filter by case-insensitive name substring.
           type: string
           required: false
+        - name: grand_company
+          in: query
+          description: Filter by exact Grand Company (e.g. Maelstrom).
+          type: string
+          required: false
+        - name: free_company_id
+          in: query
+          description: Filter by exact Free Company ID.
+          type: string
+          required: false
+        - name: active
+          in: query
+          description: Filter for active characters only.
+          type: boolean
+          required: false
+        - name: sort_by
+          in: query
+          description: Sort column (id, name, world, created_at, updated_at).
+          type: string
+          enum: [id, name, world, created_at, updated_at]
+          default: id
+          required: false
+        - name: sort_order
+          in: query
+          description: Sort direction (asc, desc).
+          type: string
+          enum: [asc, desc]
+          default: asc
+          required: false
       responses:
         "200":
           description: Paginated character list
@@ -166,6 +195,93 @@ paths:
             $ref: "#/definitions/PaginatedCharacters"
         "400":
           description: Invalid limit or offset
+          schema:
+            $ref: "#/definitions/Error"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+  /api/v1/census/free-companies:
+    get:
+      summary: List Free Companies
+      description: Paginated list of Free Companies (guilds).
+      produces:
+        - application/json
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of items to return (clamped to 500).
+          type: integer
+          default: 100
+          maximum: 500
+          minimum: 1
+        - name: offset
+          in: query
+          description: Number of items to skip.
+          type: integer
+          default: 0
+          minimum: 0
+        - name: world
+          in: query
+          description: Filter by exact world.
+          type: string
+          required: false
+        - name: datacenter
+          in: query
+          description: Filter by exact datacenter.
+          type: string
+          required: false
+        - name: name
+          in: query
+          description: Filter by case-insensitive name substring.
+          type: string
+          required: false
+        - name: sort_by
+          in: query
+          description: Sort column (member_count, name, world, formed).
+          type: string
+          enum: [member_count, name, world, formed]
+          default: member_count
+          required: false
+        - name: sort_order
+          in: query
+          description: Sort direction (asc, desc).
+          type: string
+          enum: [asc, desc]
+          default: desc
+          required: false
+      responses:
+        "200":
+          description: Paginated Free Company list
+          schema:
+            $ref: "#/definitions/PaginatedFreeCompanies"
+        "400":
+          description: Invalid query parameters
+          schema:
+            $ref: "#/definitions/Error"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+  /api/v1/census/free-companies/{id}:
+    get:
+      summary: Free Company detail
+      description: Detail for one Free Company.
+      produces:
+        - application/json
+      parameters:
+        - name: id
+          in: path
+          description: Lodestone Free Company ID.
+          required: true
+          type: string
+      responses:
+        "200":
+          description: Free Company detail
+          schema:
+            $ref: "#/definitions/FreeCompanyDetail"
+        "404":
+          description: Free Company not found
           schema:
             $ref: "#/definitions/Error"
         "500":
@@ -848,5 +964,52 @@ definitions:
         type: string
         format: date-time
       completed_at:
+        type: string
+  PaginatedFreeCompanies:
+    type: object
+    required:
+      - items
+      - total
+      - limit
+      - offset
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/definitions/FreeCompanyListItem"
+      total:
+        type: integer
+        format: int64
+      limit:
+        type: integer
+        format: int32
+      offset:
+        type: integer
+        format: int32
+  FreeCompanyListItem:
+    type: object
+    required:
+      - id
+      - name
+      - world
+      - datacenter
+      - member_count
+      - last_seen_at
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      world:
+        type: string
+      datacenter:
+        type: string
+      member_count:
+        type: integer
+        format: int32
+      formed_at:
+        type: string
+        format: date-time
+      last_seen_at:
         type: string
         format: date-time

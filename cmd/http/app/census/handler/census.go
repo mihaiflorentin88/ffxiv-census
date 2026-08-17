@@ -77,12 +77,24 @@ func (c *CensusController) List(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 
+	activeOnly := false
+	if raw := query.Get("active"); raw != "" {
+		if b, err := strconv.ParseBool(raw); err == nil {
+			activeOnly = b
+		}
+	}
+
 	f := contract.CharacterFilter{
-		World:      query.Get("world"),
-		Datacenter: query.Get("datacenter"),
-		Region:     query.Get("region"),
-		Race:       query.Get("race"),
-		Name:       query.Get("name"),
+		World:         query.Get("world"),
+		Datacenter:    query.Get("datacenter"),
+		Region:        query.Get("region"),
+		Race:          query.Get("race"),
+		Name:          query.Get("name"),
+		GrandCompany:  query.Get("grand_company"),
+		FreeCompanyID: query.Get("free_company_id"),
+		ActiveOnly:    activeOnly,
+		SortBy:        query.Get("sort_by"),
+		SortOrder:     query.Get("sort_order"),
 	}
 	chars, total, err := c.svc.ListCharacters(r.Context(), f, limit, offset)
 	if err != nil {

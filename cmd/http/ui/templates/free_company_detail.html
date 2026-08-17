@@ -1,0 +1,107 @@
+{{define "content"}}
+<div class="page-header" style="margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                <h1 class="page-title" style="margin: 0;">{{.Data.FreeCompany.Name}}</h1>
+                <span class="badge badge-gold">FC</span>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center; font-size: 0.95rem; color: var(--text-dim);">
+                <span>{{.Data.FreeCompany.World}}</span>
+                <span>•</span>
+                <span>{{.Data.FreeCompany.Datacenter}}</span>
+            </div>
+        </div>
+        <div>
+            <a href="/ui/free-companies" class="btn btn-outline">&larr; Back to Directory</a>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-2" style="margin-bottom: 1.5rem;">
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>ℹ️</span>
+                <span>Free Company Info</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                    <span class="text-dim">Lodestone ID:</span>
+                    <span style="font-family: var(--font-mono); color: var(--text-dim);">{{.Data.FreeCompany.ID}}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                    <span class="text-dim">Active Members:</span>
+                    <strong>{{.Data.FreeCompany.MemberCount}}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                    <span class="text-dim">Formed Date:</span>
+                    <span>
+                        {{if .Data.FreeCompany.FormedAt}}
+                        {{formatDate .Data.FreeCompany.FormedAt}}
+                        {{else}}
+                        <span class="text-dim">-</span>
+                        {{end}}
+                    </span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span class="text-dim">Last Ingested:</span>
+                    <span>{{formatDate .Data.FreeCompany.LastSeenAt}}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>👥</span>
+            <span>Known Members in Census</span>
+        </h2>
+        <span class="badge badge-gold">{{formatNumber .Data.TotalCount}} Members Tracked</span>
+    </div>
+    <div class="panel-body">
+        {{if .Data.Members}}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>World</th>
+                        <th>Datacenter</th>
+                        <th>Race</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Data.Members}}
+                    <tr class="clickable" onclick="window.location='/ui/characters/{{.ID}}'">
+                        <td style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-dim);">#{{.ID}}</td>
+                        <td><strong><a href="/ui/characters/{{.ID}}">{{.Name}}</a></strong></td>
+                        <td>{{.World}}</td>
+                        <td><span class="badge badge-region">{{.Datacenter}}</span></td>
+                        <td>{{.Race}}{{if .Tribe}} ({{.Tribe}}){{end}}</td>
+                        <td>
+                            {{if .DeletedAt}}
+                            <span class="badge badge-inactive">Deleted</span>
+                            {{else if .IsActive}}
+                            <span class="badge badge-active">Active</span>
+                            {{else}}
+                            <span class="badge badge-inactive">Inactive</span>
+                            {{end}}
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <p class="text-dim">No individual character profiles have been ingested yet for this Free Company.</p>
+        {{end}}
+    </div>
+</div>
+{{end}}

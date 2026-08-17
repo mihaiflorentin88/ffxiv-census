@@ -1,0 +1,262 @@
+{{define "content"}}
+<div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+    <div>
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+            <a href="/ui/worlds" class="btn btn-outline" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;">&larr; All Worlds</a>
+            <span class="badge badge-region">{{.Data.Datacenter}}</span>
+            <span class="badge badge-gold">{{.Data.Region}}</span>
+        </div>
+        <h1 class="page-title" style="margin-bottom: 0.25rem;">
+            <span>🌐</span>
+            <span>{{.Data.World}}</span>
+        </h1>
+        <p class="page-desc">Complete world census, demographic distribution, milestone progression, and discovery timeline.</p>
+    </div>
+    <div style="display: flex; gap: 0.5rem;">
+        <a href="/ui/characters?world={{.Data.World}}" class="btn btn-primary" style="font-size: 0.85rem;">
+            <span>🔍</span> Browse {{.Data.World}} Characters
+        </a>
+    </div>
+</div>
+
+<!-- Stat Cards -->
+<div class="stat-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 2rem;">
+    <div class="stat-card">
+        <div class="stat-label">Total Population</div>
+        <div class="stat-value">{{formatNumber .Data.TotalCharacters}}</div>
+        <div class="stat-subtext">Discovered on {{.Data.World}}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Active Players (30d)</div>
+        <div class="stat-value" style="color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
+        <div class="stat-subtext highlight">{{.Data.ActiveRatio}} of Total</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">New Characters (30d)</div>
+        <div class="stat-value" style="color: var(--gold);">{{formatNumber .Data.NewCharacters30d}}</div>
+        <div class="stat-subtext">Earned Chocobo / Seen</div>
+    </div>
+</div>
+
+<!-- Charts Grid: Race Distribution & MSQ Progression -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <!-- Race Distribution Chart -->
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>🍩</span>
+                <span>Race Demographics</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            <div class="chart-container" style="height: 260px;">
+                <canvas id="worldRaceChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- MSQ Expansion Completion Chart -->
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>⚔️</span>
+                <span>MSQ Progression</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            <div class="chart-container" style="height: 260px;">
+                <canvas id="worldMSQChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Timeline Chart: 30-Day New Characters Discovered -->
+<div class="panel" style="margin-bottom: 2rem;">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>📈</span>
+            <span>New Characters Discovered (Last 30 Days)</span>
+        </h2>
+    </div>
+    <div class="panel-body">
+        <div class="chart-container" style="height: 260px;">
+            <canvas id="worldTimelineChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Details Tables Grid: Races & MSQ Breakdown -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem;">
+    <!-- Race Breakdown Table -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>👥</span>
+                <span>Race Breakdown</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.Races}}
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Race</th>
+                            <th class="text-right">Total</th>
+                            <th class="text-right">Active</th>
+                            <th class="text-right">Share</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Data.Races}}
+                        <tr>
+                            <td><strong>{{.Race}}</strong></td>
+                            <td class="text-right font-mono">{{formatNumber .Total}}</td>
+                            <td class="text-right font-mono" style="color: var(--cyan);">{{formatNumber .Active}}</td>
+                            <td class="text-right font-mono text-dim">{{.ShareOfTotal}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-dim">No race census data available for this world.</p>
+            {{end}}
+        </div>
+    </div>
+
+    <!-- MSQ Breakdown Table -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>📜</span>
+                <span>Expansion Completions</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.MSQCompletions}}
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Expansion</th>
+                            <th class="text-right">Completed MSQ</th>
+                            <th class="text-right">% of Population</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Data.MSQCompletions}}
+                        <tr>
+                            <td><strong>{{.Expansion}}</strong></td>
+                            <td class="text-right font-mono" style="color: var(--gold);">{{formatNumber .Count}}</td>
+                            <td class="text-right font-mono text-dim">{{.PercentTotal}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-dim">No MSQ completion milestones recorded for this world.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    // 1. Race Doughnut Chart
+    const raceCtx = document.getElementById('worldRaceChart');
+    if (raceCtx) {
+        const raceLabels = {{jsonSafe .Data.RaceChartLabels}};
+        const raceData = {{jsonSafe .Data.RaceChartData}};
+        const colors = ['#38bdf8', '#d4af37', '#a855f7', '#22c55e', '#f97316', '#ec4899', '#14b8a6', '#eab308', '#64748b'];
+
+        new Chart(raceCtx, {
+            type: 'doughnut',
+            data: {
+                labels: raceLabels,
+                datasets: [{
+                    data: raceData,
+                    backgroundColor: colors.slice(0, raceLabels.length),
+                    borderColor: '#141923',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: { color: '#94a3b8', padding: 8, font: { size: 10 } }
+                    }
+                },
+                cutout: '60%'
+            }
+        });
+    }
+
+    // 2. MSQ Bar Chart
+    const msqCtx = document.getElementById('worldMSQChart');
+    if (msqCtx) {
+        const msqLabels = {{jsonSafe .Data.MSQChartLabels}};
+        const msqData = {{jsonSafe .Data.MSQChartData}};
+
+        new Chart(msqCtx, {
+            type: 'bar',
+            data: {
+                labels: msqLabels,
+                datasets: [{
+                    label: 'Characters Completed',
+                    data: msqData,
+                    backgroundColor: '#d4af37',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+                    y: { ticks: { color: '#94a3b8' }, grid: { color: '#263248' } }
+                }
+            }
+        });
+    }
+
+    // 3. Timeline Line Chart
+    const timelineCtx = document.getElementById('worldTimelineChart');
+    if (timelineCtx) {
+        const timeLabels = {{jsonSafe .Data.TimelineChartLabels}};
+        const timeData = {{jsonSafe .Data.TimelineChartData}};
+
+        new Chart(timelineCtx, {
+            type: 'line',
+            data: {
+                labels: timeLabels,
+                datasets: [{
+                    label: 'New Characters',
+                    data: timeData,
+                    borderColor: '#38bdf8',
+                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+                    y: { ticks: { color: '#94a3b8' }, grid: { color: '#263248' } }
+                }
+            }
+        });
+    }
+});
+</script>
+{{end}}

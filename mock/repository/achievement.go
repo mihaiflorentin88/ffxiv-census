@@ -4,18 +4,29 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// AchievementRepository is an in-memory fake with error injection.
 type AchievementRepository struct {
-	mu                 sync.Mutex
-	registry           map[uint32]contract.MilestoneAchievement
-	milestones         map[uint32][]contract.CharacterMilestone
-	SyncErr            error
-	UpsertErr          error
-	CountExpansionsErr error
+	mu                         sync.Mutex
+	registry                   map[uint32]contract.MilestoneAchievement
+	milestones                 map[uint32][]contract.CharacterMilestone
+	chars                      *CharacterRepository
+	SyncErr                    error
+	UpsertErr                  error
+	CountExpansionsErr         error
+	CountExpansionsFilteredErr error
+	NewCharactersPerDayErr     error
+	CountChocoboMilestonesErr  error
+
+	// ExpansionsResponse can override CountExpansions / CountExpansionsFiltered responses.
+	ExpansionsResponse []contract.ExpansionCount
+	// NewCharactersResponse can override NewCharactersPerDay responses.
+	NewCharactersResponse []contract.DailyCount
+	// ChocoboCountResponse can override CountChocoboMilestones response.
+	ChocoboCountResponse int64
 }
 
 func NewAchievementFake() *AchievementRepository {
@@ -23,6 +34,12 @@ func NewAchievementFake() *AchievementRepository {
 		registry:   map[uint32]contract.MilestoneAchievement{},
 		milestones: map[uint32][]contract.CharacterMilestone{},
 	}
+}
+
+func (f *AchievementRepository) SetCharacterRepo(chars *CharacterRepository) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.chars = chars
 }
 
 func (f *AchievementRepository) SyncMilestones(ctx context.Context, registry []contract.MilestoneAchievement) error {
@@ -66,15 +83,25 @@ func (f *AchievementRepository) ListCharacterMilestones(ctx context.Context, cha
 	return append([]contract.CharacterMilestone(nil), f.milestones[characterID]...), nil
 }
 
-// CountExpansions mirrors the SQL join: for each earned milestone whose
-// registry entry is kind expansion_msq with a non-nil expansion, count distinct
-// characters per expansion, ordered by expansion name.
+// CountExpansions mirrors CountExpansionsFiltered with an empty filter.
 func (f *AchievementRepository) CountExpansions(ctx context.Context) ([]contract.ExpansionCount, error) {
+	return f.CountExpansionsFiltered(ctx, contract.CharacterFilter{})
+}
+
+// CountExpansionsFiltered returns per-expansion counts of distinct characters.
+func (f *AchievementRepository) CountExpansionsFiltered(ctx context.Context, filter contract.CharacterFilter) ([]contract.ExpansionCount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.CountExpansionsFilteredErr != nil {
+		return nil, f.CountExpansionsFilteredErr
+	}
 	if f.CountExpansionsErr != nil {
 		return nil, f.CountExpansionsErr
 	}
+	if f.ExpansionsResponse != nil {
+		return f.ExpansionsResponse, nil
+	}
+
 	perExpansion := map[string]map[uint32]bool{}
 	for characterID, list := range f.milestones {
 		for _, m := range list {
@@ -96,6 +123,36 @@ func (f *AchievementRepository) CountExpansions(ctx context.Context) ([]contract
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Expansion < out[j].Expansion })
 	return out, nil
+}
+
+func (f *AchievementRepository) NewCharactersPerDay(ctx context.Context, since, until time.Time, filter contract.CharacterFilter) ([]contract.DailyCount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.NewCharactersPerDayErr != nil {
+		return nil, f.NewCharactersPerDayErr
+	}
+	if f.NewCharactersResponse != nil {
+		return f.NewCharactersResponse, nil
+	}
+	if f.chars != nil {
+		return f.chars.NewPerDay(ctx, since, until, filter)
+	}
+	return []contract.DailyCount{}, nil
+}
+
+func (f *AchievementRepository) CountChocoboMilestones(ctx context.Context, since time.Time, filter contract.CharacterFilter) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.CountChocoboMilestonesErr != nil {
+		return 0, f.CountChocoboMilestonesErr
+	}
+	if f.ChocoboCountResponse != 0 {
+		return f.ChocoboCountResponse, nil
+	}
+	if f.chars != nil {
+		return f.chars.Count(ctx, filter)
+	}
+	return 0, nil
 }
 
 var _ contract.AchievementRepository = (*AchievementRepository)(nil)

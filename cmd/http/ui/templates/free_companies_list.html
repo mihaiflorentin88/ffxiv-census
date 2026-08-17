@@ -1,0 +1,123 @@
+{{define "content"}}
+<div class="page-header">
+    <h1 class="page-title">
+        <span>🏰</span>
+        <span>{{.Data.Title}}</span>
+    </h1>
+    <p class="page-desc">Search and browse all Free Companies (guilds) tracked by the census engine.</p>
+</div>
+
+<!-- Search & Filter Panel -->
+<div class="panel" style="margin-bottom: 1.5rem;">
+    <div class="panel-body" style="padding: 1.25rem 1.5rem;">
+        <form action="/ui/free-companies" method="GET" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+            <div style="flex: 2; min-width: 240px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Free Company Name</label>
+                <input 
+                    type="text" 
+                    name="q" 
+                    placeholder="Search Free Company name..." 
+                    class="search-input" 
+                    value="{{.Data.Query}}" 
+                    style="width: 100%;"
+                >
+            </div>
+            <div style="flex: 1; min-width: 140px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Sort By</label>
+                <select name="sort_by" class="search-input" style="width: 100%; background: var(--bg-card); color: var(--text);">
+                    <option value="member_count" {{if eq .Data.SortBy "member_count"}}selected{{end}}>Members</option>
+                    <option value="name" {{if eq .Data.SortBy "name"}}selected{{end}}>Name</option>
+                    <option value="world" {{if eq .Data.SortBy "world"}}selected{{end}}>World</option>
+                    <option value="formed" {{if eq .Data.SortBy "formed"}}selected{{end}}>Formed Date</option>
+                </select>
+            </div>
+            <div style="flex: 1; min-width: 110px;">
+                <label style="display: block; font-size: 0.82rem; margin-bottom: 0.25rem; color: var(--text-dim);">Order</label>
+                <select name="sort_order" class="search-input" style="width: 100%; background: var(--bg-card); color: var(--text);">
+                    <option value="desc" {{if eq .Data.SortOrder "desc"}}selected{{end}}>Descending</option>
+                    <option value="asc" {{if eq .Data.SortOrder "asc"}}selected{{end}}>Ascending</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-primary">Filter</button>
+                {{if or .Data.Query .Data.World .Data.SortBy}}
+                <a href="/ui/free-companies" class="btn btn-outline">Reset</a>
+                {{end}}
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Free Companies Table Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>📋</span>
+            <span>Free Company Records</span>
+        </h2>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span class="badge badge-gold">{{formatNumber .Data.TotalCount}} Total</span>
+        </div>
+    </div>
+    <div class="panel-body">
+        {{if .Data.FreeCompanies}}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>World</th>
+                        <th>Datacenter</th>
+                        <th>Members</th>
+                        <th>Formed Date</th>
+                        <th>Last Seen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Data.FreeCompanies}}
+                    <tr class="clickable" onclick="window.location='/ui/free-companies/{{.ID}}'">
+                        <td><strong><a href="/ui/free-companies/{{.ID}}">{{.Name}}</a></strong></td>
+                        <td>{{.World}}</td>
+                        <td><span class="badge badge-region">{{.Datacenter}}</span></td>
+                        <td><span class="badge badge-active">{{.MemberCount}}</span></td>
+                        <td>
+                            {{if .FormedAt}}
+                            <span class="text-dim" style="font-size: 0.85rem;">{{formatDate .FormedAt}}</span>
+                            {{else}}
+                            <span class="text-dim">-</span>
+                            {{end}}
+                        </td>
+                        <td><span class="text-dim" style="font-size: 0.85rem;">{{formatDate .LastSeenAt}}</span></td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        {{if gt .Data.TotalPages 1}}
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+            <div>
+                <span class="text-dim" style="font-size: 0.88rem;">Page {{.Data.CurrentPage}} of {{.Data.TotalPages}}</span>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                {{if .Data.HasPrev}}
+                <a href="/ui/free-companies?page={{.Data.PrevPage}}{{if .Data.Query}}&q={{.Data.Query}}{{end}}{{if .Data.SortBy}}&sort_by={{.Data.SortBy}}{{end}}{{if .Data.SortOrder}}&sort_order={{.Data.SortOrder}}{{end}}" class="btn btn-outline" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">
+                    &larr; Previous
+                </a>
+                {{end}}
+                {{if .Data.HasNext}}
+                <a href="/ui/free-companies?page={{.Data.NextPage}}{{if .Data.Query}}&q={{.Data.Query}}{{end}}{{if .Data.SortBy}}&sort_by={{.Data.SortBy}}{{end}}{{if .Data.SortOrder}}&sort_order={{.Data.SortOrder}}{{end}}" class="btn btn-outline" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">
+                    Next &rarr;
+                </a>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{else}}
+        <p class="text-dim">No Free Companies found matching the query.</p>
+        {{end}}
+    </div>
+</div>
+{{end}}

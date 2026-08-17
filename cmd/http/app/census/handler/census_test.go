@@ -37,6 +37,7 @@ func newRig(t *testing.T) *testRig {
 	chars := mockrepo.NewCharacterFake()
 	fcs := mockrepo.NewFreeCompanyFake()
 	ach := mockrepo.NewAchievementFake()
+	ach.SetCharacterRepo(chars)
 	svc := census.NewService(chars, fcs, ach, mockrepo.NewCensusRunFake())
 	q := mockqueue.NewFake()
 	return &testRig{

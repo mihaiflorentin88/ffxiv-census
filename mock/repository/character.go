@@ -250,10 +250,19 @@ func matchesFilter(rec contract.CharacterRecord, f contract.CharacterFilter) boo
 	if f.Name != "" && !strings.Contains(strings.ToLower(rec.Name), strings.ToLower(f.Name)) {
 		return false
 	}
+	if f.GrandCompany != "" && rec.GrandCompany != f.GrandCompany {
+		return false
+	}
+	if f.FreeCompanyID != "" && (rec.FreeCompanyID == nil || *rec.FreeCompanyID != f.FreeCompanyID) {
+		return false
+	}
+	if f.ActiveOnly && rec.LatestAchievementAt == nil {
+		return false
+	}
 	return true
 }
 
-// List mirrors the SQL: non-deleted rows matching filter ordered by id, limited/offset.
+// List mirrors the SQL: non-deleted rows matching filter ordered by requested sort or id, limited/offset.
 // SQLite LIMIT semantics: LIMIT 0 -> zero rows (offset is irrelevant),
 // negative LIMIT -> unlimited, positive -> cap. Negative OFFSET is treated
 // as 0 by SQLite.
@@ -273,7 +282,68 @@ func (f *CharacterRepository) List(ctx context.Context, filter contract.Characte
 		}
 		out = append(out, cloneCharacter(rec))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+
+	desc := strings.EqualFold(filter.SortOrder, "desc")
+	switch strings.ToLower(filter.SortBy) {
+	case "name":
+		sort.Slice(out, func(i, j int) bool {
+			if strings.EqualFold(out[i].Name, out[j].Name) {
+				return out[i].ID < out[j].ID
+			}
+			if desc {
+				return strings.ToLower(out[i].Name) > strings.ToLower(out[j].Name)
+			}
+			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		})
+	case "world":
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].World == out[j].World {
+				return out[i].ID < out[j].ID
+			}
+			if desc {
+				return out[i].World > out[j].World
+			}
+			return out[i].World < out[j].World
+		})
+	case "created_at", "first_seen_at":
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].FirstSeenAt.Equal(out[j].FirstSeenAt) {
+				return out[i].ID < out[j].ID
+			}
+			if desc {
+				return out[i].FirstSeenAt.After(out[j].FirstSeenAt)
+			}
+			return out[i].FirstSeenAt.Before(out[j].FirstSeenAt)
+		})
+	case "updated_at", "last_census_at":
+		sort.Slice(out, func(i, j int) bool {
+			li, lj := out[i].LastCensusAt, out[j].LastCensusAt
+			if li == nil && lj == nil {
+				return out[i].ID < out[j].ID
+			}
+			if li == nil {
+				return !desc
+			}
+			if lj == nil {
+				return desc
+			}
+			if li.Equal(*lj) {
+				return out[i].ID < out[j].ID
+			}
+			if desc {
+				return li.After(*lj)
+			}
+			return li.Before(*lj)
+		})
+	default:
+		sort.Slice(out, func(i, j int) bool {
+			if desc {
+				return out[i].ID > out[j].ID
+			}
+			return out[i].ID < out[j].ID
+		})
+	}
+
 	if offset < 0 {
 		offset = 0
 	}
@@ -353,18 +423,18 @@ var breakdownColumns = map[string]bool{"race": true, "world": true, "datacenter"
 
 // Breakdown mirrors the SQL group-by: non-deleted rows grouped by the record
 // field, total and active counts, ordered by total desc then key.
-func (f *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time) ([]contract.GroupCount, error) {
+func (f *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time, filter contract.CharacterFilter) ([]contract.GroupCount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.BreakdownErr != nil {
 		return nil, f.BreakdownErr
 	}
-	if !breakdownColumns[column] {
+	if column != "race" && column != "world" && column != "datacenter" && column != "region" {
 		return nil, fmt.Errorf("invalid breakdown column %q", column)
 	}
 	counts := map[string]*contract.GroupCount{}
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil {
+		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
 			continue
 		}
 		var key string
@@ -403,7 +473,7 @@ func (f *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 
 // NewPerDay mirrors the SQL: non-deleted rows with first_seen_at in
 // [since, until), counted per UTC day, ordered ascending by day.
-func (f *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time) ([]contract.DailyCount, error) {
+func (f *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time, filter contract.CharacterFilter) ([]contract.DailyCount, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.NewPerDayErr != nil {
@@ -411,7 +481,7 @@ func (f *CharacterRepository) NewPerDay(ctx context.Context, since, until time.T
 	}
 	counts := map[string]int64{}
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil {
+		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
 			continue
 		}
 		if rec.FirstSeenAt.Before(since) || !rec.FirstSeenAt.Before(until) {

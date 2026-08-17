@@ -50,16 +50,20 @@ type MilestoneDisplay struct {
 
 // CharacterListViewData holds list of characters and pagination for /ui/characters and search results.
 type CharacterListViewData struct {
-	Title       string
-	Query       string
-	Characters  []CharacterRow
-	TotalCount  int64
-	CurrentPage int
-	TotalPages  int
-	HasPrev     bool
-	HasNext     bool
-	PrevPage    int
-	NextPage    int
+	Title        string
+	Query        string
+	GrandCompany string
+	ActiveOnly   bool
+	SortBy       string
+	SortOrder    string
+	Characters   []CharacterRow
+	TotalCount   int64
+	CurrentPage  int
+	TotalPages   int
+	HasPrev      bool
+	HasNext      bool
+	PrevPage     int
+	NextPage     int
 }
 
 // CharacterRow represents one character in directory list / search table.
@@ -189,72 +193,23 @@ func (c *UIController) CharacterSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If numeric, redirect directly to profile
+	// If numeric query, redirect directly to profile
 	if _, err := strconv.ParseUint(query, 10, 32); err == nil {
 		http.Redirect(w, r, "/ui/characters/"+query, http.StatusFound)
 		return
 	}
 
-	// String search by name
-	ctx := r.Context()
-	var chars []contract.CharacterRecord
-	var total int64
-	var err error
-
-	if c.svc != nil {
-		chars, total, err = c.svc.ListCharacters(ctx, contract.CharacterFilter{Name: query}, 50, 0)
-		if err != nil {
-			logging.Error("ui.character.search", err.Error())
-		}
-	}
-
-	var rows []CharacterRow
-	for _, ch := range chars {
-		isActive := false
-		if ch.LatestAchievementAt != nil && c.svc != nil {
-			isActive = c.svc.IsActive(*ch.LatestAchievementAt)
-		}
-
-		fcName := ""
-		if ch.FreeCompanyName != nil {
-			fcName = *ch.FreeCompanyName
-		}
-
-		rows = append(rows, CharacterRow{
-			ID:              ch.ID,
-			Name:            ch.Name,
-			World:           ch.World,
-			Datacenter:      ch.Datacenter,
-			Region:          ch.Region,
-			Race:            ch.Race,
-			Tribe:           ch.Tribe,
-			GrandCompany:    ch.GrandCompany,
-			FreeCompanyName: fcName,
-			IsActive:        isActive,
-			DeletedAt:       ch.DeletedAt,
-		})
-	}
-
-	c.render(w, "templates/characters_list.html", PageData{
-		Title:       fmt.Sprintf("Search: %q", query),
-		ActiveNav:   "characters",
-		SearchQuery: query,
-		Data: CharacterListViewData{
-			Title:       fmt.Sprintf("Search Results for %q", query),
-			Query:       query,
-			Characters:  rows,
-			TotalCount:  total,
-			CurrentPage: 1,
-			TotalPages:  1,
-		},
-	})
+	// Forward search request internally to CharacterList
+	c.CharacterList(w, r)
 }
 
 // CharacterList handles GET /ui/characters.
 func (c *UIController) CharacterList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	query := r.URL.Query()
+
 	page := 1
-	if pStr := r.URL.Query().Get("page"); pStr != "" {
+	if pStr := query.Get("page"); pStr != "" {
 		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
 			page = p
 		}
@@ -263,12 +218,29 @@ func (c *UIController) CharacterList(w http.ResponseWriter, r *http.Request) {
 	limit := 30
 	offset := (page - 1) * limit
 
+	qName := strings.TrimSpace(query.Get("q"))
+	if qName == "" {
+		qName = strings.TrimSpace(query.Get("name"))
+	}
+	grandCompany := strings.TrimSpace(query.Get("grand_company"))
+	activeOnly := query.Get("active") == "true" || query.Get("active") == "1"
+	sortBy := query.Get("sort_by")
+	sortOrder := query.Get("sort_order")
+
+	filter := contract.CharacterFilter{
+		Name:         qName,
+		GrandCompany: grandCompany,
+		ActiveOnly:   activeOnly,
+		SortBy:       sortBy,
+		SortOrder:    sortOrder,
+	}
+
 	var chars []contract.CharacterRecord
 	var total int64
 	var err error
 
 	if c.svc != nil {
-		chars, total, err = c.svc.ListCharacters(ctx, contract.CharacterFilter{}, limit, offset)
+		chars, total, err = c.svc.ListCharacters(ctx, filter, limit, offset)
 		if err != nil {
 			logging.Error("ui.character.list", err.Error())
 		}
@@ -306,19 +278,30 @@ func (c *UIController) CharacterList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	title := "Character Directory"
+	if qName != "" {
+		title = fmt.Sprintf("Search: %q", qName)
+	}
+
 	c.render(w, "templates/characters_list.html", PageData{
-		Title:     "Character Directory",
-		ActiveNav: "characters",
+		Title:       title,
+		ActiveNav:   "characters",
+		SearchQuery: qName,
 		Data: CharacterListViewData{
-			Title:       "Character Directory",
-			Characters:  rows,
-			TotalCount:  total,
-			CurrentPage: page,
-			TotalPages:  totalPages,
-			HasPrev:     page > 1,
-			HasNext:     page < totalPages,
-			PrevPage:    page - 1,
-			NextPage:    page + 1,
+			Title:        title,
+			Query:        qName,
+			GrandCompany: grandCompany,
+			ActiveOnly:   activeOnly,
+			SortBy:       sortBy,
+			SortOrder:    sortOrder,
+			Characters:   rows,
+			TotalCount:   total,
+			CurrentPage:  page,
+			TotalPages:   totalPages,
+			HasPrev:      page > 1,
+			HasNext:      page < totalPages,
+			PrevPage:     page - 1,
+			NextPage:     page + 1,
 		},
 	})
 }

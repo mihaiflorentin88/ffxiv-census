@@ -454,7 +454,7 @@ func TestCharacterRepository_Breakdown(t *testing.T) {
 	}
 
 	since := now.Add(-24 * time.Hour)
-	groups, err := repo.Breakdown(context.Background(), "world", since)
+	groups, err := repo.Breakdown(context.Background(), "world", since, contract.CharacterFilter{})
 	if err != nil {
 		t.Fatalf("Breakdown: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestCharacterRepository_Breakdown(t *testing.T) {
 	}
 
 	// Column whitelist: unknown columns are rejected, not interpolated.
-	if _, err := repo.Breakdown(context.Background(), "name", since); err == nil {
+	if _, err := repo.Breakdown(context.Background(), "name", since, contract.CharacterFilter{}); err == nil {
 		t.Error("Breakdown(name) = nil error, want invalid-column error")
 	}
 }
@@ -500,7 +500,7 @@ func TestCharacterRepository_NewPerDay(t *testing.T) {
 
 	since := day(2026, 7, 25, 0)
 	until := day(2026, 8, 3, 0)
-	days, err := repo.NewPerDay(context.Background(), since, until)
+	days, err := repo.NewPerDay(context.Background(), since, until, contract.CharacterFilter{})
 	if err != nil {
 		t.Fatalf("NewPerDay: %v", err)
 	}
@@ -707,4 +707,105 @@ func idsOf(recs []contract.CharacterRecord) []uint32 {
 		out[i] = r.ID
 	}
 	return out
+}
+
+func TestCharacterRepository_List_AdvancedFiltersAndSorting(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 1, 3, 12, 0, 0, 0, time.UTC)
+
+	fc1 := "fc_alpha"
+	fc2 := "fc_beta"
+
+	chars := []contract.CharacterRecord{
+		{
+			ID:                  1,
+			Name:                "Alice Alpha",
+			World:               "Cerberus",
+			Datacenter:          "Chaos",
+			Region:              "EU",
+			GrandCompany:        "Maelstrom",
+			FreeCompanyID:       &fc1,
+			LatestAchievementAt: &t2,
+			FirstSeenAt:         t0,
+			LastCensusAt:        &t1,
+		},
+		{
+			ID:                  2,
+			Name:                "Bob Bravo",
+			World:               "Ragnarok",
+			Datacenter:          "Chaos",
+			Region:              "EU",
+			GrandCompany:        "Twin Adder",
+			FreeCompanyID:       &fc2,
+			LatestAchievementAt: nil, // Inactive
+			FirstSeenAt:         t1,
+			LastCensusAt:        &t2,
+		},
+		{
+			ID:                  3,
+			Name:                "Charlie Charlie",
+			World:               "Cerberus",
+			Datacenter:          "Chaos",
+			Region:              "EU",
+			GrandCompany:        "Maelstrom",
+			FreeCompanyID:       &fc2,
+			LatestAchievementAt: &t1,
+			FirstSeenAt:         t2,
+			LastCensusAt:        &t0,
+		},
+	}
+
+	for _, c := range chars {
+		if err := repo.Upsert(ctx, c, nil); err != nil {
+			t.Fatalf("Upsert(%d): %v", c.ID, err)
+		}
+	}
+
+	// Filter by GrandCompany
+	list, err := repo.List(ctx, contract.CharacterFilter{GrandCompany: "Maelstrom"}, 10, 0)
+	if err != nil {
+		t.Fatalf("List GrandCompany: %v", err)
+	}
+	if len(list) != 2 || list[0].ID != 1 || list[1].ID != 3 {
+		t.Errorf("expected IDs [1, 3], got %v", idsOf(list))
+	}
+
+	// Filter by FreeCompanyID
+	list, err = repo.List(ctx, contract.CharacterFilter{FreeCompanyID: "fc_beta"}, 10, 0)
+	if err != nil {
+		t.Fatalf("List FreeCompanyID: %v", err)
+	}
+	if len(list) != 2 || list[0].ID != 2 || list[1].ID != 3 {
+		t.Errorf("expected IDs [2, 3], got %v", idsOf(list))
+	}
+
+	// Filter by ActiveOnly
+	list, err = repo.List(ctx, contract.CharacterFilter{ActiveOnly: true}, 10, 0)
+	if err != nil {
+		t.Fatalf("List ActiveOnly: %v", err)
+	}
+	if len(list) != 2 || list[0].ID != 1 || list[1].ID != 3 {
+		t.Errorf("expected active IDs [1, 3], got %v", idsOf(list))
+	}
+
+	// Sort by name DESC
+	list, err = repo.List(ctx, contract.CharacterFilter{SortBy: "name", SortOrder: "desc"}, 10, 0)
+	if err != nil {
+		t.Fatalf("List SortBy name desc: %v", err)
+	}
+	if len(list) != 3 || list[0].ID != 3 || list[1].ID != 2 || list[2].ID != 1 {
+		t.Errorf("expected sorted by name desc [3, 2, 1], got %v", idsOf(list))
+	}
+
+	// Sort by world ASC
+	list, err = repo.List(ctx, contract.CharacterFilter{SortBy: "world", SortOrder: "asc"}, 10, 0)
+	if err != nil {
+		t.Fatalf("List SortBy world asc: %v", err)
+	}
+	if len(list) != 3 || list[0].World != "Cerberus" || list[1].World != "Cerberus" || list[2].World != "Ragnarok" {
+		t.Errorf("expected sorted by world asc, got %v", idsOf(list))
+	}
 }

@@ -82,7 +82,7 @@
                     {{range $index, $w := .Data.Worlds}}
                     <tr>
                         <td class="text-dim" style="font-family: var(--font-mono); font-size: 0.82rem;">{{add $index 1}}</td>
-                        <td><strong>{{$w.World}}</strong></td>
+                        <td><a href="/ui/worlds/{{$w.World}}" style="color: var(--gold); font-weight: bold; text-decoration: none;">{{$w.World}}</a></td>
                         <td><span class="badge badge-region">{{$w.Datacenter}}</span></td>
                         <td><span class="badge badge-gold">{{$w.Region}}</span></td>
                         <td class="text-right font-mono">{{formatNumber $w.Total}}</td>

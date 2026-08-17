@@ -1,6 +1,9 @@
 package contract
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // AchievementRepository persists the milestone registry and characters' earned
 // milestones.
@@ -16,4 +19,13 @@ type AchievementRepository interface {
 	// CountExpansions returns how many distinct characters completed each
 	// expansion's MSQ (kind expansion_msq with a non-nil expansion).
 	CountExpansions(ctx context.Context) ([]ExpansionCount, error)
+	// CountExpansionsFiltered returns how many distinct characters completed each
+	// expansion's MSQ, scoped to the provided filter.
+	CountExpansionsFiltered(ctx context.Context, filter CharacterFilter) ([]ExpansionCount, error)
+	// NewCharactersPerDay returns daily counts of new characters in [since, until),
+	// based on milestone 590 or first_seen_at.
+	NewCharactersPerDay(ctx context.Context, since, until time.Time, filter CharacterFilter) ([]DailyCount, error)
+	// CountChocoboMilestones returns the count of characters who obtained
+	// Milestone 590 (or first seen) at or after since.
+	CountChocoboMilestones(ctx context.Context, since time.Time, filter CharacterFilter) (int64, error)
 }

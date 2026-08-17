@@ -356,15 +356,47 @@ func characterFilterWhere(f contract.CharacterFilter) (string, []any) {
 		conds = append(conds, "name LIKE ?")
 		args = append(args, "%"+f.Name+"%")
 	}
+	if f.GrandCompany != "" {
+		conds = append(conds, "grand_company = ?")
+		args = append(args, f.GrandCompany)
+	}
+	if f.FreeCompanyID != "" {
+		conds = append(conds, "fc_id = ?")
+		args = append(args, f.FreeCompanyID)
+	}
+	if f.ActiveOnly {
+		conds = append(conds, "latest_achievement_at IS NOT NULL AND latest_achievement_at != ''")
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return " AND " + strings.Join(conds, " AND "), args
 }
 
+func characterOrderBy(sortBy, sortOrder string) string {
+	order := "ASC"
+	if strings.EqualFold(sortOrder, "desc") {
+		order = "DESC"
+	}
+
+	switch strings.ToLower(sortBy) {
+	case "name":
+		return " ORDER BY LOWER(name) " + order + ", id ASC"
+	case "world":
+		return " ORDER BY world " + order + ", id ASC"
+	case "created_at", "first_seen_at":
+		return " ORDER BY first_seen_at " + order + ", id ASC"
+	case "updated_at", "last_census_at":
+		return " ORDER BY last_census_at " + order + ", id ASC"
+	default:
+		return " ORDER BY id " + order
+	}
+}
+
 func (r *CharacterRepository) List(ctx context.Context, f contract.CharacterFilter, limit, offset int) ([]contract.CharacterRecord, error) {
 	conds, args := characterFilterWhere(f)
-	q := `SELECT ` + characterColumns + ` FROM characters WHERE deleted_at IS NULL` + conds + ` ORDER BY id LIMIT ? OFFSET ?`
+	orderBy := characterOrderBy(f.SortBy, f.SortOrder)
+	q := `SELECT ` + characterColumns + ` FROM characters WHERE deleted_at IS NULL` + conds + orderBy + ` LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 	rows, err := r.driver.FetchMany(ctx, q, args...)
 	if err != nil {
@@ -438,16 +470,17 @@ func (r *CharacterRepository) CountActive(ctx context.Context, since time.Time) 
 
 // Breakdown groups non-deleted characters by column with total and active
 // counts, ordered by total descending.
-func (r *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time) ([]contract.GroupCount, error) {
+func (r *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time, f contract.CharacterFilter) ([]contract.GroupCount, error) {
 	if !breakdownColumns[column] {
 		return nil, fmt.Errorf("invalid breakdown column %q", column)
 	}
+	conds, args := characterFilterWhere(f)
 	rows, err := r.driver.FetchMany(ctx,
 		`SELECT `+column+`, COUNT(*),
 		        SUM(CASE WHEN latest_achievement_at >= ? THEN 1 ELSE 0 END)
-		   FROM characters WHERE deleted_at IS NULL
+		   FROM characters WHERE deleted_at IS NULL`+conds+`
 		  GROUP BY `+column+` ORDER BY COUNT(*) DESC`,
-		formatTime(since))
+		append([]any{formatTime(since)}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -465,13 +498,14 @@ func (r *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 
 // NewPerDay returns non-deleted characters first seen in [since, until),
 // counted per UTC day, ordered ascending by day.
-func (r *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time) ([]contract.DailyCount, error) {
+func (r *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time, f contract.CharacterFilter) ([]contract.DailyCount, error) {
+	conds, args := characterFilterWhere(f)
 	rows, err := r.driver.FetchMany(ctx,
 		`SELECT substr(first_seen_at, 1, 10), COUNT(*)
 		   FROM characters
-		  WHERE deleted_at IS NULL AND first_seen_at >= ? AND first_seen_at < ?
+		  WHERE deleted_at IS NULL AND first_seen_at >= ? AND first_seen_at < ?`+conds+`
 		  GROUP BY substr(first_seen_at, 1, 10) ORDER BY 1`,
-		formatTime(since), formatTime(until))
+		append([]any{formatTime(since), formatTime(until)}, args...)...)
 	if err != nil {
 		return nil, err
 	}

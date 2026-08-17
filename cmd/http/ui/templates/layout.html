@@ -31,7 +31,9 @@
                 <li class="nav-item {{if eq .ActiveNav "characters"}}active{{end}}">
                     <a href="/ui/characters">Characters</a>
                 </li>
-            </ul>
+                <li class="nav-item {{if eq .ActiveNav "free-companies"}}active{{end}}">
+                    <a href="/ui/free-companies">Free Companies</a>
+                </li>
             <form action="/ui/characters/search" method="GET" class="search-form">
                 <input 
                     type="text" 
