@@ -192,6 +192,19 @@ func (q *Queue) Depth(ctx context.Context) (map[contract.QueueJobStatus]int, err
 	return out, rows.Err()
 }
 
+func (q *Queue) ReclaimClaimed(ctx context.Context, jobType string) (int, error) {
+	res, err := q.driver.Execute(ctx,
+		`UPDATE queue_jobs SET status = 'pending', run_at = ?, claimed_at = NULL
+		  WHERE type = ? AND status = 'claimed'`,
+		q.now().UTC().Format(timeLayout), jobType)
+	if err != nil {
+		return 0, fmt.Errorf("reclaim claimed: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	q.logger.InfoContext(ctx, "queue.reclaim", slog.String("event_type", jobType), slog.Int("reclaimed", int(n)))
+	return int(n), nil
+}
+
 // publishTx inserts jobs inside the caller's transaction (atomic chaining).
 func (q *Queue) publishTx(ctx context.Context, tx *sql.Tx, jobs ...contract.QueueJob) error {
 	now := q.now().UTC().Format(timeLayout)

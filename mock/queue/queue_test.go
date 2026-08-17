@@ -90,3 +90,31 @@ func TestFakePublishDefaultsMaxAttempts(t *testing.T) {
 		t.Errorf("failed = %d, want 0", depth[contract.QueueJobFailed])
 	}
 }
+
+func TestFake_ReclaimClaimed(t *testing.T) {
+	f := NewFake()
+	ctx := context.Background()
+	if err := f.Publish(ctx,
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"a":1}`)},
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"a":2}`)},
+		contract.QueueJob{Type: "other", Payload: []byte(`{"a":3}`)},
+	); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	claimed, err := f.Claim(ctx, "id-sweep", 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("Claim: n=%d err=%v", len(claimed), err)
+	}
+	n, err := f.ReclaimClaimed(ctx, "id-sweep")
+	if err != nil || n != 1 {
+		t.Fatalf("ReclaimClaimed: n=%d err=%v", n, err)
+	}
+	got, err := f.Claim(ctx, "id-sweep", 10)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("Claim after reclaim: n=%d err=%v", len(got), err)
+	}
+	other, err := f.Claim(ctx, "other", 1)
+	if err != nil || len(other) != 1 {
+		t.Fatalf("Claim other: n=%d err=%v", len(other), err)
+	}
+}

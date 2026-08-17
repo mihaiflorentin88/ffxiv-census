@@ -52,4 +52,9 @@ type Queue interface {
 	Fail(ctx context.Context, id int64) error
 	// Depth returns the number of jobs per status.
 	Depth(ctx context.Context) (map[QueueJobStatus]int, error)
+	// ReclaimClaimed returns to 'pending' every job of jobType stuck in
+	// 'claimed' status (a previous consumer was killed mid-flight). It clears
+	// claimed_at and resets run_at to now so the job is immediately claimable.
+	// Returns the number of jobs reclaimed.
+	ReclaimClaimed(ctx context.Context, jobType string) (int, error)
 }

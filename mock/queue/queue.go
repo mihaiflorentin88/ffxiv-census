@@ -132,3 +132,19 @@ func (f *Fake) Depth(ctx context.Context) (map[contract.QueueJobStatus]int, erro
 	}
 	return out, nil
 }
+
+func (f *Fake) ReclaimClaimed(ctx context.Context, jobType string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for id, j := range f.jobs {
+		if j.Type == jobType && j.Status == contract.QueueJobClaimed {
+			j.Status = contract.QueueJobPending
+			j.ClaimedAt = nil
+			j.RunAt = time.Now().UTC()
+			f.jobs[id] = j
+			n++
+		}
+	}
+	return n, nil
+}

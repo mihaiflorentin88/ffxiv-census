@@ -205,3 +205,35 @@ func TestConcurrentClaimNoDoubleDelivery(t *testing.T) {
 		t.Errorf("claimed total = %d, want 40 (no double delivery)", total)
 	}
 }
+
+func TestQueue_ReclaimClaimed(t *testing.T) {
+	q := testQueue(t)
+	ctx := context.Background()
+	// Publish two jobs of the same type and one of a different type.
+	if err := q.Publish(ctx,
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"a":1}`)},
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"a":2}`)},
+		contract.QueueJob{Type: "other", Payload: []byte(`{"a":3}`)},
+	); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	// Claim one id-sweep job -> now 'claimed'.
+	claimed, err := q.Claim(ctx, "id-sweep", 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("Claim: n=%d err=%v", len(claimed), err)
+	}
+	// Reclaim: exactly the one claimed id-sweep job returns to pending.
+	n, err := q.ReclaimClaimed(ctx, "id-sweep")
+	if err != nil || n != 1 {
+		t.Fatalf("ReclaimClaimed: n=%d err=%v", n, err)
+	}
+	// Both id-sweep jobs are now claimable again; the 'other' job is untouched.
+	got, err := q.Claim(ctx, "id-sweep", 10)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("Claim after reclaim: n=%d err=%v", len(got), err)
+	}
+	other, err := q.Claim(ctx, "other", 1)
+	if err != nil || len(other) != 1 {
+		t.Fatalf("Claim other: n=%d err=%v", len(other), err)
+	}
+}

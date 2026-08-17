@@ -159,3 +159,40 @@ func TestWorker_LogsJobLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestWorker_ReclaimsClaimedOnStart(t *testing.T) {
+	q := mockqueue.NewFake()
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+	// Publish one job and claim it manually so it is 'claimed' (simulating a
+	// previous consumer that died mid-flight).
+	if err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if _, err := q.Claim(context.Background(), "id-sweep", 1); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	w := New(q, reg, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Run for a short window; the startup reclaim must return the claimed job
+	// to pending, after which the loop claims and processes it.
+	go func() { _ = w.Run(ctx, "id-sweep", 1) }()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		rh.mu.Lock()
+		calls := rh.calls
+		rh.mu.Unlock()
+		if calls > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	rh.mu.Lock()
+	defer rh.mu.Unlock()
+	if rh.calls == 0 {
+		t.Fatal("claimed job was not reclaimed and processed after restart")
+	}
+}

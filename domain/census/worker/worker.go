@@ -39,6 +39,11 @@ func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) err
 		return fmt.Errorf("no handler registered for event %q", eventType)
 	}
 	w.logger.InfoContext(ctx, "worker.start", slog.String("event_type", eventType), slog.Int("concurrency", concurrency))
+	if n, err := w.queue.ReclaimClaimed(ctx, eventType); err != nil {
+		return fmt.Errorf("reclaim claimed jobs: %w", err)
+	} else if n > 0 {
+		w.logger.InfoContext(ctx, "worker.reclaimed", slog.String("event_type", eventType), slog.Int("reclaimed", n))
+	}
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
 	for i := 0; i < concurrency; i++ {
