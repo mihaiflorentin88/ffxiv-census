@@ -182,7 +182,110 @@ func (r *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 	return out, rows.Err()
 }
 
-// scanCharacter scans one character row into a CharacterRecord.
+// breakdownColumns is the whitelist of GROUP BY columns for Breakdown; the
+// column name is interpolated directly into SQL, so anything else is rejected.
+var breakdownColumns = map[string]bool{"race": true, "world": true, "datacenter": true, "region": true}
+
+// List returns up to limit non-deleted characters ordered by id, starting at offset.
+func (r *CharacterRepository) List(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, error) {
+	rows, err := r.driver.FetchMany(ctx,
+		`SELECT `+characterColumns+` FROM characters WHERE deleted_at IS NULL ORDER BY id LIMIT ? OFFSET ?`,
+		limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []contract.CharacterRecord
+	for rows.Next() {
+		rec, err := scanCharacter(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *rec)
+	}
+	return out, rows.Err()
+}
+
+// Count returns the number of non-deleted characters.
+func (r *CharacterRepository) Count(ctx context.Context) (int64, error) {
+	row, err := r.driver.FetchOne(ctx, `SELECT COUNT(*) FROM characters WHERE deleted_at IS NULL`)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// CountActive returns the number of non-deleted characters whose
+// latest_achievement_at is at or after since (TEXT comparison matches the
+// fixed-width UTC layout).
+func (r *CharacterRepository) CountActive(ctx context.Context, since time.Time) (int64, error) {
+	row, err := r.driver.FetchOne(ctx,
+		`SELECT COUNT(*) FROM characters WHERE deleted_at IS NULL AND latest_achievement_at >= ?`,
+		formatTime(since))
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// Breakdown groups non-deleted characters by column with total and active
+// counts, ordered by total descending.
+func (r *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time) ([]contract.GroupCount, error) {
+	if !breakdownColumns[column] {
+		return nil, fmt.Errorf("invalid breakdown column %q", column)
+	}
+	rows, err := r.driver.FetchMany(ctx,
+		`SELECT `+column+`, COUNT(*),
+		        SUM(CASE WHEN latest_achievement_at >= ? THEN 1 ELSE 0 END)
+		   FROM characters WHERE deleted_at IS NULL
+		  GROUP BY `+column+` ORDER BY COUNT(*) DESC`,
+		formatTime(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []contract.GroupCount
+	for rows.Next() {
+		var g contract.GroupCount
+		if err := rows.Scan(&g.Key, &g.Total, &g.Active); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// NewPerDay returns non-deleted characters first seen in [since, until),
+// counted per UTC day, ordered ascending by day.
+func (r *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time) ([]contract.DailyCount, error) {
+	rows, err := r.driver.FetchMany(ctx,
+		`SELECT substr(first_seen_at, 1, 10), COUNT(*)
+		   FROM characters
+		  WHERE deleted_at IS NULL AND first_seen_at >= ? AND first_seen_at < ?
+		  GROUP BY substr(first_seen_at, 1, 10) ORDER BY 1`,
+		formatTime(since), formatTime(until))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []contract.DailyCount
+	for rows.Next() {
+		var d contract.DailyCount
+		if err := rows.Scan(&d.Day, &d.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
 // race/tribe/grand_company/fc_id/fc_name/latest_achievement_at/last_census_at/
 // deleted_at are nullable TEXT scanned into sql.NullString. latest_achievement_id
 // is INTEGER scanned into sql.NullInt64.

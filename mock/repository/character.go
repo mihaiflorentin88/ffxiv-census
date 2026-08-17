@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -22,6 +23,11 @@ type CharacterRepository struct {
 	MarkDeletedErr error
 	UpdateErr      error
 	ListStaleErr   error
+	ListErr        error
+	CountErr       error
+	CountActiveErr error
+	BreakdownErr   error
+	NewPerDayErr   error
 	UpsertCalls    int
 }
 
@@ -150,6 +156,148 @@ func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 		stale = stale[:limit]
 	}
 	return stale, nil
+}
+
+// List mirrors the SQL: non-deleted rows ordered by id, limited/offset.
+func (f *CharacterRepository) List(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ListErr != nil {
+		return nil, f.ListErr
+	}
+	var out []contract.CharacterRecord
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil {
+			continue
+		}
+		out = append(out, cloneCharacter(rec))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(out) {
+		return nil, nil
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// Count mirrors SELECT COUNT(*) WHERE deleted_at IS NULL.
+func (f *CharacterRepository) Count(ctx context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.CountErr != nil {
+		return 0, f.CountErr
+	}
+	var n int64
+	for _, rec := range f.characters {
+		if rec.DeletedAt == nil {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// CountActive mirrors the SQL: non-deleted rows with latest_achievement_at >= since.
+func (f *CharacterRepository) CountActive(ctx context.Context, since time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.CountActiveErr != nil {
+		return 0, f.CountActiveErr
+	}
+	var n int64
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil || rec.LatestAchievementAt == nil {
+			continue
+		}
+		if !rec.LatestAchievementAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// breakdownColumns mirrors the SQLite repository's whitelist.
+var breakdownColumns = map[string]bool{"race": true, "world": true, "datacenter": true, "region": true}
+
+// Breakdown mirrors the SQL group-by: non-deleted rows grouped by the record
+// field, total and active counts, ordered by total desc then key.
+func (f *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time) ([]contract.GroupCount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.BreakdownErr != nil {
+		return nil, f.BreakdownErr
+	}
+	if !breakdownColumns[column] {
+		return nil, fmt.Errorf("invalid breakdown column %q", column)
+	}
+	counts := map[string]*contract.GroupCount{}
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil {
+			continue
+		}
+		var key string
+		switch column {
+		case "race":
+			key = rec.Race
+		case "world":
+			key = rec.World
+		case "datacenter":
+			key = rec.Datacenter
+		case "region":
+			key = rec.Region
+		}
+		g := counts[key]
+		if g == nil {
+			g = &contract.GroupCount{Key: key}
+			counts[key] = g
+		}
+		g.Total++
+		if rec.LatestAchievementAt != nil && !rec.LatestAchievementAt.Before(since) {
+			g.Active++
+		}
+	}
+	out := make([]contract.GroupCount, 0, len(counts))
+	for _, g := range counts {
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Total != out[j].Total {
+			return out[i].Total > out[j].Total
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
+}
+
+// NewPerDay mirrors the SQL: non-deleted rows with first_seen_at in
+// [since, until), counted per UTC day, ordered ascending by day.
+func (f *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time) ([]contract.DailyCount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.NewPerDayErr != nil {
+		return nil, f.NewPerDayErr
+	}
+	counts := map[string]int64{}
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil {
+			continue
+		}
+		if rec.FirstSeenAt.Before(since) || !rec.FirstSeenAt.Before(until) {
+			continue
+		}
+		counts[rec.FirstSeenAt.UTC().Format("2006-01-02")]++
+	}
+	out := make([]contract.DailyCount, 0, len(counts))
+	for day, c := range counts {
+		out = append(out, contract.DailyCount{Day: day, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Day < out[j].Day })
+	return out, nil
 }
 
 var _ contract.CharacterRepository = (*CharacterRepository)(nil)

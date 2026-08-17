@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -208,4 +209,188 @@ func TestCharacterRepository_UpsertReplacesJobs(t *testing.T) {
 	if len(gotJobs) != 0 {
 		t.Errorf("jobs = %d, want 0 after nil-jobs upsert", len(gotJobs))
 	}
+}
+
+func TestCharacterRepository_ListPagination(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, id := range []uint32{1, 2, 3} {
+		rec := contract.CharacterRecord{ID: id, Name: fmt.Sprintf("C%d", id), FirstSeenAt: now}
+		if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+			t.Fatalf("Upsert %d: %v", id, err)
+		}
+	}
+
+	first, err := repo.List(context.Background(), 2, 0)
+	if err != nil {
+		t.Fatalf("List(2, 0): %v", err)
+	}
+	if len(first) != 2 || first[0].ID != 1 || first[1].ID != 2 {
+		t.Errorf("List(2, 0) = ids %v, want [1 2]", idsOf(first))
+	}
+
+	rest, err := repo.List(context.Background(), 2, 2)
+	if err != nil {
+		t.Fatalf("List(2, 2): %v", err)
+	}
+	if len(rest) != 1 || rest[0].ID != 3 {
+		t.Errorf("List(2, 2) = ids %v, want [3]", idsOf(rest))
+	}
+
+	// Offset past the end returns an empty slice, not an error.
+	empty, err := repo.List(context.Background(), 2, 10)
+	if err != nil {
+		t.Fatalf("List(2, 10): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("List(2, 10) = %d rows, want 0", len(empty))
+	}
+}
+
+func TestCharacterRepository_Counts(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, id := range []uint32{11, 12, 13} {
+		rec := contract.CharacterRecord{ID: id, Name: fmt.Sprintf("C%d", id), FirstSeenAt: now}
+		if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+			t.Fatalf("Upsert %d: %v", id, err)
+		}
+	}
+	if err := repo.MarkDeleted(context.Background(), 13, now.Add(time.Hour)); err != nil {
+		t.Fatalf("MarkDeleted: %v", err)
+	}
+
+	// One active (latest within the window), one inactive (latest before it).
+	latest := uint32(590)
+	recent := now.Add(-time.Hour)
+	if err := repo.UpdateAchievementSummary(context.Background(), 11, false, &latest, &recent); err != nil {
+		t.Fatalf("UpdateAchievementSummary(11): %v", err)
+	}
+	old := now.Add(-72 * time.Hour)
+	if err := repo.UpdateAchievementSummary(context.Background(), 12, false, &latest, &old); err != nil {
+		t.Fatalf("UpdateAchievementSummary(12): %v", err)
+	}
+
+	total, err := repo.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("Count = %d, want 2 (deleted excluded)", total)
+	}
+
+	since := now.Add(-24 * time.Hour)
+	active, err := repo.CountActive(context.Background(), since)
+	if err != nil {
+		t.Fatalf("CountActive: %v", err)
+	}
+	if active != 1 {
+		t.Errorf("CountActive = %d, want 1 (only id 11 in window)", active)
+	}
+}
+
+func TestCharacterRepository_Breakdown(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	latest := uint32(590)
+	recent := now.Add(-time.Hour)
+	old := now.Add(-72 * time.Hour)
+
+	seed := func(id uint32, world string) {
+		rec := contract.CharacterRecord{ID: id, Name: fmt.Sprintf("C%d", id), World: world,
+			Datacenter: "Primal", Region: "NA", Race: "Hyur", FirstSeenAt: now}
+		if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+			t.Fatalf("Upsert %d: %v", id, err)
+		}
+	}
+	seed(21, "Ultros")
+	seed(22, "Ultros")
+	seed(23, "Mateus")
+	seed(24, "Mateus")
+	// Ultros: one active + one inactive; Mateus: one active + one deleted.
+	if err := repo.UpdateAchievementSummary(context.Background(), 21, false, &latest, &recent); err != nil {
+		t.Fatalf("UpdateAchievementSummary(21): %v", err)
+	}
+	if err := repo.UpdateAchievementSummary(context.Background(), 22, false, &latest, &old); err != nil {
+		t.Fatalf("UpdateAchievementSummary(22): %v", err)
+	}
+	if err := repo.UpdateAchievementSummary(context.Background(), 23, false, &latest, &recent); err != nil {
+		t.Fatalf("UpdateAchievementSummary(23): %v", err)
+	}
+	if err := repo.MarkDeleted(context.Background(), 24, now.Add(time.Hour)); err != nil {
+		t.Fatalf("MarkDeleted: %v", err)
+	}
+
+	since := now.Add(-24 * time.Hour)
+	groups, err := repo.Breakdown(context.Background(), "world", since)
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+	want := []contract.GroupCount{
+		{Key: "Ultros", Total: 2, Active: 1},
+		{Key: "Mateus", Total: 1, Active: 1},
+	}
+	if len(groups) != len(want) {
+		t.Fatalf("Breakdown = %+v, want %+v", groups, want)
+	}
+	for i := range want {
+		if groups[i] != want[i] {
+			t.Errorf("Breakdown[%d] = %+v, want %+v", i, groups[i], want[i])
+		}
+	}
+
+	// Column whitelist: unknown columns are rejected, not interpolated.
+	if _, err := repo.Breakdown(context.Background(), "name", since); err == nil {
+		t.Error("Breakdown(name) = nil error, want invalid-column error")
+	}
+}
+
+func TestCharacterRepository_NewPerDay(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	day := func(y int, m time.Month, d, h int) time.Time {
+		return time.Date(y, m, d, h, 0, 0, 0, time.UTC)
+	}
+	seed := func(id uint32, firstSeen time.Time) {
+		rec := contract.CharacterRecord{ID: id, Name: fmt.Sprintf("C%d", id), FirstSeenAt: firstSeen}
+		if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+			t.Fatalf("Upsert %d: %v", id, err)
+		}
+	}
+	seed(31, day(2026, 8, 1, 10)) // day 2026-08-01
+	seed(32, day(2026, 8, 1, 15)) // day 2026-08-01
+	seed(33, day(2026, 8, 2, 8))  // day 2026-08-02
+	seed(34, day(2026, 7, 20, 9)) // before since -> excluded
+	seed(35, day(2026, 8, 5, 9))  // after until -> excluded
+	seed(36, day(2026, 8, 1, 11)) // in window but deleted -> excluded
+	if err := repo.MarkDeleted(context.Background(), 36, day(2026, 8, 2, 12)); err != nil {
+		t.Fatalf("MarkDeleted: %v", err)
+	}
+
+	since := day(2026, 7, 25, 0)
+	until := day(2026, 8, 3, 0)
+	days, err := repo.NewPerDay(context.Background(), since, until)
+	if err != nil {
+		t.Fatalf("NewPerDay: %v", err)
+	}
+	want := []contract.DailyCount{
+		{Day: "2026-08-01", Count: 2},
+		{Day: "2026-08-02", Count: 1},
+	}
+	if len(days) != len(want) {
+		t.Fatalf("NewPerDay = %+v, want %+v", days, want)
+	}
+	for i := range want {
+		if days[i] != want[i] {
+			t.Errorf("NewPerDay[%d] = %+v, want %+v", i, days[i], want[i])
+		}
+	}
+}
+
+// idsOf returns the IDs of the given records for concise assertions.
+func idsOf(recs []contract.CharacterRecord) []uint32 {
+	out := make([]uint32, len(recs))
+	for i, r := range recs {
+		out[i] = r.ID
+	}
+	return out
 }

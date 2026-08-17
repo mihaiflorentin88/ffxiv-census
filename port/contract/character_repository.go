@@ -25,4 +25,20 @@ type CharacterRepository interface {
 	// ListStale returns up to limit characters whose last_census_at is before
 	// cutoff (NULL last_census_at counts as stale), ordered oldest-first.
 	ListStale(ctx context.Context, cutoff time.Time, limit int) ([]CharacterRecord, error)
+	// List returns up to limit non-deleted characters ordered by id, starting
+	// at offset (pagination for the REST API).
+	List(ctx context.Context, limit, offset int) ([]CharacterRecord, error)
+	// Count returns the number of non-deleted characters.
+	Count(ctx context.Context) (int64, error)
+	// CountActive returns the number of non-deleted characters whose
+	// latest_achievement_at is at or after since.
+	CountActive(ctx context.Context, since time.Time) (int64, error)
+	// Breakdown groups non-deleted characters by column (one of
+	// race|world|datacenter|region), with total and active counts per group.
+	// Active counts rows whose latest_achievement_at is at or after since.
+	// Groups are ordered by total count descending.
+	Breakdown(ctx context.Context, column string, since time.Time) ([]GroupCount, error)
+	// NewPerDay returns non-deleted characters first seen in [since, until),
+	// counted per UTC day, ordered ascending by day.
+	NewPerDay(ctx context.Context, since, until time.Time) ([]DailyCount, error)
 }
