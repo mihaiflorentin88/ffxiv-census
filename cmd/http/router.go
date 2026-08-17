@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 
+	census "github.com/mihaiflorentin88/ffxiv-census/cmd/http/app/census"
 	roothandler "github.com/mihaiflorentin88/ffxiv-census/cmd/http/app/root/handler"
 	ui "github.com/mihaiflorentin88/ffxiv-census/cmd/http/ui"
 )
@@ -21,5 +22,6 @@ func NewRouter() Router {
 
 func (r *Router) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(RouteHealth, r.HealthController.Check)
+	census.Register(mux)
 	ui.Register(mux)
 }

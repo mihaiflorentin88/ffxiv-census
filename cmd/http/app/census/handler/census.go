@@ -1,0 +1,266 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+
+	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
+	"github.com/mihaiflorentin88/ffxiv-census/port/dto/response"
+)
+
+// CensusController exposes the read-only census REST API. It depends only on
+// the domain census service; all DTO mapping happens here.
+type CensusController struct {
+	svc *census.Service
+}
+
+func NewCensusController(svc *census.Service) *CensusController {
+	return &CensusController{svc: svc}
+}
+
+// Latest serves GET /api/v1/census/latest: totals plus the active ratio
+// (active = latest achievement within the activity window).
+func (c *CensusController) Latest(w http.ResponseWriter, r *http.Request) {
+	if c.svc == nil {
+		writeError(w, http.StatusInternalServerError, "census service unavailable")
+		return
+	}
+	total, active, err := c.svc.Summary(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ratio := 0.0
+	if total > 0 {
+		ratio = float64(active) / float64(total)
+	}
+	writeJSON(w, http.StatusOK, response.CensusSummary{
+		TotalCharacters:  total,
+		ActiveCharacters: active,
+		ActiveRatio:      ratio,
+	})
+}
+
+// List serves GET /api/v1/census/characters: one page of characters plus the
+// total count. limit defaults to 100 and is clamped to 500; offset defaults
+// to 0. Missing/empty parameters fall back to defaults; non-numeric or
+// negative values are rejected with 400.
+func (c *CensusController) List(w http.ResponseWriter, r *http.Request) {
+	if c.svc == nil {
+		writeError(w, http.StatusInternalServerError, "census service unavailable")
+		return
+	}
+	query := r.URL.Query()
+
+	limit := 100
+	if raw := query.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if n > 500 {
+			n = 500
+		}
+		limit = n
+	}
+	offset := 0
+	if raw := query.Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+
+	chars, total, err := c.svc.ListCharacters(r.Context(), limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]response.CharacterListItem, 0, len(chars))
+	for i := range chars {
+		items = append(items, toCharacterListItem(&chars[i]))
+	}
+	writeJSON(w, http.StatusOK, response.PaginatedCharacters{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
+}
+
+// Get serves GET /api/v1/census/characters/{id}: full detail for one
+// character. A non-numeric id is a 400; an unknown id is a 404.
+func (c *CensusController) Get(w http.ResponseWriter, r *http.Request) {
+	if c.svc == nil {
+		writeError(w, http.StatusInternalServerError, "census service unavailable")
+		return
+	}
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 32)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid character id")
+		return
+	}
+	detail, err := c.svc.CharacterDetail(r.Context(), uint32(id))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if detail == nil {
+		writeError(w, http.StatusNotFound, "character not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, toCharacterDetail(detail))
+}
+
+// Breakdown serves GET /api/v1/stats/breakdown?by=race|world|datacenter|region.
+// A missing or unknown dimension is a 400.
+func (c *CensusController) Breakdown(w http.ResponseWriter, r *http.Request) {
+	if c.svc == nil {
+		writeError(w, http.StatusInternalServerError, "census service unavailable")
+		return
+	}
+	by := r.URL.Query().Get("by")
+	if by == "" {
+		writeError(w, http.StatusBadRequest, "missing by parameter")
+		return
+	}
+	groups, err := c.svc.Breakdown(r.Context(), by)
+	if errors.Is(err, census.ErrInvalidDimension) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]response.BreakdownGroup, 0, len(groups))
+	for _, g := range groups {
+		items = append(items, response.BreakdownGroup{Key: g.Key, Total: g.Total, Active: g.Active})
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// NewCharacters serves GET /api/v1/stats/new-characters?since=YYYY-MM-DD:
+// characters first seen per UTC day in [since, until). since is required and
+// must parse as a date; until defaults to now.
+func (c *CensusController) NewCharacters(w http.ResponseWriter, r *http.Request) {
+	if c.svc == nil {
+		writeError(w, http.StatusInternalServerError, "census service unavailable")
+		return
+	}
+	query := r.URL.Query()
+
+	sinceRaw := query.Get("since")
+	if sinceRaw == "" {
+		writeError(w, http.StatusBadRequest, "missing since parameter")
+		return
+	}
+	since, err := time.Parse("2006-01-02", sinceRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid since parameter")
+		return
+	}
+	until := time.Now().UTC()
+	if untilRaw := query.Get("until"); untilRaw != "" {
+		u, err := time.Parse("2006-01-02", untilRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid until parameter")
+			return
+		}
+		until = u
+	}
+
+	days, err := c.svc.NewCharacters(r.Context(), since, until)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]response.NewCharactersDay, 0, len(days))
+	for _, d := range days {
+		items = append(items, response.NewCharactersDay{Day: d.Day, Count: d.Count})
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// Expansion serves GET /api/v1/stats/expansion[?name=Expansion]: how many
+// distinct characters completed each expansion's MSQ. An optional name filter
+// narrows the list; no match returns an empty list, not a 404.
+func (c *CensusController) Expansion(w http.ResponseWriter, r *http.Request) {
+	if c.svc == nil {
+		writeError(w, http.StatusInternalServerError, "census service unavailable")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	stats, err := c.svc.ExpansionCompletions(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]response.ExpansionStat, 0, len(stats))
+	for _, s := range stats {
+		if name != "" && s.Expansion != name {
+			continue
+		}
+		items = append(items, response.ExpansionStat{Expansion: s.Expansion, Count: s.Count})
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// toCharacterListItem maps a persisted character record to the API list item.
+// Every field the DTO declares is copied; pointer fields pass through as-is.
+func toCharacterListItem(rec *contract.CharacterRecord) response.CharacterListItem {
+	return response.CharacterListItem{
+		ID:                  rec.ID,
+		Name:                rec.Name,
+		World:               rec.World,
+		Datacenter:          rec.Datacenter,
+		Region:              rec.Region,
+		Race:                rec.Race,
+		Gender:              rec.Gender,
+		FreeCompanyID:       rec.FreeCompanyID,
+		FreeCompanyName:     rec.FreeCompanyName,
+		AchievementsPrivate: rec.AchievementsPrivate,
+		LatestAchievementID: rec.LatestAchievementID,
+		FirstSeenAt:         rec.FirstSeenAt,
+		LastCensusAt:        rec.LastCensusAt,
+	}
+}
+
+// toCharacterDetail maps the domain aggregate to the API detail payload.
+func toCharacterDetail(d *census.CharacterDetail) response.CharacterDetail {
+	out := response.CharacterDetail{
+		Character:  toCharacterListItem(&d.Character),
+		Jobs:       make([]response.CharacterJobDetail, 0, len(d.Jobs)),
+		Milestones: make([]response.CharacterMilestoneDetail, 0, len(d.Milestones)),
+	}
+	for _, j := range d.Jobs {
+		out.Jobs = append(out.Jobs, response.CharacterJobDetail{
+			ClassJobID: j.ClassJobID,
+			Name:       j.Name,
+			Level:      j.Level,
+			ExpLevel:   j.ExpLevel,
+		})
+	}
+	for _, m := range d.Milestones {
+		out.Milestones = append(out.Milestones, response.CharacterMilestoneDetail{
+			AchievementID: m.AchievementID,
+			AchievedAt:    m.AchievedAt,
+		})
+	}
+	if d.FreeCompany != nil {
+		out.FreeCompany = &response.FreeCompanyDetail{
+			ID:          d.FreeCompany.ID,
+			Name:        d.FreeCompany.Name,
+			World:       d.FreeCompany.World,
+			Datacenter:  d.FreeCompany.Datacenter,
+			MemberCount: d.FreeCompany.MemberCount,
+		}
+	}
+	return out
+}

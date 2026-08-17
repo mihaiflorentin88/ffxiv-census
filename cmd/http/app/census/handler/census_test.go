@@ -1,0 +1,368 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/xivapi/godestone/v2"
+	"github.com/xivapi/godestone/v2/data/gender"
+	"github.com/xivapi/godestone/v2/provider/models"
+
+	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
+	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
+	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
+	"github.com/mihaiflorentin88/ffxiv-census/port/dto/response"
+)
+
+// testRig wires the real domain service on top of in-memory fakes, exactly as
+// routes.go does, so handler tests exercise the full service -> repo path.
+type testRig struct {
+	svc   *census.Service
+	chars *mockrepo.CharacterRepository
+	fcs   *mockrepo.FreeCompanyRepository
+	ach   *mockrepo.AchievementRepository
+	q     *mockqueue.Fake
+	c     *CensusController
+	qc    *QueueController
+}
+
+func newRig(t *testing.T) *testRig {
+	t.Helper()
+	chars := mockrepo.NewCharacterFake()
+	fcs := mockrepo.NewFreeCompanyFake()
+	ach := mockrepo.NewAchievementFake()
+	svc := census.NewService(chars, fcs, ach, mockrepo.NewCensusRunFake())
+	q := mockqueue.NewFake()
+	return &testRig{
+		svc: svc, chars: chars, fcs: fcs, ach: ach, q: q,
+		c:  NewCensusController(svc),
+		qc: NewQueueController(q),
+	}
+}
+
+func (r *testRig) seed(t *testing.T, char *godestone.Character) {
+	t.Helper()
+	if err := r.svc.UpsertCharacter(context.Background(), char); err != nil {
+		t.Fatalf("UpsertCharacter(%d): %v", char.ID, err)
+	}
+}
+
+func doGET(t *testing.T, h http.HandlerFunc, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
+func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder, v any) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+}
+
+func assertError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantMsg string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, wantStatus, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body %q is not JSON: %v", rec.Body.String(), err)
+	}
+	if msg, ok := body["error"]; !ok || !strings.Contains(msg, wantMsg) {
+		t.Errorf("error body = %q, want it to contain %q", body["error"], wantMsg)
+	}
+}
+
+func TestCensusController_Latest(t *testing.T) {
+	rig := newRig(t)
+	rig.seed(t, &godestone.Character{ID: 1, Name: "Tataru", World: "Ultros", DC: "Primal", Gender: gender.Female})
+	rig.seed(t, &godestone.Character{ID: 2, Name: "Moen", World: "Ultros", DC: "Primal"})
+
+	var body response.CensusSummary
+	decodeJSON(t, doGET(t, rig.c.Latest, "/api/v1/census/latest"), &body)
+	if body.TotalCharacters != 2 {
+		t.Errorf("total_characters = %d, want 2", body.TotalCharacters)
+	}
+	if body.ActiveCharacters != 0 {
+		t.Errorf("active_characters = %d, want 0 (no achievements ingested)", body.ActiveCharacters)
+	}
+	if body.ActiveRatio != 0 {
+		t.Errorf("active_ratio = %v, want 0", body.ActiveRatio)
+	}
+}
+
+func TestCensusController_Latest_NilService(t *testing.T) {
+	c := NewCensusController(nil)
+	assertError(t, doGET(t, c.Latest, "/api/v1/census/latest"), http.StatusInternalServerError, "census service unavailable")
+}
+
+func TestCensusController_List(t *testing.T) {
+	rig := newRig(t)
+	for _, id := range []uint32{1, 2, 3} {
+		rig.seed(t, &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal"})
+	}
+
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantItems  int
+		wantTotal  int64
+		wantLimit  int
+		wantOffset int
+	}{
+		{name: "defaults", query: "", wantStatus: 200, wantItems: 3, wantTotal: 3, wantLimit: 100, wantOffset: 0},
+		{name: "page one", query: "limit=2&offset=0", wantStatus: 200, wantItems: 2, wantTotal: 3, wantLimit: 2, wantOffset: 0},
+		{name: "page two", query: "limit=2&offset=2", wantStatus: 200, wantItems: 1, wantTotal: 3, wantLimit: 2, wantOffset: 2},
+		{name: "limit clamped", query: "limit=1000", wantStatus: 200, wantItems: 3, wantTotal: 3, wantLimit: 500, wantOffset: 0},
+		{name: "invalid limit", query: "limit=abc", wantStatus: 400},
+		{name: "negative limit", query: "limit=-1", wantStatus: 400},
+		{name: "negative offset", query: "offset=-5", wantStatus: 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doGET(t, rig.c.List, "/api/v1/census/characters"+querySuffix(tt.query))
+			if tt.wantStatus != http.StatusOK {
+				wantMsg := "limit"
+				if tt.name == "negative offset" {
+					wantMsg = "offset"
+				}
+				assertError(t, rec, tt.wantStatus, wantMsg)
+				return
+			}
+			var body response.PaginatedCharacters
+			decodeJSON(t, rec, &body)
+			if len(body.Items) != tt.wantItems {
+				t.Errorf("items = %d, want %d", len(body.Items), tt.wantItems)
+			}
+			if body.Total != tt.wantTotal {
+				t.Errorf("total = %d, want %d", body.Total, tt.wantTotal)
+			}
+			if body.Limit != tt.wantLimit {
+				t.Errorf("limit = %d, want %d", body.Limit, tt.wantLimit)
+			}
+			if body.Offset != tt.wantOffset {
+				t.Errorf("offset = %d, want %d", body.Offset, tt.wantOffset)
+			}
+			// DTO field pass-through on the first item.
+			if len(body.Items) > 0 {
+				first := body.Items[0]
+				if first.Name != "Char" || first.World != "Ultros" || first.Datacenter != "Primal" || first.Region != "NA" {
+					t.Errorf("first item fields = %+v, want name Char/world Ultros/datacenter Primal/region NA", first)
+				}
+			}
+		})
+	}
+}
+
+func TestCensusController_Get(t *testing.T) {
+	rig := newRig(t)
+	now := time.Now().UTC()
+	rig.seed(t, &godestone.Character{
+		ID:              1,
+		Name:            "Tataru Taru",
+		World:           "Ultros",
+		DC:              "Primal",
+		Gender:          gender.Female,
+		Race:            &models.GenderedEntity{Name: "Lalafell"},
+		FreeCompanyID:   "9234567890123456789",
+		FreeCompanyName: "The Scions",
+		ClassJobs: []*godestone.ClassJob{
+			{JobID: 19, Name: "Paladin", Level: 90, ExpLevel: 12345},
+		},
+	})
+	_ = rig.ach.UpsertCharacterMilestones(context.Background(), 1, []contract.CharacterMilestone{
+		{CharacterID: 1, AchievementID: 590, AchievedAt: now},
+	})
+	_ = rig.fcs.Upsert(context.Background(), contract.FreeCompanyRecord{
+		ID: "9234567890123456789", Name: "The Scions", World: "Ultros",
+		Datacenter: "Primal", MemberCount: 42, LastSeenAt: now,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/census/characters/1", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	rig.c.Get(rec, req)
+
+	var body response.CharacterDetail
+	decodeJSON(t, rec, &body)
+	if body.Character.ID != 1 || body.Character.Name != "Tataru Taru" {
+		t.Errorf("character = %+v, want id 1 / Tataru Taru", body.Character)
+	}
+	if body.Character.FreeCompanyID == nil || *body.Character.FreeCompanyID != "9234567890123456789" {
+		t.Errorf("free_company_id = %v, want passthrough", body.Character.FreeCompanyID)
+	}
+	if len(body.Jobs) != 1 || body.Jobs[0].Name != "Paladin" || body.Jobs[0].Level != 90 || body.Jobs[0].ExpLevel != 12345 {
+		t.Errorf("jobs = %+v, want one Paladin 90", body.Jobs)
+	}
+	if len(body.Milestones) != 1 || body.Milestones[0].AchievementID != 590 {
+		t.Errorf("milestones = %+v, want one 590", body.Milestones)
+	}
+	if body.FreeCompany == nil || body.FreeCompany.Name != "The Scions" || body.FreeCompany.MemberCount != 42 {
+		t.Errorf("free_company = %+v, want The Scions (42)", body.FreeCompany)
+	}
+}
+
+func TestCensusController_Get_NotFound(t *testing.T) {
+	rig := newRig(t)
+	rig.seed(t, &godestone.Character{ID: 1, Name: "Char", World: "Ultros", DC: "Primal"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/census/characters/999", nil)
+	req.SetPathValue("id", "999")
+	rec := httptest.NewRecorder()
+	rig.c.Get(rec, req)
+	assertError(t, rec, http.StatusNotFound, "character not found")
+}
+
+func TestCensusController_Get_InvalidID(t *testing.T) {
+	rig := newRig(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/census/characters/abc", nil)
+	req.SetPathValue("id", "abc")
+	rec := httptest.NewRecorder()
+	rig.c.Get(rec, req)
+	assertError(t, rec, http.StatusBadRequest, "invalid character id")
+}
+
+func TestCensusController_Breakdown(t *testing.T) {
+	rig := newRig(t)
+	rig.seed(t, &godestone.Character{ID: 1, Name: "A", World: "Ultros", DC: "Primal"})
+	rig.seed(t, &godestone.Character{ID: 2, Name: "B", World: "Ultros", DC: "Primal"})
+	rig.seed(t, &godestone.Character{ID: 3, Name: "C", World: "Moogle", DC: "Chaos"})
+
+	var groups []response.BreakdownGroup
+	decodeJSON(t, doGET(t, rig.c.Breakdown, "/api/v1/stats/breakdown?by=world"), &groups)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %+v, want 2 worlds", groups)
+	}
+	if groups[0].Key != "Ultros" || groups[0].Total != 2 {
+		t.Errorf("groups[0] = %+v, want Ultros total 2", groups[0])
+	}
+	if groups[1].Key != "Moogle" || groups[1].Total != 1 {
+		t.Errorf("groups[1] = %+v, want Moogle total 1", groups[1])
+	}
+}
+
+func TestCensusController_Breakdown_MissingBy(t *testing.T) {
+	rig := newRig(t)
+	assertError(t, doGET(t, rig.c.Breakdown, "/api/v1/stats/breakdown"), http.StatusBadRequest, "by")
+}
+
+func TestCensusController_Breakdown_InvalidDimension(t *testing.T) {
+	rig := newRig(t)
+	assertError(t, doGET(t, rig.c.Breakdown, "/api/v1/stats/breakdown?by=bogus"), http.StatusBadRequest, "invalid breakdown dimension")
+}
+
+func TestCensusController_NewCharacters(t *testing.T) {
+	rig := newRig(t)
+	rig.seed(t, &godestone.Character{ID: 1, Name: "A", World: "Ultros", DC: "Primal"})
+
+	var days []response.NewCharactersDay
+	decodeJSON(t, doGET(t, rig.c.NewCharacters, "/api/v1/stats/new-characters?since=2020-01-01"), &days)
+	if len(days) != 1 {
+		t.Fatalf("days = %+v, want exactly today's bucket", days)
+	}
+	wantDay := time.Now().UTC().Format("2006-01-02")
+	if days[0].Day != wantDay || days[0].Count != 1 {
+		t.Errorf("days[0] = %+v, want day %s count 1", days[0], wantDay)
+	}
+}
+
+func TestCensusController_NewCharacters_MissingSince(t *testing.T) {
+	rig := newRig(t)
+	assertError(t, doGET(t, rig.c.NewCharacters, "/api/v1/stats/new-characters"), http.StatusBadRequest, "since")
+}
+
+func TestCensusController_NewCharacters_InvalidSince(t *testing.T) {
+	rig := newRig(t)
+	assertError(t, doGET(t, rig.c.NewCharacters, "/api/v1/stats/new-characters?since=notadate"), http.StatusBadRequest, "since")
+}
+
+func TestCensusController_Expansion(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+	if err := rig.svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+	now := time.Now().UTC()
+	_ = rig.ach.UpsertCharacterMilestones(ctx, 1, []contract.CharacterMilestone{
+		{CharacterID: 1, AchievementID: 1139, AchievedAt: now}, // Heavensward
+	})
+	_ = rig.ach.UpsertCharacterMilestones(ctx, 2, []contract.CharacterMilestone{
+		{CharacterID: 2, AchievementID: 1794, AchievedAt: now}, // Stormblood
+	})
+
+	var all []response.ExpansionStat
+	decodeJSON(t, doGET(t, rig.c.Expansion, "/api/v1/stats/expansion"), &all)
+	if len(all) != 2 {
+		t.Fatalf("expansion = %+v, want 2 entries", all)
+	}
+	if all[0].Expansion != "Heavensward" || all[0].Count != 1 {
+		t.Errorf("all[0] = %+v, want Heavensward 1", all[0])
+	}
+	if all[1].Expansion != "Stormblood" || all[1].Count != 1 {
+		t.Errorf("all[1] = %+v, want Stormblood 1", all[1])
+	}
+}
+
+func TestCensusController_Expansion_NameFilter(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+	if err := rig.svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+	now := time.Now().UTC()
+	_ = rig.ach.UpsertCharacterMilestones(ctx, 1, []contract.CharacterMilestone{
+		{CharacterID: 1, AchievementID: 1139, AchievedAt: now}, // Heavensward
+	})
+
+	var filtered []response.ExpansionStat
+	decodeJSON(t, doGET(t, rig.c.Expansion, "/api/v1/stats/expansion?name=Heavensward"), &filtered)
+	if len(filtered) != 1 || filtered[0].Expansion != "Heavensward" {
+		t.Errorf("filtered = %+v, want only Heavensward", filtered)
+	}
+
+	// A name with no matches returns an empty list, not 404.
+	var none []response.ExpansionStat
+	decodeJSON(t, doGET(t, rig.c.Expansion, "/api/v1/stats/expansion?name=DoesNotExist"), &none)
+	if len(none) != 0 {
+		t.Errorf("none = %+v, want empty list", none)
+	}
+}
+
+func TestQueueController_Depth(t *testing.T) {
+	rig := newRig(t)
+	if err := rig.q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	var items []response.QueueDepthItem
+	decodeJSON(t, doGET(t, rig.qc.Depth, "/api/v1/queue"), &items)
+	if len(items) != 1 || items[0].Status != "pending" || items[0].Count != 1 {
+		t.Errorf("depth = %+v, want [{pending 1}]", items)
+	}
+}
+
+func TestQueueController_Depth_NilQueue(t *testing.T) {
+	qc := NewQueueController(nil)
+	assertError(t, doGET(t, qc.Depth, "/api/v1/queue"), http.StatusInternalServerError, "queue")
+}
+
+func querySuffix(q string) string {
+	if q == "" {
+		return ""
+	}
+	return "?" + q
+}
