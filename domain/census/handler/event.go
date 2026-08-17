@@ -24,3 +24,25 @@ func AchievementCensusJob(characterID uint32) contract.QueueJob {
 	b, _ := json.Marshal(AchievementCensusPayload{CharacterID: characterID})
 	return contract.QueueJob{Type: EventAchievementCensus, Payload: b}
 }
+
+// CharacterCensusPayload identifies a character to re-census.
+type CharacterCensusPayload struct {
+	CharacterID uint32 `json:"character_id"`
+}
+
+// CharacterCensusJob builds a character-census queue job for a character.
+func CharacterCensusJob(characterID uint32) contract.QueueJob {
+	b, _ := json.Marshal(CharacterCensusPayload{CharacterID: characterID})
+	return contract.QueueJob{Type: EventCharacterCensus, Payload: b}
+}
+
+// FreeCompanyCensusPayload identifies a free company to census.
+type FreeCompanyCensusPayload struct {
+	FCID string `json:"fc_id"`
+}
+
+// FreeCompanyCensusJob builds an fc-census queue job for a free company.
+func FreeCompanyCensusJob(fcID string) contract.QueueJob {
+	b, _ := json.Marshal(FreeCompanyCensusPayload{FCID: fcID})
+	return contract.QueueJob{Type: EventFreeCompanyCensus, Payload: b}
+}
