@@ -1,6 +1,9 @@
 package container
 
-import "github.com/mihaiflorentin88/ffxiv-census/domain/census"
+import (
+	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
+	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
+)
 
 // DomainContainer wires domain services.
 type DomainContainer struct {
@@ -19,4 +22,12 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	)
 	s.domain.censusService = svc
 	return svc
+}
+
+// Handlers returns a registry of ingest handlers, each wired to its
+// dependencies. Handlers are stateless, so a fresh registry per call is fine.
+func (s *ServiceContainer) Handlers() *handler.Registry {
+	reg := handler.NewRegistry()
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), s.CensusService()))
+	return reg
 }
