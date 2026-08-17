@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +58,7 @@ func TestWorker_ProcessesClaimedJobs(t *testing.T) {
 	rh := &recordingHandler{}
 	reg.Register("id-sweep", rh)
 
-	w := New(q, reg)
+	w := New(q, reg, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -90,7 +93,7 @@ func TestWorker_PublishesChainedJobs(t *testing.T) {
 	}
 	reg.Register("id-sweep", rh)
 
-	w := New(q, reg)
+	w := New(q, reg, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -115,8 +118,44 @@ func TestWorker_PublishesChainedJobs(t *testing.T) {
 func TestWorker_UnknownEventErrors(t *testing.T) {
 	q := mockqueue.NewFake()
 	reg := handler.NewRegistry()
-	w := New(q, reg)
+	w := New(q, reg, nil)
 	if err := w.Run(context.Background(), "no-such-event", 1); err == nil {
 		t.Fatal("expected error for unregistered event")
+	}
+}
+
+func TestWorker_LogsJobLifecycle(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	q := mockqueue.NewFake()
+	if err := q.Publish(context.Background(),
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
+	); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+
+	w := New(q, reg, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, "id-sweep", 1) }()
+
+	waitForCalls(t, rh, 1)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("worker: %v", err)
+	}
+
+	logs := buf.String()
+	for _, want := range []string{"worker.job_start", "worker.job_done", "job_id"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs missing %q:\n%s", want, logs)
+		}
 	}
 }

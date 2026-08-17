@@ -48,9 +48,9 @@ func (s *ServiceContainer) Handlers() *handler.Registry {
 	if svc == nil {
 		return reg
 	}
-	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), svc))
-	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), svc))
-	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), svc))
-	reg.Register(handler.EventFreeCompanyCensus, handler.NewFreeCompanyCensus(s.LodestoneClient(), svc))
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), svc, s.Logger()))
+	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), svc, s.Logger()))
+	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), svc, s.Logger()))
+	reg.Register(handler.EventFreeCompanyCensus, handler.NewFreeCompanyCensus(s.LodestoneClient(), svc, s.Logger()))
 	return reg
 }

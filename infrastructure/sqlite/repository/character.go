@@ -74,9 +74,17 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 		return fmt.Errorf("character upsert delete jobs: %w", err)
 	}
 	for _, j := range jobs {
+		// ON CONFLICT guards against colliding class_job_id keys within one
+		// payload (godestone reports class and job entries that can map to the
+		// same key, e.g. crafters/gatherers where class ID == job ID): the later
+		// entry's values win instead of failing the whole upsert.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO character_jobs (character_id, class_job_id, name, level, exp_level)
-			 VALUES (?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(character_id, class_job_id) DO UPDATE SET
+				name = excluded.name,
+				level = excluded.level,
+				exp_level = excluded.exp_level`,
 			j.CharacterID, j.ClassJobID, j.Name, j.Level, j.ExpLevel); err != nil {
 			return fmt.Errorf("character upsert insert job: %w", err)
 		}

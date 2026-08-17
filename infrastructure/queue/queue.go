@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
@@ -19,20 +21,27 @@ const timeLayout = "2006-01-02T15:04:05.000Z"
 type Queue struct {
 	driver contract.SQLiteDriver
 	cfg    *config.QueueConfig
+	logger contract.Logger
 	now    func() time.Time // injectable clock for deterministic backoff tests
 }
 
-func NewQueue(driver contract.SQLiteDriver, cfg *config.QueueConfig) (contract.Queue, error) {
+func NewQueue(driver contract.SQLiteDriver, cfg *config.QueueConfig, logger contract.Logger) (contract.Queue, error) {
 	if driver == nil {
 		return nil, errors.New("queue driver is nil")
 	}
 	if cfg == nil {
 		return nil, errors.New("queue config is nil")
 	}
-	return &Queue{driver: driver, cfg: cfg, now: time.Now}, nil
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return &Queue{driver: driver, cfg: cfg, logger: logger, now: time.Now}, nil
 }
 
 func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) error {
+	if len(jobs) > 0 {
+		q.logger.DebugContext(ctx, "queue.publish", slog.Int("jobs", len(jobs)))
+	}
 	now := q.now().UTC().Format(timeLayout)
 	for _, j := range jobs {
 		if j.MaxAttempts <= 0 {
@@ -42,13 +51,16 @@ func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) error {
 		if !j.RunAt.IsZero() {
 			runAt = j.RunAt.UTC().Format(timeLayout)
 		}
-		_, err := q.driver.Execute(ctx,
+		h := payloadHash(j.Payload)
+		res, err := q.driver.Execute(ctx,
 			`INSERT OR IGNORE INTO queue_jobs (type, payload, payload_hash, status, run_at, max_attempts, created_at)
 			 VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-			j.Type, string(j.Payload), payloadHash(j.Payload), runAt, j.MaxAttempts, now)
+			j.Type, string(j.Payload), h, runAt, j.MaxAttempts, now)
 		if err != nil {
 			return fmt.Errorf("publish %s: %w", j.Type, err)
 		}
+		inserted, _ := res.RowsAffected()
+		q.logger.DebugContext(ctx, "queue.publish_job", slog.String("event_type", j.Type), slog.String("payload_hash", h), slog.Bool("inserted", inserted > 0))
 	}
 	return nil
 }
@@ -90,6 +102,10 @@ func (q *Queue) Claim(ctx context.Context, jobType string, n int) ([]contract.Qu
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("claim commit: %w", err)
 	}
+	q.logger.DebugContext(ctx, "queue.claim", slog.String("event_type", jobType), slog.Int("requested", n), slog.Int("claimed", len(jobs)))
+	for _, j := range jobs {
+		q.logger.DebugContext(ctx, "queue.claimed", slog.String("event_type", jobType), slog.Int64("job_id", j.ID), slog.Int("attempts", j.Attempts))
+	}
 	return jobs, nil
 }
 
@@ -111,6 +127,7 @@ func (q *Queue) Complete(ctx context.Context, id int64, nextJobs ...contract.Que
 	if err := q.publishTx(ctx, tx, nextJobs...); err != nil {
 		return err
 	}
+	q.logger.InfoContext(ctx, "queue.complete", slog.Int64("job_id", id), slog.Int("chained", len(nextJobs)))
 	return tx.Commit()
 }
 
@@ -131,9 +148,11 @@ func (q *Queue) Retry(ctx context.Context, id int64) error {
 	}
 	runAt := now.Add(backoff).UTC().Format(timeLayout)
 	if attempts >= maxAttempts {
+		q.logger.ErrorContext(ctx, "queue.failed", slog.Int64("job_id", id), slog.Int("attempts", attempts), slog.Int("max_attempts", maxAttempts))
 		_, err = db.ExecContext(ctx,
 			`UPDATE queue_jobs SET status = 'failed' WHERE id = ? AND status = 'claimed'`, id)
 	} else {
+		q.logger.WarnContext(ctx, "queue.retry", slog.Int64("job_id", id), slog.Int("attempts", attempts), slog.Int("max_attempts", maxAttempts), slog.Duration("backoff", backoff))
 		_, err = db.ExecContext(ctx,
 			`UPDATE queue_jobs SET status = 'pending', run_at = ?, claimed_at = NULL
 			 WHERE id = ? AND status = 'claimed'`, runAt, id)
@@ -150,6 +169,7 @@ func (q *Queue) Fail(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("fail: %w", err)
 	}
+	q.logger.ErrorContext(ctx, "queue.fail", slog.Int64("job_id", id))
 	return nil
 }
 
@@ -183,12 +203,16 @@ func (q *Queue) publishTx(ctx context.Context, tx *sql.Tx, jobs ...contract.Queu
 		if !j.RunAt.IsZero() {
 			runAt = j.RunAt.UTC().Format(timeLayout)
 		}
-		if _, err := tx.ExecContext(ctx,
+		h := payloadHash(j.Payload)
+		res, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO queue_jobs (type, payload, payload_hash, status, run_at, max_attempts, created_at)
 			 VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-			j.Type, string(j.Payload), payloadHash(j.Payload), runAt, j.MaxAttempts, now); err != nil {
+			j.Type, string(j.Payload), h, runAt, j.MaxAttempts, now)
+		if err != nil {
 			return fmt.Errorf("publish next: %w", err)
 		}
+		inserted, _ := res.RowsAffected()
+		q.logger.DebugContext(ctx, "queue.publish_job", slog.String("event_type", j.Type), slog.String("payload_hash", h), slog.Bool("inserted", inserted > 0))
 	}
 	return nil
 }

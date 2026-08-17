@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,6 +46,7 @@ var publishIDSweepCmd = &cobra.Command{
 			start = end + 1
 		}
 
+		container.Load.Logger().InfoContext(cmd.Context(), "publish.id_sweep", slog.Uint64("from", uint64(from)), slog.Uint64("to", uint64(to)), slog.Uint64("chunk_size", uint64(chunkSize)), slog.Int("jobs", len(jobs)))
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
@@ -78,6 +80,7 @@ var publishCharacterCensusCmd = &cobra.Command{
 		for _, c := range stale {
 			jobs = append(jobs, handler.CharacterCensusJob(c.ID))
 		}
+		container.Load.Logger().InfoContext(cmd.Context(), "publish.character_census", slog.String("older_than", olderThan.String()), slog.Int("limit", limit), slog.Int("stale", len(stale)))
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")

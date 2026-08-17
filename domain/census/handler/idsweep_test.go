@@ -20,7 +20,7 @@ func newTestIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mockrepo.Char
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, svc), ls, chars
+	return NewIDSweep(ls, svc, nil), ls, chars
 }
 
 func idsweepPayload(from, to uint32) []byte {

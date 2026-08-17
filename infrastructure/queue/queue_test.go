@@ -31,7 +31,7 @@ func testQueue(t *testing.T) contract.Queue {
 		ClaimBatchSize:     4,
 		MaxAttempts:        2,
 		BackoffBaseSeconds: 5,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewQueue: %v", err)
 	}

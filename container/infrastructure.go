@@ -26,6 +26,12 @@ type InfrastructureContainer struct {
 	censusRunRepository   contract.CensusRunRepository
 }
 
+// Logger returns the process-wide structured logger (infrastructure/logging.Logger)
+// as a contract.Logger, for injection into adapters and domain objects.
+func (s *ServiceContainer) Logger() contract.Logger {
+	return logging.Logger
+}
+
 func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
 	if s.infrastructure.httpClient != nil {
 		return s.infrastructure.httpClient
@@ -85,7 +91,7 @@ func (s *ServiceContainer) Queue() contract.Queue {
 		logging.Warn("container.queue", "queue config missing")
 		return nil
 	}
-	q, err := queue.NewQueue(driver, cfg)
+	q, err := queue.NewQueue(driver, cfg, s.Logger())
 	if err != nil {
 		logging.Error("container.queue", fmt.Sprintf("failed to create queue: %v", err))
 		return nil

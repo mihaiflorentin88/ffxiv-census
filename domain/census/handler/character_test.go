@@ -20,7 +20,7 @@ func newTestCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewCharacterCensus(ls, svc), ls, chars
+	return NewCharacterCensus(ls, svc, nil), ls, chars
 }
 
 func characterPayload(id uint32) []byte {

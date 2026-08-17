@@ -18,7 +18,7 @@ func newTestFCCensus(t *testing.T) (*FreeCompanyCensus, *mocklodestone.Fake, *mo
 	ls := mocklodestone.NewFake()
 	fcs := mockrepo.NewFreeCompanyFake()
 	svc := census.NewService(mockrepo.NewCharacterFake(), fcs, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewFreeCompanyCensus(ls, svc), ls, fcs
+	return NewFreeCompanyCensus(ls, svc, nil), ls, fcs
 }
 
 func fcPayload(id string) []byte {

@@ -164,6 +164,31 @@ func TestCharacterRepository_UpsertPreservesFirstSeenAndClearsDeleted(t *testing
 	}
 }
 
+func TestCharacterRepository_UpsertCollidingJobs(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	rec := contract.CharacterRecord{ID: 999, Name: "Collide", FirstSeenAt: now}
+	// Two entries mapping to the same class_job_id key (godestone class/job
+	// pairing). The upsert must not fail and must collapse to one row.
+	jobs := []contract.ClassJobRecord{
+		{CharacterID: 999, ClassJobID: 8, Name: "Carpenter", Level: 1, ExpLevel: 0},
+		{CharacterID: 999, ClassJobID: 8, Name: "Carpenter", Level: 90, ExpLevel: 555},
+	}
+	if err := repo.Upsert(context.Background(), rec, jobs); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	gotJobs, err := repo.GetJobs(context.Background(), 999)
+	if err != nil {
+		t.Fatalf("GetJobs: %v", err)
+	}
+	if len(gotJobs) != 1 {
+		t.Fatalf("jobs = %d, want 1 (collision collapsed)", len(gotJobs))
+	}
+	if gotJobs[0].Level != 90 || gotJobs[0].ExpLevel != 555 {
+		t.Errorf("job = %+v, want later entry's values (level 90, exp 555)", gotJobs[0])
+	}
+}
+
 func TestCharacterRepository_UpsertReplacesJobs(t *testing.T) {
 	repo := newTestCharacterRepo(t)
 	now := time.Now().UTC().Truncate(time.Millisecond)

@@ -28,7 +28,7 @@ var consumeCmd = &cobra.Command{
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
-		w := worker.New(q, container.Load.Handlers())
+		w := worker.New(q, container.Load.Handlers(), container.Load.Logger())
 		return w.Run(ctx, eventType, concurrency)
 	},
 }

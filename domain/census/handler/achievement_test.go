@@ -25,7 +25,7 @@ func newTestAchievementCensus(t *testing.T) (*AchievementCensus, *mocklodestone.
 	if err := svc.SyncMilestones(context.Background()); err != nil {
 		t.Fatalf("SyncMilestones: %v", err)
 	}
-	return NewAchievementCensus(ls, svc), ls, chars, ach
+	return NewAchievementCensus(ls, svc, nil), ls, chars, ach
 }
 
 func achievementPayload(characterID uint32) []byte {

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"io"
+	"log/slog"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -11,6 +13,15 @@ import (
 // worker maps it to Queue.Retry.
 type Handler interface {
 	Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error)
+}
+
+// loggerOrDiscard returns l, or a discard logger when l is nil, so handlers
+// never require a non-nil logger.
+func loggerOrDiscard(l contract.Logger) contract.Logger {
+	if l == nil {
+		return slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return l
 }
 
 // Registry maps event types to their handlers.

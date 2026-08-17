@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -16,11 +18,15 @@ import (
 type Worker struct {
 	queue        contract.Queue
 	handlers     *handler.Registry
+	logger       contract.Logger
 	pollInterval time.Duration
 }
 
-func New(q contract.Queue, h *handler.Registry) *Worker {
-	return &Worker{queue: q, handlers: h, pollInterval: time.Second}
+func New(q contract.Queue, h *handler.Registry, logger contract.Logger) *Worker {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return &Worker{queue: q, handlers: h, logger: logger, pollInterval: time.Second}
 }
 
 func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) error {
@@ -29,8 +35,10 @@ func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) err
 	}
 	h, ok := w.handlers.Get(eventType)
 	if !ok {
+		w.logger.ErrorContext(ctx, "worker.error", slog.String("event_type", eventType), slog.String("error", "no handler registered"))
 		return fmt.Errorf("no handler registered for event %q", eventType)
 	}
+	w.logger.InfoContext(ctx, "worker.start", slog.String("event_type", eventType), slog.Int("concurrency", concurrency))
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
 	for i := 0; i < concurrency; i++ {
@@ -49,6 +57,7 @@ func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) err
 			return err
 		}
 	}
+	w.logger.InfoContext(ctx, "worker.stop", slog.String("event_type", eventType))
 	return nil
 }
 
@@ -62,9 +71,11 @@ func (w *Worker) loop(ctx context.Context, eventType string, h handler.Handler) 
 			if ctx.Err() != nil {
 				return nil // clean shutdown
 			}
+			w.logger.ErrorContext(ctx, "worker.claim_error", slog.String("event_type", eventType), slog.Any("error", err))
 			return fmt.Errorf("claim %s: %w", eventType, err)
 		}
 		if len(jobs) == 0 {
+			w.logger.DebugContext(ctx, "worker.idle", slog.String("event_type", eventType))
 			select {
 			case <-ctx.Done():
 				return nil
@@ -73,8 +84,11 @@ func (w *Worker) loop(ctx context.Context, eventType string, h handler.Handler) 
 			}
 		}
 		for _, job := range jobs {
+			start := time.Now()
+			w.logger.InfoContext(ctx, "worker.job_start", slog.String("event_type", eventType), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts))
 			next, err := h.Handle(ctx, job.Payload)
 			if err != nil {
+				w.logger.WarnContext(ctx, "worker.job_retry", slog.String("event_type", eventType), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Any("error", err))
 				if rerr := w.queue.Retry(ctx, job.ID); rerr != nil {
 					if ctx.Err() != nil {
 						return nil // clean shutdown
@@ -83,6 +97,7 @@ func (w *Worker) loop(ctx context.Context, eventType string, h handler.Handler) 
 				}
 				continue
 			}
+			w.logger.InfoContext(ctx, "worker.job_done", slog.String("event_type", eventType), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Int("chained", len(next)))
 			if err := w.queue.Complete(ctx, job.ID, next...); err != nil {
 				if ctx.Err() != nil {
 					return nil // clean shutdown

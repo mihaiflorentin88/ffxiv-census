@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 const LoggerTypeJson = "json"
@@ -13,6 +15,9 @@ const LoggerTypePrettyJson = "pretty-json"
 const LoggerTypeColor = "color"
 
 var Logger = CLILogger
+
+// Ensure the process-wide logger implements the port contract.
+var _ contract.Logger = Logger
 
 var CLILogger = slog.New(NewCliHandler(os.Stdout, &slog.HandlerOptions{}))
 var ColorLogger = slog.New(NewColorHandler(os.Stdout, nil))
