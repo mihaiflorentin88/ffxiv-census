@@ -109,23 +109,28 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 		return raceRows[i].Total > raceRows[j].Total
 	})
 
+	msqMap := make(map[string]int64)
+	for _, row := range stats.MSQCompletions {
+		msqMap[row.Expansion] = row.Count
+	}
+
 	var msqRows []MSQRow
 	var msqLabels []string
 	var msqData []int64
-	for _, row := range stats.MSQCompletions {
+	for _, exp := range canonicalExpansions {
+		count := msqMap[exp.Name]
 		pct := "0.0%"
 		if stats.TotalCharacters > 0 {
-			pct = formatPercent(row.Count, stats.TotalCharacters)
+			pct = formatPercent(count, stats.TotalCharacters)
 		}
 		msqRows = append(msqRows, MSQRow{
-			Expansion:    row.Expansion,
-			Count:        row.Count,
+			Expansion:    exp.Name,
+			Count:        count,
 			PercentTotal: pct,
 		})
-		msqLabels = append(msqLabels, row.Expansion)
-		msqData = append(msqData, row.Count)
+		msqLabels = append(msqLabels, exp.Name)
+		msqData = append(msqData, count)
 	}
-
 	var timelineRows []DailyRow
 	var timelineLabels []string
 	var timelineData []int64

@@ -33,6 +33,7 @@ var canonicalExpansions = []struct {
 	FinalQuest string
 	Icon       string
 }{
+	{"A Realm Reborn", "Patch 2.55", "Before the Dawn", "🌱"},
 	{"Heavensward", "Patch 3.0", "Looking Up", "❄️"},
 	{"Stormblood", "Patch 4.0", "The Measure of His Reach", "⚔️"},
 	{"Shadowbringers", "Patch 5.0", "Shadowbringers", "🌑"},

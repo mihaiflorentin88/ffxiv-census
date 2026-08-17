@@ -15,7 +15,8 @@ var MilestoneSet = []contract.MilestoneAchievement{
 
 	// Expansion MSQ completions (verified against ffxivcollect achievement data).
 	// Each is the achievement for completing the expansion's final main-scenario
-	// quest of its base release (3.0, 4.0, ...), not post-expansion patch quests.
+	// quest (A Realm Reborn: 1129 "My Left Arm" / "Before the Dawn"; Heavensward: 1139 "Looking Up"; etc.).
+	{AchievementID: 1129, Kind: contract.MilestoneKindExpansion, Expansion: expansionPtr("A Realm Reborn"), Detail: "My Left Arm"},
 	{AchievementID: 1139, Kind: contract.MilestoneKindExpansion, Expansion: expansionPtr("Heavensward"), Detail: "Looking Up"},
 	{AchievementID: 1794, Kind: contract.MilestoneKindExpansion, Expansion: expansionPtr("Stormblood"), Detail: "The Measure of His Reach"},
 	{AchievementID: 2298, Kind: contract.MilestoneKindExpansion, Expansion: expansionPtr("Shadowbringers"), Detail: "Shadowbringers"},
