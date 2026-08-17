@@ -95,3 +95,27 @@ func (r *AchievementRepository) ListCharacterMilestones(ctx context.Context, cha
 	}
 	return out, rows.Err()
 }
+
+// CountExpansions returns per-expansion counts of distinct characters who
+// completed the expansion MSQ, ordered by expansion name.
+func (r *AchievementRepository) CountExpansions(ctx context.Context) ([]contract.ExpansionCount, error) {
+	rows, err := r.driver.FetchMany(ctx,
+		`SELECT ma.expansion, COUNT(DISTINCT cm.character_id)
+		   FROM character_milestones cm
+		   JOIN milestone_achievements ma ON ma.achievement_id = cm.achievement_id
+		  WHERE ma.kind = 'expansion_msq' AND ma.expansion IS NOT NULL
+		  GROUP BY ma.expansion ORDER BY ma.expansion`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []contract.ExpansionCount
+	for rows.Next() {
+		var e contract.ExpansionCount
+		if err := rows.Scan(&e.Expansion, &e.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

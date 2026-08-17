@@ -13,4 +13,7 @@ type AchievementRepository interface {
 	UpsertCharacterMilestones(ctx context.Context, characterID uint32, milestones []CharacterMilestone) error
 	// ListCharacterMilestones returns a character's earned milestones.
 	ListCharacterMilestones(ctx context.Context, characterID uint32) ([]CharacterMilestone, error)
+	// CountExpansions returns how many distinct characters completed each
+	// expansion's MSQ (kind expansion_msq with a non-nil expansion).
+	CountExpansions(ctx context.Context) ([]ExpansionCount, error)
 }
