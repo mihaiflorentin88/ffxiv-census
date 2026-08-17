@@ -18,10 +18,15 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	if s.domain.censusService != nil {
 		return s.domain.censusService
 	}
+	achievements := s.AchievementRepository()
+	if achievements == nil {
+		logging.Warn("container.census", "sqlite driver unavailable, census service disabled")
+		return nil
+	}
 	svc := census.NewService(
 		s.CharacterRepository(),
 		s.FreeCompanyRepository(),
-		s.AchievementRepository(),
+		achievements,
 		s.CensusRunRepository(),
 	)
 	// Seed the milestone registry (idempotent) so achievement processing never
@@ -35,9 +40,15 @@ func (s *ServiceContainer) CensusService() *census.Service {
 
 // Handlers returns a registry of ingest handlers, each wired to its
 // dependencies. Handlers are stateless, so a fresh registry per call is fine.
+// When the census service is unavailable (no SQLite), an empty registry is
+// returned and the worker reports "no handler registered" rather than panicking.
 func (s *ServiceContainer) Handlers() *handler.Registry {
 	reg := handler.NewRegistry()
-	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), s.CensusService()))
-	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), s.CensusService()))
+	svc := s.CensusService()
+	if svc == nil {
+		return reg
+	}
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), svc))
+	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), svc))
 	return reg
 }
