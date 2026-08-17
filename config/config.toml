@@ -39,3 +39,6 @@ backoff_base_seconds = 5
 [lodestone]
 rate_limit = 1.0
 max_retries = 3
+
+[census]
+activity_window_days = 30

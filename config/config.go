@@ -21,6 +21,7 @@ type Config struct {
 	SQLite    *SQLiteConfig    `mapstructure:"sqlite"`
 	Queue     *QueueConfig     `mapstructure:"queue"`
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
+	Census    *CensusConfig    `mapstructure:"census"`
 }
 
 type AppConfig struct {
@@ -67,6 +68,9 @@ type QueueConfig struct {
 type LodestoneConfig struct {
 	RateLimit  float64 `mapstructure:"rate_limit"`
 	MaxRetries int     `mapstructure:"max_retries"`
+}
+type CensusConfig struct {
+	ActivityWindowDays int `mapstructure:"activity_window_days"`
 }
 
 func NewConfig() (*Config, error) {
