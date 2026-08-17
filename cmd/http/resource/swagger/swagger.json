@@ -2,7 +2,7 @@
   "swagger": "2.0",
   "info": {
     "title": "ffxiv-census API",
-    "description": "Starter documentation. Update using swag once handlers are defined.",
+    "description": "REST API for the ffxiv-census service: census summaries, character listings and details, aggregate statistics, and queue status.",
     "version": "1.0"
   },
   "paths": {
@@ -20,17 +20,562 @@
         }
       }
     },
-    "/example": {
+    "/api/v1/census/latest": {
       "get": {
-        "summary": "Example placeholder",
-        "description": "Demonstrates how to wire handlers",
+        "summary": "Census summary",
+        "description": "Total and active character counts with the active ratio over the configured activity window.",
         "produces": [
-          "text/plain"
+          "application/json"
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "Census population summary",
+            "schema": {
+              "$ref": "#/definitions/CensusSummary"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
+        }
+      }
+    },
+    "/api/v1/census/characters": {
+      "get": {
+        "summary": "List characters",
+        "description": "Paginated list of census characters ordered by id.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (clamped to 500).",
+            "type": "integer",
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Number of items to skip.",
+            "type": "integer",
+            "default": 0,
+            "minimum": 0
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated character list",
+            "schema": {
+              "$ref": "#/definitions/PaginatedCharacters"
+            }
+          },
+          "400": {
+            "description": "Invalid limit or offset",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/census/characters/{id}": {
+      "get": {
+        "summary": "Character detail",
+        "description": "Full census record for one character: profile, class jobs, milestones, and free company.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Lodestone character id.",
+            "required": true,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Character detail",
+            "schema": {
+              "$ref": "#/definitions/CharacterDetail"
+            }
+          },
+          "404": {
+            "description": "Character not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/breakdown": {
+      "get": {
+        "summary": "Population breakdown",
+        "description": "Total and active character counts grouped by a census dimension.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "by",
+            "in": "query",
+            "description": "Dimension to group by.",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "race",
+              "world",
+              "datacenter",
+              "region"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-group total and active counts, ordered by total descending",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/BreakdownGroup"
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid dimension",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/new-characters": {
+      "get": {
+        "summary": "New characters per day",
+        "description": "Daily counts of newly seen characters in the given range.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Inclusive start date (YYYY-MM-DD, UTC).",
+            "required": true,
+            "type": "string",
+            "format": "date"
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Exclusive end date (YYYY-MM-DD, UTC); defaults to now.",
+            "required": false,
+            "type": "string",
+            "format": "date"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-day counts ordered ascending",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/NewCharactersDay"
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid since date",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/expansion": {
+      "get": {
+        "summary": "Expansion completions",
+        "description": "Number of characters who completed each expansion's main scenario quest, optionally filtered by name.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Filter to a single expansion name.",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-expansion completion counts",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ExpansionStat"
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue": {
+      "get": {
+        "summary": "Queue depth",
+        "description": "Number of jobs per queue status.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Queue depth by status",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/QueueDepthItem"
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Error": {
+      "type": "object",
+      "description": "Error envelope returned on non-200 responses.",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "CensusSummary": {
+      "type": "object",
+      "required": [
+        "total_characters",
+        "active_characters",
+        "active_ratio"
+      ],
+      "properties": {
+        "total_characters": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "active_characters": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "active_ratio": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "CharacterListItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "world",
+        "datacenter",
+        "region",
+        "race",
+        "gender",
+        "achievements_private",
+        "first_seen_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        },
+        "world": {
+          "type": "string"
+        },
+        "datacenter": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "race": {
+          "type": "string"
+        },
+        "gender": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "free_company_id": {
+          "type": "string"
+        },
+        "free_company_name": {
+          "type": "string"
+        },
+        "achievements_private": {
+          "type": "boolean"
+        },
+        "latest_achievement_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "first_seen_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_census_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "PaginatedCharacters": {
+      "type": "object",
+      "required": [
+        "items",
+        "total",
+        "limit",
+        "offset"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CharacterListItem"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "limit": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "CharacterDetail": {
+      "type": "object",
+      "required": [
+        "character",
+        "jobs",
+        "milestones"
+      ],
+      "properties": {
+        "character": {
+          "$ref": "#/definitions/CharacterListItem"
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CharacterJobDetail"
+          }
+        },
+        "milestones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CharacterMilestoneDetail"
+          }
+        },
+        "free_company": {
+          "$ref": "#/definitions/FreeCompanyDetail"
+        }
+      }
+    },
+    "CharacterJobDetail": {
+      "type": "object",
+      "required": [
+        "class_job_id",
+        "name",
+        "level",
+        "exp_level"
+      ],
+      "properties": {
+        "class_job_id": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "name": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "exp_level": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "CharacterMilestoneDetail": {
+      "type": "object",
+      "required": [
+        "achievement_id",
+        "achieved_at"
+      ],
+      "properties": {
+        "achievement_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "achieved_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "FreeCompanyDetail": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "world",
+        "datacenter",
+        "member_count"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "world": {
+          "type": "string"
+        },
+        "datacenter": {
+          "type": "string"
+        },
+        "member_count": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "BreakdownGroup": {
+      "type": "object",
+      "required": [
+        "key",
+        "total",
+        "active"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "active": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "NewCharactersDay": {
+      "type": "object",
+      "required": [
+        "day",
+        "count"
+      ],
+      "properties": {
+        "day": {
+          "type": "string",
+          "format": "date"
+        },
+        "count": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "ExpansionStat": {
+      "type": "object",
+      "required": [
+        "expansion",
+        "count"
+      ],
+      "properties": {
+        "expansion": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "QueueDepthItem": {
+      "type": "object",
+      "required": [
+        "status",
+        "count"
+      ],
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "format": "int32"
         }
       }
     }
