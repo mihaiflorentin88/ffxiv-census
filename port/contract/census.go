@@ -80,3 +80,22 @@ type CensusRun struct {
 	CharactersSeen int
 	NewCharacters  int
 }
+
+// GroupCount is one row of a group-by population aggregate (e.g. per-world).
+type GroupCount struct {
+	Key    string
+	Total  int64
+	Active int64
+}
+
+// DailyCount is one day's count in a time-series aggregate.
+type DailyCount struct {
+	Day   string // "2006-01-02"
+	Count int64
+}
+
+// ExpansionCount is the number of characters who completed an expansion MSQ.
+type ExpansionCount struct {
+	Expansion string
+	Count     int64
+}
