@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -52,10 +53,43 @@ var publishIDSweepCmd = &cobra.Command{
 	},
 }
 
+var publishCharacterCensusCmd = &cobra.Command{
+	Use:   "character-census",
+	Short: "Publish character-census jobs for stale characters (recheck)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		olderThan, _ := cmd.Flags().GetDuration("older-than")
+		limit, _ := cmd.Flags().GetInt("limit")
+		if olderThan <= 0 {
+			return fmt.Errorf("--older-than must be positive")
+		}
+		repo := container.Load.CharacterRepository()
+		if repo == nil {
+			return fmt.Errorf("character repository not initialised")
+		}
+		cutoff := time.Now().UTC().Add(-olderThan)
+		stale, err := repo.ListStale(cmd.Context(), cutoff, limit)
+		if err != nil {
+			return fmt.Errorf("list stale: %w", err)
+		}
+		var jobs []contract.QueueJob
+		for _, c := range stale {
+			jobs = append(jobs, handler.CharacterCensusJob(c.ID))
+		}
+		q := container.Load.Queue()
+		if q == nil {
+			return fmt.Errorf("queue not initialised")
+		}
+		return q.Publish(cmd.Context(), jobs...)
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(publishCmd)
 	publishCmd.AddCommand(publishIDSweepCmd)
 	publishIDSweepCmd.Flags().Uint32("from", 1, "first character ID")
 	publishIDSweepCmd.Flags().Uint32("to", 0, "last character ID (required)")
 	publishIDSweepCmd.Flags().Uint32("chunk-size", 100, "IDs per id-sweep job")
+	publishCmd.AddCommand(publishCharacterCensusCmd)
+	publishCharacterCensusCmd.Flags().Duration("older-than", 720*time.Hour, "only re-census characters not seen within this duration")
+	publishCharacterCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")
 }
