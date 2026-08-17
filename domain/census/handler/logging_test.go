@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 // newBufLogger returns a TextHandler logger writing to a buffer.
@@ -103,6 +105,45 @@ func TestAchievementCensus_LogsFetchedLatest(t *testing.T) {
 	}
 	logs := buf.String()
 	for _, want := range []string{"handler.achievement_census.fetched", "earned=2", "latest_id=999", "latest_name=Other"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
+	ls := mocklodestone.NewFake()
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		if id == 10 {
+			return &godestone.Character{ID: 10, Name: "Alisaie Leveilleur", World: "Louisoix"}, nil
+		}
+		return nil, contract.ErrCharacterNotFound
+	}
+	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	var buf bytes.Buffer
+	h := NewIDSweep(ls, nil, svc, newBufLogger(&buf))
+
+	payload, _ := json.Marshal(IDSweepPayload{From: 9, To: 11})
+	if _, err := h.Handle(context.Background(), payload); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	logs := buf.String()
+	for _, want := range []string{
+		"handler.id_sweep.start",
+		"from=9",
+		"to=11",
+		"count=3",
+		"handler.id_sweep.probe",
+		"character_id=9",
+		"status=not_found",
+		"handler.id_sweep.discovered",
+		"character_id=10",
+		"Alisaie Leveilleur",
+		"Louisoix",
+		"character_id=11",
+		"handler.id_sweep.done",
+		"discovered=1",
+	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}

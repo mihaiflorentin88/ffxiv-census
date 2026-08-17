@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{if .Title}}{{.Title}} — {{end}}FFXIV Census</title>
+    <link rel="stylesheet" href="/ui/assets/styles.css">
+    <script src="/ui/assets/htmx.min.js"></script>
+    <script src="/ui/assets/chart.umd.min.js"></script>
+</head>
+<body>
+    <header class="navbar">
+        <div class="nav-container">
+            <a href="/ui/dashboard" class="brand">
+                <span class="brand-icon">⚔️</span>
+                <span>FFXIV CENSUS</span>
+            </a>
+            <ul class="nav-links">
+                <li class="nav-item {{if eq .ActiveNav "dashboard"}}active{{end}}">
+                    <a href="/ui/dashboard">Dashboard</a>
+                </li>
+                <li class="nav-item {{if eq .ActiveNav "races"}}active{{end}}">
+                    <a href="/ui/races">Races</a>
+                </li>
+                <li class="nav-item {{if eq .ActiveNav "worlds"}}active{{end}}">
+                    <a href="/ui/worlds">Worlds</a>
+                </li>
+                <li class="nav-item {{if eq .ActiveNav "expansions"}}active{{end}}">
+                    <a href="/ui/expansions">Expansions</a>
+                </li>
+                <li class="nav-item {{if eq .ActiveNav "characters"}}active{{end}}">
+                    <a href="/ui/characters">Characters</a>
+                </li>
+            </ul>
+            <form action="/ui/characters/search" method="GET" class="search-form">
+                <input 
+                    type="text" 
+                    name="q" 
+                    placeholder="Search character name or ID..." 
+                    class="search-input"
+                    value="{{.SearchQuery}}"
+                    required
+                >
+                <button type="submit" class="search-btn" title="Search">🔍</button>
+            </form>
+        </div>
+    </header>
+
+    <main class="page-container">
+        {{block "content" .}}
+        <div class="panel">
+            <div class="panel-body">
+                <p>Welcome to FFXIV Census.</p>
+            </div>
+        </div>
+        {{end}}
+    </main>
+
+    <footer class="footer">
+        <div class="footer-content">
+            <div>FFXIV Census &copy; 2026. Data sourced from Lodestone &amp; Tomestone.</div>
+            <div>FINAL FANTASY XIV is a registered trademark of Square Enix Holdings Co., Ltd.</div>
+        </div>
+    </footer>
+</body>
+</html>

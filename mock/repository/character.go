@@ -16,26 +16,33 @@ import (
 // deleted_at clearing, jobs replacement, stale ordering) so handler tests don't
 // drift from production behavior.
 type CharacterRepository struct {
-	mu             sync.Mutex
-	characters     map[uint32]contract.CharacterRecord
-	jobs           map[uint32][]contract.ClassJobRecord
-	UpsertErr      error
-	GetErr         error
-	MarkDeletedErr error
-	UpdateErr      error
-	ListStaleErr   error
-	ListErr        error
-	CountErr       error
-	CountActiveErr error
-	BreakdownErr   error
-	NewPerDayErr   error
-	UpsertCalls    int
+	mu              sync.Mutex
+	characters      map[uint32]contract.CharacterRecord
+	jobs            map[uint32][]contract.ClassJobRecord
+	gear            map[uint32][]contract.CharacterGearRecord
+	UpsertErr       error
+	UpsertGearErr   error
+	GetGearErr      error
+	FindIDGapsErr   error
+	GetErr          error
+	MarkDeletedErr  error
+	UpdateErr       error
+	ListStaleErr    error
+	ListErr         error
+	CountErr        error
+	CountActiveErr  error
+	BreakdownErr    error
+	NewPerDayErr    error
+	MaxIDErr        error
+	UpsertCalls     int
+	UpsertGearCalls int
 }
 
 func NewCharacterFake() *CharacterRepository {
 	return &CharacterRepository{
 		characters: map[uint32]contract.CharacterRecord{},
 		jobs:       map[uint32][]contract.ClassJobRecord{},
+		gear:       map[uint32][]contract.CharacterGearRecord{},
 	}
 }
 
@@ -55,6 +62,73 @@ func (f *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 	// Always replace the job set (SQL deletes then re-inserts; nil -> empty).
 	f.jobs[rec.ID] = append([]contract.ClassJobRecord(nil), jobs...)
 	return nil
+}
+
+func (f *CharacterRepository) UpsertGear(ctx context.Context, charID uint32, gear []contract.CharacterGearRecord) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.UpsertGearCalls++
+	if f.UpsertGearErr != nil {
+		return f.UpsertGearErr
+	}
+	cloned := make([]contract.CharacterGearRecord, len(gear))
+	for i, g := range gear {
+		cloned[i] = cloneGear(g)
+	}
+	f.gear[charID] = cloned
+	return nil
+}
+
+func (f *CharacterRepository) GetGear(ctx context.Context, id uint32) ([]contract.CharacterGearRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.GetGearErr != nil {
+		return nil, f.GetGearErr
+	}
+	items := f.gear[id]
+	cloned := make([]contract.CharacterGearRecord, len(items))
+	for i, g := range items {
+		cloned[i] = cloneGear(g)
+	}
+	return cloned, nil
+}
+
+func (f *CharacterRepository) FindIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FindIDGapsErr != nil {
+		return nil, f.FindIDGapsErr
+	}
+	if limit <= 0 || maxID == 0 {
+		return nil, nil
+	}
+	var validIDs []uint32
+	for id, rec := range f.characters {
+		if rec.DeletedAt == nil && id <= maxID {
+			validIDs = append(validIDs, id)
+		}
+	}
+	if len(validIDs) == 0 {
+		return nil, nil
+	}
+	sort.Slice(validIDs, func(i, j int) bool { return validIDs[i] < validIDs[j] })
+
+	var gaps [][2]uint32
+	if validIDs[0] > 1 {
+		gaps = append(gaps, [2]uint32{1, validIDs[0] - 1})
+		if len(gaps) >= limit {
+			return gaps, nil
+		}
+	}
+	for i := range len(validIDs) - 1 {
+		if validIDs[i+1] > validIDs[i]+1 {
+			gaps = append(gaps, [2]uint32{validIDs[i] + 1, validIDs[i+1] - 1})
+			if len(gaps) >= limit {
+				return gaps, nil
+			}
+		}
+	}
+	return gaps, nil
 }
 
 func (f *CharacterRepository) Get(ctx context.Context, id uint32) (*contract.CharacterRecord, error) {
@@ -324,6 +398,24 @@ func (f *CharacterRepository) NewPerDay(ctx context.Context, since, until time.T
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Day < out[j].Day })
 	return out, nil
+}
+
+func (f *CharacterRepository) MaxID(ctx context.Context) (uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.MaxIDErr != nil {
+		return 0, f.MaxIDErr
+	}
+	var maxID uint32
+	for id, rec := range f.characters {
+		if rec.DeletedAt != nil {
+			continue
+		}
+		if id > maxID {
+			maxID = id
+		}
+	}
+	return maxID, nil
 }
 
 var _ contract.CharacterRepository = (*CharacterRepository)(nil)

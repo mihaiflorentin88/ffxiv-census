@@ -3,6 +3,8 @@ package census
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/xivapi/godestone/v2"
@@ -18,6 +20,7 @@ type Service struct {
 	freeCompanies  contract.FreeCompanyRepository
 	achievements   contract.AchievementRepository
 	censusRuns     contract.CensusRunRepository
+	mu             sync.RWMutex
 	activityWindow time.Duration
 }
 
@@ -45,9 +48,119 @@ func (s *Service) SyncMilestones(ctx context.Context) error {
 // persists it (profile + jobs) atomically. Region is derived from the
 // datacenter. nil race/tribe/grand-company are tolerated (stored empty).
 func (s *Service) UpsertCharacter(ctx context.Context, char *godestone.Character) error {
+	if char == nil {
+		return errors.New("cannot upsert nil character")
+	}
 	rec := toCharacterRecord(char)
 	jobs := toJobRecords(char)
 	return s.characters.Upsert(ctx, rec, jobs)
+}
+
+// UpsertTomestoneCharacter converts a Tomestone character into a CharacterRecord and
+// persists it (profile + jobs + gear) atomically. Region is derived from the datacenter.
+func (s *Service) UpsertTomestoneCharacter(ctx context.Context, char *contract.TomestoneCharacter) error {
+	if char == nil {
+		return errors.New("cannot upsert nil tomestone character")
+	}
+	rec := toTomestoneCharacterRecord(char)
+	jobs := toTomestoneJobRecords(char)
+	if err := s.characters.Upsert(ctx, rec, jobs); err != nil {
+		return err
+	}
+	if len(char.Gear) > 0 {
+		gearRecords := make([]contract.CharacterGearRecord, 0, len(char.Gear))
+		for _, g := range char.Gear {
+			gearRecords = append(gearRecords, contract.CharacterGearRecord{
+				CharacterID: char.ID,
+				Slot:        g.Slot,
+				ItemID:      g.ID,
+				Name:        g.Name,
+				ItemLevel:   g.ItemLevel,
+				Dye:         g.Dye,
+				Materia:     g.Materia,
+				UpdatedAt:   char.UpdatedAt,
+			})
+		}
+		if err := s.characters.UpsertGear(ctx, char.ID, gearRecords); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MaxCharacterID returns the maximum character ID known to the census.
+func (s *Service) MaxCharacterID(ctx context.Context) (uint32, error) {
+	return s.characters.MaxID(ctx)
+}
+
+// FindUnscannedIDGaps returns missing/unscanned ID ranges between 1 and maxID.
+func (s *Service) FindUnscannedIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error) {
+	return s.characters.FindIDGaps(ctx, maxID, limit)
+}
+
+func parseTomestoneGender(g string) uint8 {
+	if strings.EqualFold(g, "female") {
+		return 2
+	} else if strings.EqualFold(g, "male") {
+		return 1
+	}
+	return 0
+}
+
+func calculateAverageItemLevel(gear []contract.TomestoneGear) int {
+	if len(gear) == 0 {
+		return 0
+	}
+	sum := 0
+	count := 0
+	for _, g := range gear {
+		if g.ItemLevel > 0 {
+			sum += g.ItemLevel
+			count++
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / count
+}
+
+func toTomestoneCharacterRecord(char *contract.TomestoneCharacter) contract.CharacterRecord {
+	now := time.Now().UTC()
+	return contract.CharacterRecord{
+		ID:              char.ID,
+		Name:            char.Name,
+		World:           char.Server,
+		Datacenter:      char.Datacenter,
+		Region:          RegionForDatacenter(char.Datacenter),
+		Gender:          parseTomestoneGender(char.Gender),
+		Race:            char.Race,
+		Tribe:           char.Tribe,
+		GrandCompany:    char.GrandCompany,
+		FreeCompanyID:   char.FreeCompanyID,
+		FreeCompanyName: char.FreeCompanyName,
+		AvatarURL:       char.AvatarURL,
+		PortraitURL:     char.PortraitURL,
+		Bio:             char.Bio,
+		ActiveJob:       char.ActiveJob,
+		ItemLevel:       calculateAverageItemLevel(char.Gear),
+		FirstSeenAt:     now,
+		LastCensusAt:    &now,
+	}
+}
+
+func toTomestoneJobRecords(char *contract.TomestoneCharacter) []contract.ClassJobRecord {
+	jobs := make([]contract.ClassJobRecord, 0, len(char.Jobs))
+	for _, j := range char.Jobs {
+		jobs = append(jobs, contract.ClassJobRecord{
+			CharacterID: char.ID,
+			ClassJobID:  j.ID,
+			Name:        j.Name,
+			Level:       j.Level,
+			ExpLevel:    j.Exp,
+		})
+	}
+	return jobs
 }
 
 func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
@@ -59,6 +172,9 @@ func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
 		Datacenter:   char.DC,
 		Region:       RegionForDatacenter(char.DC),
 		Gender:       uint8(char.Gender),
+		AvatarURL:    char.Avatar,
+		PortraitURL:  char.Portrait,
+		Bio:          char.Bio,
 		FirstSeenAt:  now,
 		LastCensusAt: &now,
 	}
@@ -77,9 +193,11 @@ func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
 	if char.FreeCompanyName != "" {
 		rec.FreeCompanyName = &char.FreeCompanyName
 	}
+	if char.ActiveClassJob != nil {
+		rec.ActiveJob = char.ActiveClassJob.Name
+	}
 	return rec
 }
-
 func toJobRecords(char *godestone.Character) []contract.ClassJobRecord {
 	jobs := make([]contract.ClassJobRecord, 0, len(char.ClassJobs))
 	for _, j := range char.ClassJobs {
@@ -175,7 +293,10 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 // IsActive reports whether a latest-achievement timestamp falls within the
 // census activity window (default 30 days, overridable via SetActivityWindow).
 func (s *Service) IsActive(latestAt time.Time) bool {
-	return !latestAt.IsZero() && time.Since(latestAt) <= s.activityWindow
+	s.mu.RLock()
+	window := s.activityWindow
+	s.mu.RUnlock()
+	return !latestAt.IsZero() && time.Since(latestAt) <= window
 }
 
 // SetActivityWindow overrides the activity window used by IsActive, Summary,
@@ -183,24 +304,32 @@ func (s *Service) IsActive(latestAt time.Time) bool {
 // window.
 func (s *Service) SetActivityWindow(d time.Duration) {
 	if d > 0 {
+		s.mu.Lock()
 		s.activityWindow = d
+		s.mu.Unlock()
 	}
 }
 
 // activitySince returns the UTC instant marking the start of the activity
 // window: anything at or after it counts as active.
 func (s *Service) activitySince() time.Time {
-	return time.Now().UTC().Add(-s.activityWindow)
+	s.mu.RLock()
+	window := s.activityWindow
+	s.mu.RUnlock()
+	return time.Now().UTC().Add(-window)
+}
+
+// UpsertFreeCompany converts a Lodestone free company into a record and persists it.
+func (s *Service) UpsertFreeCompany(ctx context.Context, fc *godestone.FreeCompany) error {
+	if fc == nil {
+		return errors.New("cannot upsert nil free company")
+	}
+	return s.freeCompanies.Upsert(ctx, toFreeCompanyRecord(fc))
 }
 
 // MarkCharacterDeleted records that a character no longer exists on Lodestone.
 func (s *Service) MarkCharacterDeleted(ctx context.Context, id uint32, at time.Time) error {
 	return s.characters.MarkDeleted(ctx, id, at)
-}
-
-// UpsertFreeCompany converts a Lodestone free company into a record and persists it.
-func (s *Service) UpsertFreeCompany(ctx context.Context, fc *godestone.FreeCompany) error {
-	return s.freeCompanies.Upsert(ctx, toFreeCompanyRecord(fc))
 }
 
 func toFreeCompanyRecord(fc *godestone.FreeCompany) contract.FreeCompanyRecord {
@@ -228,6 +357,7 @@ var ErrInvalidDimension = errors.New("invalid breakdown dimension: want race|wor
 type CharacterDetail struct {
 	Character   contract.CharacterRecord
 	Jobs        []contract.ClassJobRecord
+	Gear        []contract.CharacterGearRecord
 	Milestones  []contract.CharacterMilestone
 	FreeCompany *contract.FreeCompanyRecord
 }
@@ -274,11 +404,15 @@ func (s *Service) CharacterDetail(ctx context.Context, id uint32) (*CharacterDet
 	if err != nil {
 		return nil, err
 	}
+	gear, err := s.characters.GetGear(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	milestones, err := s.achievements.ListCharacterMilestones(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	detail := &CharacterDetail{Character: *rec, Jobs: jobs, Milestones: milestones}
+	detail := &CharacterDetail{Character: *rec, Jobs: jobs, Gear: gear, Milestones: milestones}
 	if rec.FreeCompanyID != nil {
 		fc, err := s.freeCompanies.Get(ctx, *rec.FreeCompanyID)
 		if err != nil {

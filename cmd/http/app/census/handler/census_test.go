@@ -3,19 +3,19 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"github.com/xivapi/godestone/v2"
+	"github.com/xivapi/godestone/v2/data/gender"
+	"github.com/xivapi/godestone/v2/provider/models"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-	"github.com/xivapi/godestone/v2/data/gender"
-	"github.com/xivapi/godestone/v2/provider/models"
-
 	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
-	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
+	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"github.com/mihaiflorentin88/ffxiv-census/port/dto/response"
 )
@@ -398,7 +398,7 @@ func TestCensusController_Expansion_NameFilter(t *testing.T) {
 
 func TestQueueController_Depth(t *testing.T) {
 	rig := newRig(t)
-	if err := rig.q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
+	if _, err := rig.q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
@@ -412,6 +412,247 @@ func TestQueueController_Depth(t *testing.T) {
 func TestQueueController_Depth_NilQueue(t *testing.T) {
 	qc := NewQueueController(nil)
 	assertError(t, doGET(t, qc.Depth, "/api/v1/queue"), http.StatusInternalServerError, "queue")
+}
+
+func TestQueueController_Events(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+
+	// Even with empty queue, canonical events are returned with 0 counts
+	var events []response.QueueEventTypeSummary
+	decodeJSON(t, doGET(t, rig.qc.Events, "/api/v1/queue/events"), &events)
+	if len(events) != 4 {
+		t.Fatalf("events count = %d, want 4", len(events))
+	}
+	if events[0].Type != "id-sweep" || events[0].Description == "" {
+		t.Errorf("unexpected event 0: %+v", events[0])
+	}
+	if events[0].NextJobs == nil || events[0].ActiveJobs == nil || events[0].FailedJobs == nil {
+		t.Errorf("expected initialized job slices, got %+v", events[0])
+	}
+
+	// Publish and transition jobs
+	_, _ = rig.q.Publish(ctx,
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":10}`)},
+		contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":10}`)},
+		contract.QueueJob{Type: "fc-census", Payload: []byte(`{"id":"failed"}`)},
+	)
+	claimed, _ := rig.q.Claim(ctx, "character-census", 1)
+	_ = rig.q.Complete(ctx, claimed[0].ID)
+
+	claimedFC, _ := rig.q.Claim(ctx, "fc-census", 1)
+	_ = rig.q.Fail(ctx, claimedFC[0].ID, "lodestone parse error")
+
+	events = nil
+	decodeJSON(t, doGET(t, rig.qc.Events, "/api/v1/queue/events?sample_limit=10"), &events)
+	if len(events) != 4 {
+		t.Fatalf("events count = %d, want 4", len(events))
+	}
+
+	// id-sweep has 1 pending and 1 next job
+	if events[0].Type != "id-sweep" || events[0].Pending != 1 || events[0].Total != 1 || len(events[0].NextJobs) != 1 {
+		t.Errorf("id-sweep event stats: %+v", events[0])
+	}
+	// character-census has 1 done
+	if events[1].Type != "character-census" || events[1].Done != 1 || events[1].Total != 1 {
+		t.Errorf("character-census event stats: %+v", events[1])
+	}
+	// fc-census has 1 failed and 1 failed job with last_error
+	if events[3].Type != "fc-census" || events[3].Failed != 1 || len(events[3].FailedJobs) != 1 {
+		t.Errorf("fc-census event stats: %+v", events[3])
+	}
+	if events[3].FailedJobs[0].LastError == nil || *events[3].FailedJobs[0].LastError != "lodestone parse error" {
+		t.Errorf("expected last_error on failed job: %+v", events[3].FailedJobs[0])
+	}
+}
+
+func TestQueueController_ListJobs_FiltersAndPagination(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+
+	_, _ = rig.q.Publish(ctx,
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)},
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":2}`)},
+		contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":10}`)},
+		contract.QueueJob{Type: "achievement-census", Payload: []byte(`{"id":10}`)},
+	)
+	claimed, _ := rig.q.Claim(ctx, "character-census", 1)
+	_ = rig.q.Complete(ctx, claimed[0].ID)
+
+	claimedAch, _ := rig.q.Claim(ctx, "achievement-census", 1)
+	_ = rig.q.Fail(ctx, claimedAch[0].ID, "permanent error")
+	// List all jobs
+	var res response.PaginatedQueueJobs
+	decodeJSON(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs"), &res)
+	if res.Total != 4 || len(res.Items) != 4 {
+		t.Fatalf("all jobs total = %d, items = %d, want 4, 4", res.Total, len(res.Items))
+	}
+
+	// Filter by type
+	res = response.PaginatedQueueJobs{}
+	decodeJSON(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?type=id-sweep"), &res)
+	if res.Total != 2 || len(res.Items) != 2 {
+		t.Fatalf("id-sweep jobs total = %d, items = %d, want 2, 2", res.Total, len(res.Items))
+	}
+	for _, item := range res.Items {
+		if item.Type != "id-sweep" {
+			t.Errorf("item type = %s, want id-sweep", item.Type)
+		}
+	}
+
+	// Filter by status
+	res = response.PaginatedQueueJobs{}
+	decodeJSON(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?status=done"), &res)
+	if res.Total != 1 || len(res.Items) != 1 || res.Items[0].Type != "character-census" {
+		t.Fatalf("done jobs = %+v, want 1 character-census", res)
+	}
+
+	// Filter by type and status
+	res = response.PaginatedQueueJobs{}
+	decodeJSON(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?type=id-sweep&status=pending"), &res)
+	if res.Total != 2 || len(res.Items) != 2 {
+		t.Fatalf("id-sweep pending jobs = %+v, want 2", res)
+	}
+
+	// Pagination
+	res = response.PaginatedQueueJobs{}
+	decodeJSON(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?limit=2&offset=0"), &res)
+	if res.Total != 4 || len(res.Items) != 2 || res.Limit != 2 || res.Offset != 0 {
+		t.Fatalf("page 1 = %+v, want 2 items, limit 2, offset 0", res)
+	}
+}
+
+func TestQueueController_ListJobs_InvalidParams(t *testing.T) {
+	rig := newRig(t)
+
+	assertError(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?limit=-1"), http.StatusBadRequest, "invalid limit")
+	assertError(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?limit=0"), http.StatusBadRequest, "invalid limit")
+	assertError(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?limit=abc"), http.StatusBadRequest, "invalid limit")
+	assertError(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?offset=-1"), http.StatusBadRequest, "invalid offset")
+	assertError(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?offset=abc"), http.StatusBadRequest, "invalid offset")
+	assertError(t, doGET(t, rig.qc.ListJobs, "/api/v1/queue/jobs?status=invalid_status"), http.StatusBadRequest, "invalid status")
+}
+
+func TestQueueController_GetJob_Found_NotFound_InvalidID(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+
+	_, _ = rig.q.Publish(ctx, contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)})
+	jobs, _ := rig.q.ListJobs(ctx, contract.QueueJobFilter{Type: "id-sweep"}, 1, 0)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs len = %d, want 1", len(jobs))
+	}
+	jobID := jobs[0].ID
+
+	// Valid GET
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queue/jobs/1", nil)
+	req.SetPathValue("id", strconv.FormatInt(jobID, 10))
+	rec := httptest.NewRecorder()
+	rig.qc.GetJob(rec, req)
+
+	var item response.QueueJobItem
+	decodeJSON(t, rec, &item)
+	if item.ID != jobID || item.Type != "id-sweep" || string(item.Payload) != `{"from":1,"to":100}` {
+		t.Errorf("unexpected job item: %+v", item)
+	}
+	if item.Status != "pending" {
+		t.Errorf("status = %s, want pending", item.Status)
+	}
+
+	// Not Found
+	reqNF := httptest.NewRequest(http.MethodGet, "/api/v1/queue/jobs/999999", nil)
+	reqNF.SetPathValue("id", "999999")
+	recNF := httptest.NewRecorder()
+	rig.qc.GetJob(recNF, reqNF)
+	assertError(t, recNF, http.StatusNotFound, "job not found")
+
+	// Invalid ID
+	reqInv := httptest.NewRequest(http.MethodGet, "/api/v1/queue/jobs/bad", nil)
+	reqInv.SetPathValue("id", "bad")
+	recInv := httptest.NewRecorder()
+	rig.qc.GetJob(recInv, reqInv)
+	assertError(t, recInv, http.StatusBadRequest, "invalid job id")
+
+	// Negative ID
+	reqNeg := httptest.NewRequest(http.MethodGet, "/api/v1/queue/jobs/-5", nil)
+	reqNeg.SetPathValue("id", "-5")
+	recNeg := httptest.NewRecorder()
+	rig.qc.GetJob(recNeg, reqNeg)
+	assertError(t, recNeg, http.StatusBadRequest, "invalid job id")
+}
+
+func TestQueueController_NilQueue(t *testing.T) {
+	qc := NewQueueController(nil)
+
+	assertError(t, doGET(t, qc.Events, "/api/v1/queue/events"), http.StatusInternalServerError, "queue service unavailable")
+	assertError(t, doGET(t, qc.ListJobs, "/api/v1/queue/jobs"), http.StatusInternalServerError, "queue service unavailable")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queue/jobs/1", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	qc.GetJob(rec, req)
+	assertError(t, rec, http.StatusInternalServerError, "queue service unavailable")
+}
+
+func TestQueueController_RetryFailed(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+
+	_, _ = rig.q.Publish(ctx,
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)},
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":2}`)},
+	)
+	claimed, _ := rig.q.Claim(ctx, "id-sweep", 2)
+	_ = rig.q.Fail(ctx, claimed[0].ID, "error 1")
+	_ = rig.q.Fail(ctx, claimed[1].ID, "error 2")
+
+	// POST /api/v1/queue/retry-failed via JSON body
+	body := strings.NewReader(`{"type":"id-sweep","limit":10}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/queue/retry-failed", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	rig.qc.RetryFailed(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var resp response.QueueRetryFailedResponse
+	decodeJSON(t, rec, &resp)
+	if resp.Retried != 2 {
+		t.Fatalf("expected retried = 2, got %d", resp.Retried)
+	}
+}
+
+func TestQueueController_Purge(t *testing.T) {
+	rig := newRig(t)
+	ctx := context.Background()
+
+	_, _ = rig.q.Publish(ctx, contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":1}`)})
+	claimed, _ := rig.q.Claim(ctx, "character-census", 1)
+	_ = rig.q.Complete(ctx, claimed[0].ID)
+
+	// POST /api/v1/queue/purge
+	body := strings.NewReader(`{"status":"done","older_than":"0s"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/queue/purge", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	rig.qc.Purge(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var resp response.QueuePurgeResponse
+	decodeJSON(t, rec, &resp)
+	if resp.Purged != 1 || resp.Status != "done" {
+		t.Fatalf("unexpected purge response: %+v", resp)
+	}
+
+	// Invalid status
+	reqInv := httptest.NewRequest(http.MethodPost, "/api/v1/queue/purge", strings.NewReader(`{"status":"pending"}`))
+	reqInv.Header.Set("Content-Type", "application/json")
+	recInv := httptest.NewRecorder()
+	rig.qc.Purge(recInv, reqInv)
+	assertError(t, recInv, http.StatusBadRequest, "invalid status")
 }
 
 func querySuffix(q string) string {

@@ -86,6 +86,209 @@ func TestService_UpsertCharacter_NilSafe(t *testing.T) {
 		t.Fatalf("UpsertCharacter: %v", err)
 	}
 }
+func TestService_UpsertTomestoneCharacter(t *testing.T) {
+	svc, chars := newTestService(t)
+
+	fcID := "9234567890123456789"
+	fcName := "The Scions"
+	tChar := &contract.TomestoneCharacter{
+		ID:              456,
+		Name:            "Alphinaud Leveilleur",
+		Server:          "Cerberus",
+		Datacenter:      "Chaos",
+		Gender:          "male",
+		Race:            "Elezen",
+		Tribe:           "Wildwood",
+		GrandCompany:    "Immortal Flames",
+		FreeCompanyID:   &fcID,
+		FreeCompanyName: &fcName,
+		Jobs: []contract.TomestoneClassJob{
+			{ID: 33, Name: "Sage", Level: 90, Exp: 5000, ExpMax: 10000},
+			{ID: 26, Name: "Arcanist", Level: 50, Exp: 100, ExpMax: 2000},
+		},
+	}
+
+	if err := svc.UpsertTomestoneCharacter(context.Background(), tChar); err != nil {
+		t.Fatalf("UpsertTomestoneCharacter: %v", err)
+	}
+
+	got, err := chars.Get(context.Background(), 456)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %v / %+v", err, got)
+	}
+	if got.Region != "EU" {
+		t.Errorf("region = %q, want EU (derived from Chaos)", got.Region)
+	}
+	if got.Name != "Alphinaud Leveilleur" || got.World != "Cerberus" || got.Datacenter != "Chaos" {
+		t.Errorf("unexpected profile: %+v", got)
+	}
+	if got.Gender != 1 {
+		t.Errorf("gender = %d, want 1 (male)", got.Gender)
+	}
+	if got.Race != "Elezen" || got.Tribe != "Wildwood" || got.GrandCompany != "Immortal Flames" {
+		t.Errorf("unexpected identity: %+v", got)
+	}
+	if got.FreeCompanyID == nil || *got.FreeCompanyID != fcID {
+		t.Errorf("free company id = %v, want %v", got.FreeCompanyID, fcID)
+	}
+
+	jobs, err := chars.GetJobs(context.Background(), 456)
+	if err != nil {
+		t.Fatalf("GetJobs: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("jobs len = %d, want 2", len(jobs))
+	}
+	if jobs[0].ClassJobID != 33 || jobs[0].Name != "Sage" || jobs[0].Level != 90 || jobs[0].ExpLevel != 5000 {
+		t.Errorf("jobs[0] = %+v", jobs[0])
+	}
+}
+
+func TestService_UpsertTomestoneCharacter_ProfileAndGear(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+
+	dye := "Snow White"
+	tChar := &contract.TomestoneCharacter{
+		ID:          789,
+		Name:        "Thancred Waters",
+		Server:      "Ragnarok",
+		Datacenter:  "Chaos",
+		Gender:      "male",
+		Race:        "Hyur",
+		Tribe:       "Midlander",
+		AvatarURL:   "https://tomestone.gg/avatar.png",
+		PortraitURL: "https://tomestone.gg/portrait.png",
+		Bio:         "Gunbreaker of the Scions",
+		ActiveJob:   "Gunbreaker",
+		Gear: []contract.TomestoneGear{
+			{
+				Slot:      "MainHand",
+				ID:        50001,
+				Name:      "Gunblade of the Round",
+				ItemLevel: 660,
+				Dye:       &dye,
+				Materia:   []string{"Direct Hit Materia X"},
+			},
+			{
+				Slot:      "Body",
+				ID:        50002,
+				Name:      "Coat of the Round",
+				ItemLevel: 650,
+				Dye:       nil,
+				Materia:   []string{"Critical Hit Materia X"},
+			},
+		},
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	if err := svc.UpsertTomestoneCharacter(ctx, tChar); err != nil {
+		t.Fatalf("UpsertTomestoneCharacter: %v", err)
+	}
+
+	got, err := chars.Get(ctx, 789)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %v / %+v", err, got)
+	}
+	if got.AvatarURL != tChar.AvatarURL || got.PortraitURL != tChar.PortraitURL || got.Bio != tChar.Bio || got.ActiveJob != tChar.ActiveJob {
+		t.Errorf("profile fields mismatch: %+v", got)
+	}
+	// Average item level: (660 + 650) / 2 = 655
+	if got.ItemLevel != 655 {
+		t.Errorf("ItemLevel = %d, want 655", got.ItemLevel)
+	}
+
+	gear, err := chars.GetGear(ctx, 789)
+	if err != nil {
+		t.Fatalf("GetGear: %v", err)
+	}
+	if len(gear) != 2 {
+		t.Fatalf("gear count = %d, want 2", len(gear))
+	}
+
+	detail, err := svc.CharacterDetail(ctx, 789)
+	if err != nil || detail == nil {
+		t.Fatalf("CharacterDetail: %v / %+v", err, detail)
+	}
+	if len(detail.Gear) != 2 {
+		t.Errorf("detail.Gear count = %d, want 2", len(detail.Gear))
+	}
+}
+
+func TestService_UpsertCharacter_Profile(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+
+	char := &godestone.Character{
+		ID:       555,
+		Name:     "Y'shtola Rhul",
+		World:    "Louisoix",
+		DC:       "Chaos",
+		Avatar:   "https://lodestone.com/avatar.jpg",
+		Portrait: "https://lodestone.com/portrait.jpg",
+		Bio:      "Sorceress of the Night's Blessed",
+		ActiveClassJob: &godestone.ClassJob{
+			JobID: 25,
+			Name:  "Black Mage",
+		},
+	}
+
+	if err := svc.UpsertCharacter(ctx, char); err != nil {
+		t.Fatalf("UpsertCharacter: %v", err)
+	}
+
+	got, err := chars.Get(ctx, 555)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %v / %+v", err, got)
+	}
+	if got.AvatarURL != char.Avatar || got.PortraitURL != char.Portrait || got.Bio != char.Bio || got.ActiveJob != "Black Mage" {
+		t.Errorf("profile fields mismatch: %+v", got)
+	}
+}
+
+func TestService_FindUnscannedIDGaps(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 2, FirstSeenAt: now}, nil)
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 5, FirstSeenAt: now}, nil)
+
+	gaps, err := svc.FindUnscannedIDGaps(ctx, 5, 10)
+	if err != nil {
+		t.Fatalf("FindUnscannedIDGaps: %v", err)
+	}
+	want := [][2]uint32{
+		{1, 1},
+		{3, 4},
+	}
+	if !reflect.DeepEqual(gaps, want) {
+		t.Errorf("gaps = %v, want %v", gaps, want)
+	}
+}
+
+func TestService_MaxCharacterID(t *testing.T) {
+	svc, chars := newTestService(t)
+
+	maxID, err := svc.MaxCharacterID(context.Background())
+	if err != nil {
+		t.Fatalf("MaxCharacterID: %v", err)
+	}
+	if maxID != 0 {
+		t.Fatalf("MaxCharacterID = %d, want 0", maxID)
+	}
+
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 100, Name: "A"}, nil)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 999, Name: "B"}, nil)
+
+	maxID, err = svc.MaxCharacterID(context.Background())
+	if err != nil {
+		t.Fatalf("MaxCharacterID: %v", err)
+	}
+	if maxID != 999 {
+		t.Fatalf("MaxCharacterID = %d, want 999", maxID)
+	}
+}
 
 func TestService_ProcessAchievements(t *testing.T) {
 	svc, chars := newTestService(t)

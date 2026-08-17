@@ -68,3 +68,8 @@ Server-rendered Go templates + HTMX in `cmd/http/ui/` (embedded via `//go:embed`
 - **Always prompt before implementation** — user will ask "proceed?" before dispatching implementation subagents
 - **Commit skills artifacts** (`.agents/`, `.claude/`, `skills-lock.json`) — they're project-local skill installs
 - **Specs/plans live in `docs/superpowers/`** — design spec → implementation plan → code
+
+## Subagent Delegation
+
+- **Always delegate data-gathering** — file reading, broad codebase exploration, web searches, and MCP queries must be delegated to `scout` / `librarian` subagents running a tiny LM Studio model via `task` to conserve main model tokens.
+- **Main model responsibilities** — code edits, mechanical formatting, architectural decisions, planning, implementation, and test suites are handled directly by the main model.

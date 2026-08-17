@@ -29,6 +29,9 @@ One row per Lodestone character. `id` is the Lodestone character ID (externally 
 ### `character_jobs`
 
 One row per (character, class/job) pair: `character_id`, `class_job_id`, `name`, `level`, `exp_level`. Primary key is `(character_id, class_job_id)`; the character repository replaces the whole set on each upsert.
+### `character_gear`
+
+One row per equipped gear slot: `(character_id, slot)` primary key, `item_id`, `name`, `item_level`, `dye`, `materia` (JSON array of materia names/tiers), `updated_at`. Stores equipped gear pieces scraped from character profiles.
 
 ### `milestone_achievements`
 
@@ -69,7 +72,7 @@ A Realm Reborn's MSQ-completion ID and job level-cap achievements are pending ve
 
 Four contracts in `port/contract`, each with a SQLite implementation in `infrastructure/sqlite/repository/` and an in-memory fake in `mock/repository/`:
 
-- **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `MarkDeleted`, `UpdateAchievementSummary`, `ListStale`. The write/read surface the ingest handlers need.
+- **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `UpsertGear`, `GetGear`, `FindIDGaps`, `MarkDeleted`, `UpdateAchievementSummary`, `SetAchievementsPrivate`, `ListStale`, `List`, `Count`, `CountActive`, `Breakdown`, `NewPerDay`, `MaxID`. The complete persistence and query contract for character data.
 - **`FreeCompanyRepository`** — `Upsert`, `Get`.
 - **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones`, `ListCharacterMilestones`.
 - **`CensusRunRepository`** — `Start`, `Finish`.
@@ -81,8 +84,10 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 `domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the four repositories; the ingest handlers call it.
 
 - `SyncMilestones(ctx)` — seeds `MilestoneSet` into the DB (idempotent).
-- `UpsertCharacter(ctx, *godestone.Character)` — converts a character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
+- `UpsertCharacter(ctx, *godestone.Character)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
+- `UpsertTomestoneCharacter(ctx, *contract.TomestoneCharacter)` — converts a Tomestone character + jobs into records and persists them atomically.
 - `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones).
+- `MaxCharacterID(ctx)` — returns the highest known character ID in the repository (excluding deleted characters), used for auto-discovery sweeps.
 - `IsActive(latestAt)` — true when the latest achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`).
 - `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
 - `Summary(ctx)` — total and active character counts (`total, active, err`), where active means the latest achievement is within the activity window.

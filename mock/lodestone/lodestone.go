@@ -16,13 +16,15 @@ import (
 // Fake is an in-memory LodestoneClient for tests. Set a *Func field to return
 // canned godestone DTOs or an error; the corresponding Calls slice records ids.
 type Fake struct {
-	mu                    sync.Mutex
-	FetchCharacterFunc    func(id uint32) (*godestone.Character, error)
-	FetchAchievementsFunc func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)
-	FetchFreeCompanyFunc  func(id string) (*godestone.FreeCompany, error)
-	CharacterCalls        []uint32
-	AchievementsCalls     []uint32
-	FreeCompanyCalls      []string
+	mu                          sync.Mutex
+	FetchCharacterFunc          func(id uint32) (*godestone.Character, error)
+	FetchAchievementsFunc       func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)
+	FetchFreeCompanyFunc        func(id string) (*godestone.FreeCompany, error)
+	FetchFreeCompanyMembersFunc func(fcID string) ([]uint32, error)
+	CharacterCalls              []uint32
+	AchievementsCalls           []uint32
+	FreeCompanyCalls            []string
+	FreeCompanyMembersCalls     []string
 }
 
 func NewFake() *Fake { return &Fake{} }
@@ -55,6 +57,16 @@ func (f *Fake) FetchFreeCompany(ctx context.Context, id string) (*godestone.Free
 		return nil, nil
 	}
 	return f.FetchFreeCompanyFunc(id)
+}
+
+func (f *Fake) FetchFreeCompanyMembers(ctx context.Context, fcID string) ([]uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.FreeCompanyMembersCalls = append(f.FreeCompanyMembersCalls, fcID)
+	if f.FetchFreeCompanyMembersFunc == nil {
+		return nil, nil
+	}
+	return f.FetchFreeCompanyMembersFunc(fcID)
 }
 
 var _ contract.LodestoneClient = (*Fake)(nil)

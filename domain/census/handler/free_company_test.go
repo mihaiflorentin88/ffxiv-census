@@ -26,17 +26,32 @@ func fcPayload(id string) []byte {
 	return b
 }
 
-func TestFreeCompanyCensus_Upserts(t *testing.T) {
+func TestFreeCompanyCensus_UpsertsAndChainsMembers(t *testing.T) {
 	h, ls, fcs := newTestFCCensus(t)
 	ls.FetchFreeCompanyFunc = func(id string) (*godestone.FreeCompany, error) {
 		return &godestone.FreeCompany{ID: id, Name: "The Scions", World: "Ultros", DC: "Primal", ActiveMemberCount: 42}, nil
+	}
+	ls.FetchFreeCompanyMembersFunc = func(fcID string) ([]uint32, error) {
+		return []uint32{101, 102, 103}, nil
 	}
 	next, err := h.Handle(context.Background(), fcPayload("9234567890123456789"))
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(next) != 0 {
-		t.Errorf("next jobs = %d, want 0 (leaf)", len(next))
+	if len(next) != 3 {
+		t.Fatalf("next jobs = %d, want 3 chained member jobs", len(next))
+	}
+	for i, wantID := range []uint32{101, 102, 103} {
+		if next[i].Type != EventCharacterCensus {
+			t.Errorf("job[%d].Type = %q, want %q", i, next[i].Type, EventCharacterCensus)
+		}
+		var p CharacterCensusPayload
+		if err := json.Unmarshal(next[i].Payload, &p); err != nil {
+			t.Fatalf("unmarshal payload[%d]: %v", i, err)
+		}
+		if p.CharacterID != wantID {
+			t.Errorf("job[%d].CharacterID = %d, want %d", i, p.CharacterID, wantID)
+		}
 	}
 	got, _ := fcs.Get(context.Background(), "9234567890123456789")
 	if got == nil || got.Name != "The Scions" || got.MemberCount != 42 {

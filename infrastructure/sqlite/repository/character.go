@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,7 +27,8 @@ func NewCharacterRepository(driver contract.SQLiteDriver) contract.CharacterRepo
 }
 
 const characterColumns = `id, name, world, datacenter, region, race, tribe, gender, grand_company,
-		        fc_id, fc_name, achievements_private, latest_achievement_id, latest_achievement_at,
+		        fc_id, fc_name, avatar_url, portrait_url, bio, active_job, item_level,
+		        achievements_private, latest_achievement_id, latest_achievement_at,
 		        first_seen_at, last_census_at, deleted_at`
 
 // Upsert replaces the character row and its jobs in one transaction.
@@ -44,9 +46,10 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO characters (
 			id, name, world, datacenter, region, race, tribe, gender, grand_company,
-			fc_id, fc_name, achievements_private, latest_achievement_id, latest_achievement_at,
+			fc_id, fc_name, avatar_url, portrait_url, bio, active_job, item_level,
+			achievements_private, latest_achievement_id, latest_achievement_at,
 			first_seen_at, last_census_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			world = excluded.world,
@@ -58,13 +61,19 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 			grand_company = excluded.grand_company,
 			fc_id = excluded.fc_id,
 			fc_name = excluded.fc_name,
-			achievements_private = excluded.achievements_private,
-			latest_achievement_id = excluded.latest_achievement_id,
-			latest_achievement_at = excluded.latest_achievement_at,
+			avatar_url = excluded.avatar_url,
+			portrait_url = excluded.portrait_url,
+			bio = excluded.bio,
+			active_job = excluded.active_job,
+			item_level = excluded.item_level,
+			achievements_private = CASE WHEN excluded.achievements_private = 1 THEN 1 ELSE characters.achievements_private END,
+			latest_achievement_id = COALESCE(excluded.latest_achievement_id, characters.latest_achievement_id),
+			latest_achievement_at = COALESCE(excluded.latest_achievement_at, characters.latest_achievement_at),
 			last_census_at = excluded.last_census_at,
 			deleted_at = NULL`,
 		rec.ID, rec.Name, rec.World, rec.Datacenter, rec.Region, rec.Race, rec.Tribe,
 		rec.Gender, rec.GrandCompany, nullableString(rec.FreeCompanyID), nullableString(rec.FreeCompanyName),
+		rec.AvatarURL, rec.PortraitURL, rec.Bio, rec.ActiveJob, rec.ItemLevel,
 		boolInt(rec.AchievementsPrivate), nullableUint32(rec.LatestAchievementID), nullableTime(rec.LatestAchievementAt),
 		formatTime(rec.FirstSeenAt), nullableTime(rec.LastCensusAt), nullableTime(rec.DeletedAt)); err != nil {
 		return fmt.Errorf("character upsert: %w", err)
@@ -91,6 +100,141 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 		}
 	}
 	return tx.Commit()
+}
+
+// UpsertGear replaces all gear slots for a character in one transaction.
+func (r *CharacterRepository) UpsertGear(ctx context.Context, charID uint32, gear []contract.CharacterGearRecord) error {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("character gear upsert begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM character_gear WHERE character_id = ?`, charID); err != nil {
+		return fmt.Errorf("character gear upsert delete: %w", err)
+	}
+	for _, g := range gear {
+		materiaBytes, err := json.Marshal(g.Materia)
+		if err != nil {
+			return fmt.Errorf("character gear marshal materia: %w", err)
+		}
+		updatedAt := g.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = time.Now().UTC()
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO character_gear (character_id, slot, item_id, name, item_level, dye, materia, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(character_id, slot) DO UPDATE SET
+				item_id = excluded.item_id,
+				name = excluded.name,
+				item_level = excluded.item_level,
+				dye = excluded.dye,
+				materia = excluded.materia,
+				updated_at = excluded.updated_at`,
+			charID, g.Slot, g.ItemID, g.Name, g.ItemLevel, nullableString(g.Dye), string(materiaBytes), formatTime(updatedAt)); err != nil {
+			return fmt.Errorf("character gear upsert insert: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// GetGear returns the character's equipped gear slots.
+func (r *CharacterRepository) GetGear(ctx context.Context, id uint32) ([]contract.CharacterGearRecord, error) {
+	rows, err := r.driver.FetchMany(ctx,
+		`SELECT character_id, slot, item_id, name, item_level, dye, materia, updated_at
+		   FROM character_gear WHERE character_id = ? ORDER BY slot`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var gear []contract.CharacterGearRecord
+	for rows.Next() {
+		var g contract.CharacterGearRecord
+		var dye, materia, updatedAt sql.NullString
+		if err := rows.Scan(&g.CharacterID, &g.Slot, &g.ItemID, &g.Name, &g.ItemLevel, &dye, &materia, &updatedAt); err != nil {
+			return nil, err
+		}
+		g.Dye = sqlStringPtr(dye)
+		if materia.Valid && materia.String != "" {
+			var m []string
+			if err := json.Unmarshal([]byte(materia.String), &m); err == nil {
+				g.Materia = m
+			} else {
+				g.Materia = strings.Split(materia.String, ",")
+			}
+		}
+		if updatedAt.Valid {
+			if t, err := parseTime(updatedAt.String); err == nil {
+				g.UpdatedAt = t
+			}
+		}
+		gear = append(gear, g)
+	}
+	return gear, rows.Err()
+}
+
+// FindIDGaps returns missing/unscanned ID ranges [[start, end], ...] between 1 and maxID.
+func (r *CharacterRepository) FindIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error) {
+	if limit <= 0 || maxID == 0 {
+		return nil, nil
+	}
+
+	var gaps [][2]uint32
+
+	// Check if there is a gap at the start [1, min_id - 1]
+	row, err := r.driver.FetchOne(ctx, `SELECT MIN(id) FROM characters WHERE id <= ? AND deleted_at IS NULL`, maxID)
+	if err != nil {
+		return nil, err
+	}
+	var minID sql.NullInt64
+	if err := row.Scan(&minID); err != nil {
+		return nil, fmt.Errorf("min id scan: %w", err)
+	}
+	if !minID.Valid {
+		return nil, nil
+	}
+	if minID.Int64 > 1 {
+		gaps = append(gaps, [2]uint32{1, uint32(minID.Int64 - 1)})
+		if len(gaps) >= limit {
+			return gaps, nil
+		}
+	}
+
+	remainingLimit := limit - len(gaps)
+	query := `
+		WITH ranked AS (
+			SELECT id, LEAD(id) OVER (ORDER BY id) AS next_id
+			FROM characters
+			WHERE id <= ? AND deleted_at IS NULL
+		)
+		SELECT id + 1 AS gap_start, next_id - 1 AS gap_end
+		FROM ranked
+		WHERE next_id IS NOT NULL AND next_id > id + 1
+		ORDER BY id ASC
+		LIMIT ?`
+
+	rows, err := r.driver.FetchMany(ctx, query, maxID, remainingLimit)
+	if err != nil {
+		return nil, fmt.Errorf("find id gaps: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var start, end uint32
+		if err := rows.Scan(&start, &end); err != nil {
+			return nil, fmt.Errorf("scan id gap: %w", err)
+		}
+		gaps = append(gaps, [2]uint32{start, end})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return gaps, nil
 }
 
 // Get returns the character or nil when absent.
@@ -318,6 +462,18 @@ func (r *CharacterRepository) NewPerDay(ctx context.Context, since, until time.T
 	}
 	return out, rows.Err()
 }
+func (r *CharacterRepository) MaxID(ctx context.Context) (uint32, error) {
+	row, err := r.driver.FetchOne(ctx, `SELECT COALESCE(MAX(id), 0) FROM characters WHERE deleted_at IS NULL`)
+	if err != nil {
+		return 0, err
+	}
+	var maxID uint32
+	if err := row.Scan(&maxID); err != nil {
+		return 0, fmt.Errorf("character max id scan: %w", err)
+	}
+	return maxID, nil
+}
+
 // race/tribe/grand_company/fc_id/fc_name/latest_achievement_at/last_census_at/
 // deleted_at are nullable TEXT scanned into sql.NullString. latest_achievement_id
 // is INTEGER scanned into sql.NullInt64.
@@ -327,12 +483,16 @@ func scanCharacter(row rowScanner) (*contract.CharacterRecord, error) {
 	var achievementsPrivate int
 	var name, world, datacenter, region string
 	var race, tribe, grandCompany, fcID, fcName sql.NullString
+	var avatarURL, portraitURL, bio, activeJob sql.NullString
+	var itemLevel sql.NullInt64
 	var latestID sql.NullInt64
 	var firstSeen string
 	var latestAt, lastCensus, deletedAt sql.NullString
 	if err := row.Scan(&rec.ID, &name, &world, &datacenter, &region,
 		&race, &tribe, &gender, &grandCompany,
-		&fcID, &fcName, &achievementsPrivate, &latestID,
+		&fcID, &fcName,
+		&avatarURL, &portraitURL, &bio, &activeJob, &itemLevel,
+		&achievementsPrivate, &latestID,
 		&latestAt, &firstSeen, &lastCensus, &deletedAt); err != nil {
 		return nil, err
 	}
@@ -344,6 +504,11 @@ func scanCharacter(row rowScanner) (*contract.CharacterRecord, error) {
 	rec.Tribe = tribe.String
 	rec.GrandCompany = grandCompany.String
 	rec.Gender = gender
+	rec.AvatarURL = avatarURL.String
+	rec.PortraitURL = portraitURL.String
+	rec.Bio = bio.String
+	rec.ActiveJob = activeJob.String
+	rec.ItemLevel = int(itemLevel.Int64)
 	rec.AchievementsPrivate = achievementsPrivate != 0
 	rec.FreeCompanyID = sqlStringPtr(fcID)
 	rec.FreeCompanyName = sqlStringPtr(fcName)

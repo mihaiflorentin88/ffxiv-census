@@ -440,6 +440,188 @@ func TestCharacterRepository_NewPerDay(t *testing.T) {
 		}
 	}
 }
+func TestCharacterRepository_MaxID(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+
+	// Empty repo -> 0
+	maxID, err := repo.MaxID(context.Background())
+	if err != nil {
+		t.Fatalf("MaxID on empty repo: %v", err)
+	}
+	if maxID != 0 {
+		t.Fatalf("MaxID = %d, want 0", maxID)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	seed := func(id uint32) {
+		rec := contract.CharacterRecord{
+			ID:          id,
+			Name:        fmt.Sprintf("Char %d", id),
+			World:       "Ultros",
+			Datacenter:  "Primal",
+			Region:      "NA",
+			FirstSeenAt: now,
+		}
+		if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+			t.Fatalf("seed %d: %v", id, err)
+		}
+	}
+
+	seed(100)
+	seed(500)
+	seed(300)
+
+	maxID, err = repo.MaxID(context.Background())
+	if err != nil {
+		t.Fatalf("MaxID: %v", err)
+	}
+	if maxID != 500 {
+		t.Fatalf("MaxID = %d, want 500", maxID)
+	}
+
+	// If 500 is deleted, max non-deleted should be 300
+	if err := repo.MarkDeleted(context.Background(), 500, now); err != nil {
+		t.Fatalf("MarkDeleted: %v", err)
+	}
+	maxID, err = repo.MaxID(context.Background())
+	if err != nil {
+		t.Fatalf("MaxID after delete: %v", err)
+	}
+	if maxID != 300 {
+		t.Fatalf("MaxID = %d, want 300", maxID)
+	}
+}
+
+func TestCharacterRepository_ProfileFieldsAndGear(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	dye := "Dalamud Red"
+	rec := contract.CharacterRecord{
+		ID:          1001,
+		Name:        "Alphinaud Leveilleur",
+		World:       "Balmung",
+		Datacenter:  "Crystal",
+		Region:      "NA",
+		AvatarURL:   "https://img.finalfantasyxiv.com/avatar.png",
+		PortraitURL: "https://img.finalfantasyxiv.com/portrait.png",
+		Bio:         "Academician of Sharlayan",
+		ActiveJob:   "Sage",
+		ItemLevel:   660,
+		FirstSeenAt: now,
+	}
+
+	if err := repo.Upsert(ctx, rec, nil); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	got, err := repo.Get(ctx, 1001)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.AvatarURL != rec.AvatarURL || got.PortraitURL != rec.PortraitURL ||
+		got.Bio != rec.Bio || got.ActiveJob != rec.ActiveJob || got.ItemLevel != rec.ItemLevel {
+		t.Errorf("got %+v, want profile fields matching %+v", got, rec)
+	}
+
+	gear := []contract.CharacterGearRecord{
+		{
+			CharacterID: 1001,
+			Slot:        "MainHand",
+			ItemID:      40123,
+			Name:        "Manderville Milpreves",
+			ItemLevel:   665,
+			Dye:         &dye,
+			Materia:     []string{"Savage Aim Materia IX", "Savage Might Materia IX"},
+			UpdatedAt:   now,
+		},
+		{
+			CharacterID: 1001,
+			Slot:        "Head",
+			ItemID:      40124,
+			Name:        "Credendum Circlet of Healing",
+			ItemLevel:   660,
+			Dye:         nil,
+			Materia:     []string{"Piety Materia IX"},
+			UpdatedAt:   now,
+		},
+	}
+
+	if err := repo.UpsertGear(ctx, 1001, gear); err != nil {
+		t.Fatalf("UpsertGear: %v", err)
+	}
+
+	gotGear, err := repo.GetGear(ctx, 1001)
+	if err != nil {
+		t.Fatalf("GetGear: %v", err)
+	}
+	if len(gotGear) != 2 {
+		t.Fatalf("got %d gear items, want 2", len(gotGear))
+	}
+	if gotGear[0].Slot != "Head" || gotGear[0].ItemLevel != 660 { // ordered by slot: Head < MainHand
+		t.Errorf("first item = %+v, want Head", gotGear[0])
+	}
+	if gotGear[1].Slot != "MainHand" || gotGear[1].Dye == nil || *gotGear[1].Dye != dye || len(gotGear[1].Materia) != 2 {
+		t.Errorf("second item = %+v, want MainHand with dye and 2 materia", gotGear[1])
+	}
+}
+
+func TestCharacterRepository_FindIDGaps(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	seed := func(id uint32) {
+		_ = repo.Upsert(ctx, contract.CharacterRecord{
+			ID:          id,
+			Name:        fmt.Sprintf("Char %d", id),
+			FirstSeenAt: now,
+		}, nil)
+	}
+
+	// Empty repository: 0 gaps
+	gaps, err := repo.FindIDGaps(ctx, 100, 10)
+	if err != nil {
+		t.Fatalf("FindIDGaps empty: %v", err)
+	}
+	if len(gaps) != 0 {
+		t.Fatalf("expected 0 gaps on empty repo, got %v", gaps)
+	}
+
+	// Seed IDs: 5, 6, 10, 20
+	seed(5)
+	seed(6)
+	seed(10)
+	seed(20)
+
+	gaps, err = repo.FindIDGaps(ctx, 20, 10)
+	if err != nil {
+		t.Fatalf("FindIDGaps: %v", err)
+	}
+	wantGaps := [][2]uint32{
+		{1, 4},
+		{7, 9},
+		{11, 19},
+	}
+	if len(gaps) != len(wantGaps) {
+		t.Fatalf("got %v, want %v", gaps, wantGaps)
+	}
+	for i := range gaps {
+		if gaps[i] != wantGaps[i] {
+			t.Errorf("gap[%d] = %v, want %v", i, gaps[i], wantGaps[i])
+		}
+	}
+
+	// Respect limit
+	gaps, err = repo.FindIDGaps(ctx, 20, 2)
+	if err != nil {
+		t.Fatalf("FindIDGaps with limit: %v", err)
+	}
+	if len(gaps) != 2 {
+		t.Fatalf("expected 2 gaps with limit 2, got %v", gaps)
+	}
+}
 
 // idsOf returns the IDs of the given records for concise assertions.
 func idsOf(recs []contract.CharacterRecord) []uint32 {

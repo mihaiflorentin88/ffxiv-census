@@ -218,6 +218,166 @@ paths:
           description: Internal server error
           schema:
             $ref: "#/definitions/Error"
+  /api/v1/queue/events:
+    get:
+      summary: Queue event types
+      description: Supported event types, descriptions, and live breakdown by status.
+      produces:
+        - application/json
+      parameters:
+        - name: sample_limit
+          in: query
+          description: Maximum number of sampled active/next/failed jobs to return per event type (default 5, max 50).
+          type: integer
+          default: 5
+          maximum: 50
+          minimum: 1
+          required: false
+      responses:
+        "200":
+          description: Queue event types summary
+          schema:
+            type: array
+            items:
+              $ref: "#/definitions/QueueEventTypeSummary"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+  /api/v1/queue/retry-failed:
+    post:
+      summary: Retry failed queue jobs
+      description: Replays dead-letter failed jobs back to pending status for retry.
+      produces:
+        - application/json
+      parameters:
+        - name: type
+          in: query
+          description: Optional event type to retry (e.g. id-sweep).
+          type: string
+          required: false
+        - name: limit
+          in: query
+          description: Maximum number of failed jobs to retry.
+          type: integer
+          default: 100
+          required: false
+      responses:
+        "200":
+          description: Retry failed jobs response
+          schema:
+            $ref: "#/definitions/QueueRetryFailedResponse"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+  /api/v1/queue/purge:
+    post:
+      summary: Purge completed or failed queue jobs
+      description: Purges jobs matching status older than the specified duration.
+      produces:
+        - application/json
+      parameters:
+        - name: status
+          in: query
+          description: Job status to purge ('done' or 'failed').
+          type: string
+          required: true
+        - name: older_than
+          in: query
+          description: Duration string (e.g. 24h, 7d). Defaults to 0s.
+          type: string
+          required: false
+      responses:
+        "200":
+          description: Purge response
+          schema:
+            $ref: "#/definitions/QueuePurgeResponse"
+        "400":
+          description: Invalid parameters
+          schema:
+            $ref: "#/definitions/Error"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+  /api/v1/queue/jobs:
+    get:
+      summary: List queue jobs
+      description: Paginated list of queue jobs filtered by event type and/or status.
+      produces:
+        - application/json
+      parameters:
+        - name: type
+          in: query
+          description: Filter by event type
+          required: false
+          type: string
+        - name: status
+          in: query
+          description: Filter by job status (pending, claimed, done, failed)
+          required: false
+          type: string
+          enum:
+            - pending
+            - claimed
+            - done
+            - failed
+        - name: limit
+          in: query
+          description: Max results per page (default 50, max 200)
+          required: false
+          type: integer
+          default: 50
+        - name: offset
+          in: query
+          description: Result offset (default 0)
+          required: false
+          type: integer
+          default: 0
+      responses:
+        "200":
+          description: Paginated list of queue jobs
+          schema:
+            $ref: "#/definitions/PaginatedQueueJobs"
+        "400":
+          description: Invalid query parameter
+          schema:
+            $ref: "#/definitions/Error"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
+  /api/v1/queue/jobs/{id}:
+    get:
+      summary: Get queue job
+      description: Fetch a single queue job by ID with its payload and metadata.
+      produces:
+        - application/json
+      parameters:
+        - name: id
+          in: path
+          description: Job ID
+          required: true
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: Queue job detail
+          schema:
+            $ref: "#/definitions/QueueJobItem"
+        "400":
+          description: Invalid job ID
+          schema:
+            $ref: "#/definitions/Error"
+        "404":
+          description: Job not found
+          schema:
+            $ref: "#/definitions/Error"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
 definitions:
   Error:
     type: object
@@ -425,3 +585,182 @@ definitions:
       count:
         type: integer
         format: int32
+  QueueEventTypeSummary:
+    type: object
+    required:
+      - type
+      - description
+      - pending
+      - claimed
+      - done
+      - failed
+      - total
+    properties:
+      type:
+        type: string
+      description:
+        type: string
+      pending:
+        type: integer
+        format: int32
+      claimed:
+        type: integer
+        format: int32
+      done:
+        type: integer
+        format: int32
+      failed:
+        type: integer
+        format: int32
+      total:
+        type: integer
+        format: int32
+      active_jobs:
+        type: array
+        items:
+          $ref: "#/definitions/QueueJobSummaryDTO"
+      next_jobs:
+        type: array
+        items:
+          $ref: "#/definitions/QueueJobSummaryDTO"
+      failed_jobs:
+        type: array
+        items:
+          $ref: "#/definitions/QueueJobSummaryDTO"
+  QueueJobSummaryDTO:
+    type: object
+    required:
+      - id
+      - type
+      - payload
+      - status
+      - attempts
+      - max_attempts
+      - run_at
+      - created_at
+    properties:
+      id:
+        type: integer
+        format: int64
+      type:
+        type: string
+      payload:
+        type: object
+      status:
+        type: string
+      attempts:
+        type: integer
+        format: int32
+      max_attempts:
+        type: integer
+        format: int32
+      last_error:
+        type: string
+      claimed_at:
+        type: string
+        format: date-time
+      run_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+      failed_at:
+        type: string
+        format: date-time
+      completed_at:
+        type: string
+        format: date-time
+  QueueRetryFailedResponse:
+    type: object
+    required:
+      - retried
+      - message
+    properties:
+      retried:
+        type: integer
+        format: int32
+      message:
+        type: string
+  QueuePurgeResponse:
+    type: object
+    required:
+      - purged
+      - status
+      - older_than
+    properties:
+      purged:
+        type: integer
+        format: int64
+      status:
+        type: string
+      older_than:
+        type: string
+  PaginatedQueueJobs:
+    type: object
+    required:
+      - items
+      - total
+      - limit
+      - offset
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/definitions/QueueJobItem"
+      total:
+        type: integer
+        format: int64
+      limit:
+        type: integer
+        format: int32
+      offset:
+        type: integer
+        format: int32
+  QueueJobItem:
+    type: object
+    required:
+      - id
+      - type
+      - payload
+      - payload_hash
+      - status
+      - run_at
+      - attempts
+      - max_attempts
+      - created_at
+    properties:
+      id:
+        type: integer
+        format: int64
+      type:
+        type: string
+      payload:
+        type: object
+      payload_hash:
+        type: string
+      status:
+        type: string
+      run_at:
+        type: string
+        format: date-time
+      attempts:
+        type: integer
+        format: int32
+      max_attempts:
+        type: integer
+        format: int32
+      claimed_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+      last_error:
+        type: string
+      failed_at:
+        type: string
+        format: date-time
+      completed_at:
+        type: string
+        format: date-time

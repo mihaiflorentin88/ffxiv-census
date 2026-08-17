@@ -15,7 +15,7 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 
 Queue job payloads are JSON. Types are declared in `domain/census/handler/event.go`.
 
-- **id-sweep**: `{"from": 1, "to": 1000}` — inclusive range of character IDs to probe.
+- **id-sweep**: `{"from": 1, "to": 1000, "source": "auto"}` — inclusive range of character IDs to probe, with optional source (`"auto"`, `"tomestone"`, `"lodestone"`).
 - **character-census**: `{"character_id": 123}` — a character to re-census.
 - **achievement-census**: `{"character_id": 123}` — a character to run an achievement census on.
 - **fc-census**: `{"fc_id": "9234567890123456789"}` — a free company to census.
@@ -35,11 +35,11 @@ Member-list re-census (`fc-census` → `character-census` for stale members) is 
 
 The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an identical job is a no-op. Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs.
 
-## 404 vs retry
+## Dual-source ingest & 404 vs retry
 
-`LodestoneClient.FetchCharacter` returns `contract.ErrCharacterNotFound` for a non-existent character (HTTP 404) and a wrapped transient error for network/rate-limit failures. Handlers must treat 404 as "skip" and any other error as "retry" (the worker maps a handler error to `Queue.Retry`, which enforces exponential backoff and max-attempts).
+In `auto` source mode, the `id-sweep` handler probes the Tomestone.gg REST API first when configured with an API token. On a Tomestone 404 (`contract.ErrCharacterNotFound`), it automatically falls back to probing The Lodestone scraping client. If both sources 404, the ID is recorded as missing and the chunk continues. Explicit `tomestone` or `lodestone` source modes skip the other client entirely.
 
-## Worker pool
+Transient network/rate-limit errors return an error to trigger worker retry with exponential backoff.
 
 `domain/census/worker` runs N concurrent goroutines, each looping: claim one job of the event type → dispatch to the registered handler → on error `Retry`, on success `Complete(id, next...)`. It polls (1s) when the queue is empty and stops cleanly on context cancellation.
 
@@ -49,11 +49,14 @@ The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an iden
 # Long-running consumer (one per event type; k8s deployment per consumer).
 ./bin/ffxiv-census consume id-sweep --concurrency 4
 
-# One-shot publisher (cronjob entrypoint).
-./bin/ffxiv-census publish id-sweep --from 1 --to 50000000 --chunk-size 100
+# One-shot auto-discovery publisher (queries MaxID in DB, sweeps next 1000 IDs).
+./bin/ffxiv-census publish id-sweep --count 1000 --chunk-size 100 --source auto
+
+# Manual ID sweep over explicit range.
+./bin/ffxiv-census publish id-sweep --from 1 --to 50000000 --chunk-size 100 --source auto
 
 # Re-census characters not seen in 30 days (recheck cron).
 ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```
 
-`consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` chunks the ID range into `chunk-size`-sized `id-sweep` jobs.
+`consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` divides the sweep range into `chunk-size`-sized jobs with deduplication.

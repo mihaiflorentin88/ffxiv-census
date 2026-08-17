@@ -27,6 +27,12 @@ func (h *recordingHandler) Handle(ctx context.Context, payload []byte) ([]contra
 	return h.next, nil
 }
 
+type panicHandler struct{}
+
+func (h *panicHandler) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
+	panic("unexpected nil pointer in handler")
+}
+
 func waitForCalls(t *testing.T, h *recordingHandler, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -46,7 +52,7 @@ func waitForCalls(t *testing.T, h *recordingHandler, want int) {
 
 func TestWorker_ProcessesClaimedJobs(t *testing.T) {
 	q := mockqueue.NewFake()
-	if err := q.Publish(context.Background(),
+	if _, err := q.Publish(context.Background(),
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":2,"to":2}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":3,"to":3}`)},
@@ -81,7 +87,7 @@ func TestWorker_ProcessesClaimedJobs(t *testing.T) {
 
 func TestWorker_PublishesChainedJobs(t *testing.T) {
 	q := mockqueue.NewFake()
-	if err := q.Publish(context.Background(),
+	if _, err := q.Publish(context.Background(),
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
 	); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -129,7 +135,7 @@ func TestWorker_LogsJobLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	q := mockqueue.NewFake()
-	if err := q.Publish(context.Background(),
+	if _, err := q.Publish(context.Background(),
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
 	); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -166,8 +172,7 @@ func TestWorker_ReclaimsClaimedOnStart(t *testing.T) {
 	rh := &recordingHandler{}
 	reg.Register("id-sweep", rh)
 	// Publish one job and claim it manually so it is 'claimed' (simulating a
-	// previous consumer that died mid-flight).
-	if err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
+	if _, err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if _, err := q.Claim(context.Background(), "id-sweep", 1); err != nil {
@@ -194,5 +199,63 @@ func TestWorker_ReclaimsClaimedOnStart(t *testing.T) {
 	defer rh.mu.Unlock()
 	if rh.calls == 0 {
 		t.Fatal("claimed job was not reclaimed and processed after restart")
+	}
+}
+func TestWorker_LogsQueueStatusWhenEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	q := mockqueue.NewFake()
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+
+	w := New(q, reg, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, "id-sweep", 1) }()
+
+	// Wait briefly for worker to start and check queue status
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("worker: %v", err)
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "worker.queue_status") {
+		t.Errorf("logs missing worker.queue_status:\n%s", logs)
+	}
+	if !strings.Contains(logs, "pending_jobs=0") {
+		t.Errorf("logs missing pending_jobs=0:\n%s", logs)
+	}
+}
+
+func TestWorker_PanicIsolationAndErrorCapture(t *testing.T) {
+	q := mockqueue.NewFake()
+	h := handler.NewRegistry()
+	h.Register("panic-job", &panicHandler{})
+	w := New(q, h, nil)
+	w.pollInterval = 10 * time.Millisecond
+
+	_, err := q.Publish(context.Background(), contract.QueueJob{Type: "panic-job", Payload: []byte("{}")})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = w.Run(ctx, "panic-job", 1)
+
+	// Worker should not crash, and job must be retried with panic trace
+	jobs, err := q.ListJobs(context.Background(), contract.QueueJobFilter{Type: "panic-job"}, 10, 0)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("ListJobs: %v (len=%d)", err, len(jobs))
+	}
+	if jobs[0].LastError == nil || !strings.Contains(*jobs[0].LastError, "panic") {
+		t.Fatalf("expected panic error captured on job, got %+v", jobs[0])
 	}
 }

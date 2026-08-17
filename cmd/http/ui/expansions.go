@@ -1,0 +1,115 @@
+package ui
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+)
+
+// ExpansionsViewData holds MSQ completion funnel metrics for /ui/expansions.
+type ExpansionsViewData struct {
+	TotalCharacters int64
+	Expansions      []ExpansionProgression
+}
+
+// ExpansionProgression holds the stats and drop-off rate for an expansion milestone.
+type ExpansionProgression struct {
+	Name           string
+	Version        string
+	FinalQuest     string
+	Icon           string
+	Completions    int64
+	PercentOfTotal string
+	PercentValue   float64
+	RetentionRate  string
+	DropOffRate    string
+}
+
+// Canonical list of expansions in chronological storyline order.
+var canonicalExpansions = []struct {
+	Name       string
+	Version    string
+	FinalQuest string
+	Icon       string
+}{
+	{"Heavensward", "Patch 3.0", "Looking Up", "❄️"},
+	{"Stormblood", "Patch 4.0", "The Measure of His Reach", "⚔️"},
+	{"Shadowbringers", "Patch 5.0", "Shadowbringers", "🌑"},
+	{"Endwalker", "Patch 6.0", "That Its Chorus Might Ring for All", "🌕"},
+	{"Dawntrail", "Patch 7.0", "In the Glow of a New Dawn", "☀️"},
+}
+
+// Expansions handles GET /ui/expansions.
+func (c *UIController) Expansions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var totalChars int64
+
+	if c.svc != nil {
+		tot, _, err := c.svc.Summary(ctx)
+		if err == nil {
+			totalChars = tot
+		}
+	}
+
+	countMap := make(map[string]int64)
+	if c.svc != nil {
+		completions, err := c.svc.ExpansionCompletions(ctx)
+		if err != nil {
+			logging.Error("ui.expansions.completions", err.Error())
+		} else {
+			for _, ec := range completions {
+				countMap[ec.Expansion] = ec.Count
+			}
+		}
+	}
+
+	var list []ExpansionProgression
+	var prevCount int64 = -1
+
+	for _, info := range canonicalExpansions {
+		count := countMap[info.Name]
+		var pctVal float64
+		if totalChars > 0 {
+			pctVal = (float64(count) / float64(totalChars)) * 100
+		}
+
+		retention := "-"
+		dropOff := "-"
+		if prevCount > 0 {
+			retPct := (float64(count) / float64(prevCount)) * 100
+			dropPct := 100.0 - retPct
+			if dropPct < 0 {
+				dropPct = 0
+			}
+			retention = fmt.Sprintf("%.1f%%", retPct)
+			dropOff = fmt.Sprintf("%.1f%%", dropPct)
+		} else if prevCount == 0 {
+			retention = "0.0%"
+			dropOff = "100.0%"
+		}
+
+		list = append(list, ExpansionProgression{
+			Name:           info.Name,
+			Version:        info.Version,
+			FinalQuest:     info.FinalQuest,
+			Icon:           info.Icon,
+			Completions:    count,
+			PercentOfTotal: formatPercent(count, totalChars),
+			PercentValue:   pctVal,
+			RetentionRate:  retention,
+			DropOffRate:    dropOff,
+		})
+
+		prevCount = count
+	}
+
+	c.render(w, "templates/expansions.html", PageData{
+		Title:     "Expansion Progression",
+		ActiveNav: "expansions",
+		Data: ExpansionsViewData{
+			TotalCharacters: totalChars,
+			Expansions:      list,
+		},
+	})
+}

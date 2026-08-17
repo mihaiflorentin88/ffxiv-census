@@ -1,15 +1,180 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{.App}} :: Dashboard</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css">
-</head>
-<body>
-<main class="container">
-    <h1>{{.App}}</h1>
-    <p>Welcome to your freshly generated project. Replace this UI with something meaningful!</p>
-</main>
-</body>
-</html>
+{{define "content"}}
+<div class="page-header">
+    <h1 class="page-title">
+        <span>📊</span>
+        <span>Eorzea Census Overview</span>
+    </h1>
+    <p class="page-desc">Real-time global character demographics, activity tracking, and Lodestone ingest status.</p>
+</div>
+
+<!-- Stat Cards Grid -->
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total Population</div>
+        <div class="stat-value">{{formatNumber .Data.TotalCharacters}}</div>
+        <div class="stat-subtext">Discovered Characters</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Active Players (30d)</div>
+        <div class="stat-value" style="color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
+        <div class="stat-subtext highlight">{{.Data.ActivePercent}} Active Ratio</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Queue Ingest Status</div>
+        <div class="stat-value" style="color: var(--gold-light);">{{formatNumber (add .Data.QueuePending .Data.QueueClaimed)}}</div>
+        <div class="stat-subtext">
+            {{.Data.QueuePending}} Pending &bull; {{.Data.QueueClaimed}} Claimed
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Ingest Completed</div>
+        <div class="stat-value" style="color: var(--active-green);">{{formatNumber .Data.QueueDone}}</div>
+        <div class="stat-subtext">
+            {{.Data.QueueFailed}} Failed Jobs
+        </div>
+    </div>
+</div>
+
+<!-- Time Series Chart Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>📈</span>
+            <span>New Characters Discovered (Last 30 Days)</span>
+        </h2>
+    </div>
+    <div class="panel-body">
+        <div class="chart-container">
+            <canvas id="newCharactersChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Region Breakdown Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>🌐</span>
+            <span>Regional Demographics &amp; World Drill-Down</span>
+        </h2>
+    </div>
+    <div class="panel-body">
+        {{if .Data.Regions}}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Region</th>
+                        <th class="text-right">Total Population</th>
+                        <th class="text-right">Active Players (30d)</th>
+                        <th class="text-right">Active %</th>
+                        <th class="text-center">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Data.Regions}}
+                    <tr>
+                        <td>
+                            <span class="badge badge-region" style="font-size: 0.88rem; padding: 0.35rem 0.75rem;">
+                                {{.Region}}
+                            </span>
+                        </td>
+                        <td class="text-right"><strong>{{formatNumber .Total}}</strong></td>
+                        <td class="text-right" style="color: var(--cyan);">{{formatNumber .Active}}</td>
+                        <td class="text-right">
+                            <span class="badge badge-active">{{.ActiveRatio}}</span>
+                        </td>
+                        <td class="text-center">
+                            <button 
+                                class="btn btn-outline" 
+                                style="font-size: 0.8rem; padding: 0.3rem 0.75rem;"
+                                hx-get="/ui/partials/world-breakdown?region={{.Region}}" 
+                                hx-target="#drilldown-{{.Region}}" 
+                                hx-swap="innerHTML"
+                            >
+                                View Worlds ▾
+                            </button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="5" style="padding: 0; border-bottom: 1px solid var(--border-color);">
+                            <div id="drilldown-{{.Region}}" style="padding: 0.5rem 1rem; background: rgba(0,0,0,0.2);"></div>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <p class="text-dim">No regional census data available yet. Ingest workers are processing sweeps.</p>
+        {{end}}
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const ctx = document.getElementById('newCharactersChart');
+    if (!ctx) return;
+
+    const labels = {{jsonSafe .Data.ChartLabels}};
+    const data = {{jsonSafe .Data.ChartData}};
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'New Characters',
+                data: data,
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: '#d4af37',
+                pointBorderColor: '#0b0e14',
+                pointRadius: 4,
+                pointHoverRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    backgroundColor: '#141923',
+                    borderColor: '#263248',
+                    borderWidth: 1,
+                    titleColor: '#d4af37',
+                    bodyColor: '#f1f5f9',
+                    padding: 10
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.05)'
+                    },
+                    ticks: {
+                        color: '#94a3b8'
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.05)'
+                    },
+                    ticks: {
+                        color: '#94a3b8',
+                        precision: 0
+                    }
+                }
+            }
+        }
+    });
+});
+</script>
+{{end}}

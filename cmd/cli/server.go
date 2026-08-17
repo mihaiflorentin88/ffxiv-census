@@ -28,7 +28,7 @@ var httpCmd = &cobra.Command{
 		profile, _ := cmd.Flags().GetBool("profile")
 		maxRequests, _ := cmd.Flags().GetUint64("shutdown-max-requests")
 
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGUSR2)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
 		// Initialize SQLite driver (triggers runtime migrations)

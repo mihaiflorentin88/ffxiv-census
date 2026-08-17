@@ -22,4 +22,9 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/stats/new-characters", c.NewCharacters)
 	mux.HandleFunc("GET /api/v1/stats/expansion", c.Expansion)
 	mux.HandleFunc("GET /api/v1/queue", qc.Depth)
+	mux.HandleFunc("GET /api/v1/queue/events", qc.Events)
+	mux.HandleFunc("POST /api/v1/queue/retry-failed", qc.RetryFailed)
+	mux.HandleFunc("POST /api/v1/queue/purge", qc.Purge)
+	mux.HandleFunc("GET /api/v1/queue/jobs", qc.ListJobs)
+	mux.HandleFunc("GET /api/v1/queue/jobs/{id}", qc.GetJob)
 }

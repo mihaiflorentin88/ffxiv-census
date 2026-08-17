@@ -21,6 +21,12 @@ type CharacterRepository interface {
 	// Upsert replaces the character row and its jobs in one transaction.
 	// first_seen_at is preserved on conflict; deleted_at is cleared.
 	Upsert(ctx context.Context, rec CharacterRecord, jobs []ClassJobRecord) error
+	// UpsertGear replaces all gear slots for a character in one transaction.
+	UpsertGear(ctx context.Context, charID uint32, gear []CharacterGearRecord) error
+	// GetGear returns the character's equipped gear slots (empty if none).
+	GetGear(ctx context.Context, charID uint32) ([]CharacterGearRecord, error)
+	// FindIDGaps returns missing/unscanned ID ranges [[start, end], ...] between 1 and maxID.
+	FindIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error)
 	// Get returns the character, or nil (no error) if not found.
 	Get(ctx context.Context, id uint32) (*CharacterRecord, error)
 	// GetJobs returns the character's job levels (empty if none).
@@ -52,4 +58,7 @@ type CharacterRepository interface {
 	// NewPerDay returns non-deleted characters first seen in [since, until),
 	// counted per UTC day, ordered ascending by day.
 	NewPerDay(ctx context.Context, since, until time.Time) ([]DailyCount, error)
+	// MaxID returns the maximum character ID in the repository (excluding deleted
+	// characters), or 0 if no characters exist.
+	MaxID(ctx context.Context) (uint32, error)
 }

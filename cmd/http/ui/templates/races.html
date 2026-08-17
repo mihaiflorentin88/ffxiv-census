@@ -1,0 +1,162 @@
+{{define "content"}}
+<div class="page-header">
+    <h1 class="page-title">
+        <span>👥</span>
+        <span>Race &amp; Clan Demographics</span>
+    </h1>
+    <p class="page-desc">Global breakdown of player character choices across Eorzea's playable races.</p>
+</div>
+
+<!-- Grid with Chart and Top Stats -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <!-- Doughnut Chart Panel -->
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>🍩</span>
+                <span>Race Distribution Share</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="raceChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Insights Panel -->
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>💡</span>
+                <span>Census Highlights</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            <div class="stat-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 1rem;">
+                <div class="stat-card">
+                    <div class="stat-label">Total Sample</div>
+                    <div class="stat-value" style="font-size: 1.5rem;">{{formatNumber .Data.TotalCharacters}}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Active (30d)</div>
+                    <div class="stat-value" style="font-size: 1.5rem; color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
+                </div>
+            </div>
+            <p class="text-dim" style="font-size: 0.9rem; line-height: 1.6;">
+                Race choices reflect character creation and Fantasia usage across all datacenters. Active percentages track characters who earned achievements in the last 30 days.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- Detailed Race Table Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>📋</span>
+            <span>Playable Race Demographics</span>
+        </h2>
+    </div>
+    <div class="panel-body">
+        {{if .Data.Races}}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Race</th>
+                        <th class="text-right">Total Count</th>
+                        <th>Global Share</th>
+                        <th class="text-right">Active Players</th>
+                        <th class="text-right">Active Ratio</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Data.Races}}
+                    <tr>
+                        <td><strong>{{.Race}}</strong></td>
+                        <td class="text-right">{{formatNumber .Total}}</td>
+                        <td style="min-width: 180px;">
+                            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                <div class="progress-bar-container" style="flex: 1;">
+                                    <div class="progress-bar-fill gold" style="width: {{.ShareOfTotal}};"></div>
+                                </div>
+                                <span style="font-size: 0.85rem; font-family: var(--font-mono); min-width: 45px; text-align: right;">
+                                    {{.ShareOfTotal}}
+                                </span>
+                            </div>
+                        </td>
+                        <td class="text-right" style="color: var(--cyan);">{{formatNumber .Active}}</td>
+                        <td class="text-right">
+                            <span class="badge badge-active">{{.ActiveRatio}}</span>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <p class="text-dim">No race census data available yet.</p>
+        {{end}}
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const ctx = document.getElementById('raceChart');
+    if (!ctx) return;
+
+    const labels = {{jsonSafe .Data.ChartLabels}};
+    const data = {{jsonSafe .Data.ChartData}};
+
+    const raceColors = [
+        '#38bdf8', // Cyan
+        '#d4af37', // Gold
+        '#a855f7', // Purple
+        '#22c55e', // Green
+        '#f97316', // Orange
+        '#ec4899', // Pink
+        '#14b8a6', // Teal
+        '#eab308', // Yellow
+        '#64748b'  // Grey/Other
+    ];
+
+    new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: data,
+                backgroundColor: raceColors.slice(0, labels.length),
+                borderColor: '#141923',
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        color: '#94a3b8',
+                        padding: 12,
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: '#141923',
+                    borderColor: '#263248',
+                    borderWidth: 1,
+                    titleColor: '#d4af37',
+                    bodyColor: '#f1f5f9'
+                }
+            },
+            cutout: '65%'
+        }
+    });
+});
+</script>
+{{end}}

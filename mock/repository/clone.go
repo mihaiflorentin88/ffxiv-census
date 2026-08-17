@@ -52,3 +52,11 @@ func cloneMilestone(m contract.MilestoneAchievement) contract.MilestoneAchieveme
 	m.Expansion = cloneString(m.Expansion)
 	return m
 }
+
+func cloneGear(g contract.CharacterGearRecord) contract.CharacterGearRecord {
+	g.Dye = cloneString(g.Dye)
+	if g.Materia != nil {
+		g.Materia = append([]string(nil), g.Materia...)
+	}
+	return g
+}

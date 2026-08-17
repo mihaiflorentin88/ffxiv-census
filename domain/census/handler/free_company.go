@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -10,9 +11,8 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// FreeCompanyCensus fetches a free company and upserts its record. It is a leaf
-// event (member-list re-census is deferred until FetchFreeCompanyMembers is
-// exposed by the LodestoneClient contract).
+// FreeCompanyCensus fetches a free company, upserts its record, and discovers
+// members to chain character-census jobs.
 type FreeCompanyCensus struct {
 	lodestone contract.LodestoneClient
 	census    *census.Service
@@ -31,6 +31,10 @@ func (h *FreeCompanyCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	h.logger.InfoContext(ctx, "handler.fc_census", slog.String("fc_id", p.FCID))
 	fc, err := h.lodestone.FetchFreeCompany(ctx, p.FCID)
 	if err != nil {
+		if errors.Is(err, contract.ErrFreeCompanyNotFound) {
+			h.logger.InfoContext(ctx, "handler.fc_census.not_found", slog.String("fc_id", p.FCID))
+			return nil, nil
+		}
 		h.logger.WarnContext(ctx, "handler.fc_census.fetch_error", slog.String("fc_id", p.FCID), slog.Any("error", err))
 		return nil, fmt.Errorf("fc-census fetch %s: %w", p.FCID, err)
 	}
@@ -40,5 +44,17 @@ func (h *FreeCompanyCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		return nil, fmt.Errorf("fc-census upsert %s: %w", p.FCID, err)
 	}
 	h.logger.InfoContext(ctx, "handler.fc_census.stored", slog.String("fc_id", p.FCID), slog.String("name", fc.Name), slog.String("world", fc.World))
-	return nil, nil
+
+	memberIDs, err := h.lodestone.FetchFreeCompanyMembers(ctx, p.FCID)
+	if err != nil {
+		h.logger.WarnContext(ctx, "handler.fc_census.fetch_members_error", slog.String("fc_id", p.FCID), slog.Any("error", err))
+		return nil, nil
+	}
+
+	nextJobs := make([]contract.QueueJob, 0, len(memberIDs))
+	for _, mID := range memberIDs {
+		nextJobs = append(nextJobs, CharacterCensusJob(mID))
+	}
+	h.logger.InfoContext(ctx, "handler.fc_census.members_chained", slog.String("fc_id", p.FCID), slog.Int("count", len(nextJobs)))
+	return nextJobs, nil
 }

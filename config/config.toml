@@ -40,5 +40,11 @@ backoff_base_seconds = 5
 rate_limit = 1.0
 max_retries = 3
 
+[tomestone]
+api_token = ""
+base_url = "https://tomestone.gg"
+rate_limit = 10.0
+timeout = "10s"
+
 [census]
 activity_window_days = 30

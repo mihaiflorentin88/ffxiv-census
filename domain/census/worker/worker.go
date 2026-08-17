@@ -2,9 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,30 +42,43 @@ func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) err
 		return fmt.Errorf("no handler registered for event %q", eventType)
 	}
 	w.logger.InfoContext(ctx, "worker.start", slog.String("event_type", eventType), slog.Int("concurrency", concurrency))
+	if n, err := w.queue.CountJobs(ctx, contract.QueueJobFilter{Type: eventType, Status: contract.QueueJobPending}); err == nil && n == 0 {
+		w.logger.InfoContext(ctx, "worker.queue_status", slog.String("event_type", eventType), slog.Int64("pending_jobs", 0), slog.String("notice", "no pending jobs in queue, waiting for new publications..."))
+	}
 	if n, err := w.queue.ReclaimClaimed(ctx, eventType); err != nil {
 		return fmt.Errorf("reclaim claimed jobs: %w", err)
 	} else if n > 0 {
 		w.logger.InfoContext(ctx, "worker.reclaimed", slog.String("event_type", eventType), slog.Int("reclaimed", n))
 	}
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
-	for i := 0; i < concurrency; i++ {
+	for range concurrency {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := w.loop(ctx, eventType, h); err != nil {
+			if err := w.loop(childCtx, eventType, h); err != nil {
+				cancel()
 				errCh <- err
 			}
 		}()
 	}
 	wg.Wait()
 	close(errCh)
+
+	w.logger.InfoContext(ctx, "worker.stop", slog.String("event_type", eventType))
+
+	var errs []error
 	for err := range errCh {
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	w.logger.InfoContext(ctx, "worker.stop", slog.String("event_type", eventType))
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	return nil
 }
 
@@ -91,14 +107,32 @@ func (w *Worker) loop(ctx context.Context, eventType string, h handler.Handler) 
 		for _, job := range jobs {
 			start := time.Now()
 			w.logger.InfoContext(ctx, "worker.job_start", slog.String("event_type", eventType), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts))
-			next, err := h.Handle(ctx, job.Payload)
+			var next []contract.QueueJob
+			var err error
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						err = fmt.Errorf("worker panic: %v\nstack: %s", r, debug.Stack())
+					}
+				}()
+				next, err = h.Handle(ctx, job.Payload)
+			}()
+
 			if err != nil {
 				w.logger.WarnContext(ctx, "worker.job_retry", slog.String("event_type", eventType), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Any("error", err))
-				if rerr := w.queue.Retry(ctx, job.ID); rerr != nil {
+				if rerr := w.queue.Retry(ctx, job.ID, err.Error()); rerr != nil {
 					if ctx.Err() != nil {
 						return nil // clean shutdown
 					}
 					return fmt.Errorf("retry job %d: %w", job.ID, rerr)
+				}
+				if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(200 * time.Millisecond):
+					}
 				}
 				continue
 			}

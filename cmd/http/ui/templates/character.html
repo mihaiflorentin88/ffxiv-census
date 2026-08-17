@@ -1,0 +1,163 @@
+{{define "content"}}
+{{if eq .Data.Character.Name ""}}
+<div class="panel text-center" style="padding: 3rem 1.5rem;">
+    <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
+    <h2 style="color: var(--gold-light); margin-bottom: 0.5rem;">Character Not Found</h2>
+    <p class="text-dim" style="margin-bottom: 1.5rem;">Character <code>#{{.Data.Character.ID}}</code> has not been ingested by census sweeps or does not exist on Lodestone.</p>
+    <a href="/ui/characters" class="btn btn-primary">Browse Character Directory</a>
+</div>
+{{else}}
+
+<!-- Profile Header Card -->
+<div class="profile-header">
+    <div>
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <h1 class="profile-name">{{.Data.Character.Name}}</h1>
+            <span class="badge badge-gold">#{{.Data.Character.ID}}</span>
+            {{if .Data.Character.DeletedAt}}
+            <span class="badge badge-inactive">Character Deleted / Transferred</span>
+            {{else if .Data.IsActive}}
+            <span class="badge badge-active">● Active (Within 30 Days)</span>
+            {{else}}
+            <span class="badge badge-inactive">○ Inactive</span>
+            {{end}}
+        </div>
+        <div class="profile-meta">
+            <span><strong>{{.Data.Character.World}}</strong></span>
+            <span>&bull;</span>
+            <span class="badge badge-region">{{.Data.Character.Datacenter}} ({{.Data.Character.Region}})</span>
+            <span>&bull;</span>
+            <span>{{.Data.Character.Race}} / {{.Data.Character.Tribe}}</span>
+            <span>&bull;</span>
+            <span>{{.Data.GenderText}}</span>
+            {{if .Data.Character.GrandCompany}}
+            <span>&bull;</span>
+            <span style="color: var(--gold);">{{.Data.Character.GrandCompany}}</span>
+            {{end}}
+        </div>
+        {{if .Data.FreeCompany}}
+        <div style="margin-top: 0.5rem; font-size: 0.92rem;">
+            <span class="text-muted">Free Company:</span>
+            <strong style="color: var(--cyan);">{{.Data.FreeCompany.Name}}</strong>
+            <span class="text-dim">({{.Data.FreeCompany.MemberCount}} members)</span>
+        </div>
+        {{else if .Data.Character.FreeCompanyName}}
+        <div style="margin-top: 0.5rem; font-size: 0.92rem;">
+            <span class="text-muted">Free Company:</span>
+            <strong style="color: var(--cyan);">{{.Data.Character.FreeCompanyName}}</strong>
+        </div>
+        {{end}}
+    </div>
+    <div class="profile-actions">
+        <a href="https://na.finalfantasyxiv.com/lodestone/character/{{.Data.Character.ID}}/" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+            Lodestone ↗
+        </a>
+        <a href="https://tomestone.gg/character/{{.Data.Character.ID}}" target="_blank" rel="noopener noreferrer" class="btn btn-outline">
+            Tomestone.gg ↗
+        </a>
+    </div>
+</div>
+
+<!-- Layout: Job Matrix on Left, Milestones & Details on Right -->
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;">
+    
+    <!-- Left Column: Job Level Matrix -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>⚔️</span>
+                <span>Job Level Matrix</span>
+            </h2>
+            <span class="text-dim" style="font-size: 0.82rem;">Dawntrail Cap: Lv 100</span>
+        </div>
+        <div class="panel-body">
+            {{range .Data.JobGroups}}
+            <div class="job-category-group">
+                <div class="job-category-title {{roleColor .RoleKey}}">
+                    <span>{{.RoleTitle}}</span>
+                </div>
+                <div class="jobs-grid">
+                    {{range .Jobs}}
+                    <div class="job-card {{if .MaxLevel}}max-level{{end}}">
+                        <div class="job-header">
+                            <span class="job-name">{{.Name}}</span>
+                            <span class="job-level">{{if eq .Level 0}}-{{else}}{{.Level}}{{end}}</span>
+                        </div>
+                        {{if and (ne .Level 0) (not .MaxLevel)}}
+                        <div class="progress-bar-container" style="height: 4px; margin-top: 0.4rem;">
+                            <div class="progress-bar-fill" style="width: {{.Level}}%;"></div>
+                        </div>
+                        {{end}}
+                    </div>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+        </div>
+    </div>
+
+    <!-- Right Column: Story Milestones & Ingest Metadata -->
+    <div>
+        <!-- Milestones Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">
+                    <span>🏆</span>
+                    <span>Story &amp; Milestones</span>
+                </h2>
+            </div>
+            <div class="panel-body">
+                {{if .Data.Milestones}}
+                <div class="timeline">
+                    {{range .Data.Milestones}}
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <div class="timeline-content">
+                            <div class="timeline-title">
+                                {{if .Expansion}}[{{.Expansion}}]{{end}} {{if .Detail}}{{.Detail}}{{else}}Achievement #{{.AchievementID}}{{end}}
+                            </div>
+                            <div class="timeline-date">Achieved {{formatDate .AchievedAt}}</div>
+                        </div>
+                    </div>
+                    {{end}}
+                </div>
+                {{else}}
+                <p class="text-dim" style="font-size: 0.9rem;">
+                    {{if .Data.Character.AchievementsPrivate}}
+                    Character's Lodestone achievements are set to Private.
+                    {{else}}
+                    No milestones recorded yet.
+                    {{end}}
+                </p>
+                {{end}}
+            </div>
+        </div>
+
+        <!-- Census Ingest Metadata Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title">
+                    <span>ℹ️</span>
+                    <span>Census Metadata</span>
+                </h2>
+            </div>
+            <div class="panel-body" style="font-size: 0.88rem;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span class="text-muted">First Ingested:</span>
+                    <strong>{{formatDate .Data.Character.FirstSeenAt}}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span class="text-muted">Last Sweep:</span>
+                    <strong>{{formatDateTime .Data.Character.LastCensusAt}}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span class="text-muted">Latest Achievement:</span>
+                    <strong>{{formatDateTime .Data.Character.LatestAchievementAt}}</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{end}}
+{{end}}

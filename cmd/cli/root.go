@@ -26,5 +26,5 @@ func Execute() error {
 }
 
 func init() {
-	rootCmd.AddCommand(httpCmd)
+	rootCmd.AddCommand(queueCmd)
 }

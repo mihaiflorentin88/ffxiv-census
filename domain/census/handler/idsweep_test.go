@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/xivapi/godestone/v2"
@@ -12,6 +13,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
+	mocktomestone "github.com/mihaiflorentin88/ffxiv-census/mock/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -20,11 +22,25 @@ func newTestIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mockrepo.Char
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, svc, nil), ls, chars
+	return NewIDSweep(ls, nil, svc, nil), ls, chars
+}
+
+func newTestDualIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomestone.Fake, *mockrepo.CharacterRepository) {
+	t.Helper()
+	ls := mocklodestone.NewFake()
+	ts := mocktomestone.NewFake()
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	return NewIDSweep(ls, ts, svc, nil), ls, ts, chars
 }
 
 func idsweepPayload(from, to uint32) []byte {
 	b, _ := json.Marshal(IDSweepPayload{From: from, To: to})
+	return b
+}
+
+func idsweepPayloadWithSource(from, to uint32, source string) []byte {
+	b, _ := json.Marshal(IDSweepPayload{From: from, To: to, Source: source})
 	return b
 }
 
@@ -121,5 +137,220 @@ func TestIDSweep_NotFoundSkipsCharacterWithoutFailingChunk(t *testing.T) {
 	}
 	if got, _ := chars.Get(context.Background(), 76); got == nil {
 		t.Errorf("id 76 should be upserted")
+	}
+}
+
+func TestIDSweep_DualSource_TomestoneHit(t *testing.T) {
+	h, ls, ts, chars := newTestDualIDSweep(t)
+
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID:         101,
+		Name:       "Tomestone Hero",
+		Server:     "Ragnarok",
+		Datacenter: "Chaos",
+	})
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		t.Fatalf("Lodestone should not be called when Tomestone hits for id %d", id)
+		return nil, nil
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(101, 101, "auto"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1", len(next))
+	}
+
+	got, err := chars.Get(context.Background(), 101)
+	if err != nil || got == nil {
+		t.Fatalf("Get(101): %v / %+v", err, got)
+	}
+	if got.Name != "Tomestone Hero" || got.World != "Ragnarok" || got.Region != "EU" {
+		t.Errorf("got %+v, want Tomestone Hero from EU", got)
+	}
+}
+
+func TestIDSweep_DualSource_Tomestone404FallbackToLodestone(t *testing.T) {
+	h, ls, _, chars := newTestDualIDSweep(t)
+
+	// Tomestone has no characters -> returns ErrCharacterNotFound
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		if id == 201 {
+			return &godestone.Character{
+				ID:    201,
+				Name:  "Lodestone Hero",
+				World: "Balmung",
+				DC:    "Crystal",
+			}, nil
+		}
+		return nil, contract.ErrCharacterNotFound
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(201, 202, "auto"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1", len(next))
+	}
+
+	got201, err := chars.Get(context.Background(), 201)
+	if err != nil || got201 == nil {
+		t.Fatalf("Get(201): %v / %+v", err, got201)
+	}
+	if got201.Name != "Lodestone Hero" || got201.Region != "NA" {
+		t.Errorf("got201 = %+v", got201)
+	}
+
+	got202, _ := chars.Get(context.Background(), 202)
+	if got202 != nil {
+		t.Errorf("id 202 should not be upserted")
+	}
+}
+
+func TestIDSweep_DualSource_Double404(t *testing.T) {
+	h, ls, _, chars := newTestDualIDSweep(t)
+
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(301, 303, "auto"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("next jobs = %d, want 0", len(next))
+	}
+	for id := uint32(301); id <= 303; id++ {
+		if got, _ := chars.Get(context.Background(), id); got != nil {
+			t.Errorf("id %d should not exist", id)
+		}
+	}
+}
+
+func TestIDSweep_ExplicitTomestoneSource(t *testing.T) {
+	h, ls, ts, chars := newTestDualIDSweep(t)
+
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID:         401,
+		Name:       "Tomestone Only",
+		Server:     "Tonberry",
+		Datacenter: "Elemental",
+	})
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		t.Fatalf("Lodestone should NEVER be called when source is 'tomestone'")
+		return nil, nil
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(401, 402, "tomestone"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1", len(next))
+	}
+	if got, _ := chars.Get(context.Background(), 401); got == nil {
+		t.Errorf("id 401 should be upserted")
+	}
+	if got, _ := chars.Get(context.Background(), 402); got != nil {
+		t.Errorf("id 402 should not be upserted")
+	}
+}
+
+func TestIDSweep_ExplicitLodestoneSource(t *testing.T) {
+	h, ls, ts, chars := newTestDualIDSweep(t)
+
+	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
+		t.Fatalf("Tomestone should NEVER be called when source is 'lodestone'")
+		return nil, nil
+	}
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return &godestone.Character{
+			ID:    501,
+			Name:  "Lodestone Only",
+			World: "Shinryu",
+			DC:    "Mana",
+		}, nil
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(501, 501, "lodestone"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1", len(next))
+	}
+	if got, _ := chars.Get(context.Background(), 501); got == nil {
+		t.Errorf("id 501 should be upserted")
+	}
+}
+
+func TestIDSweep_TomestoneTransientError(t *testing.T) {
+	h, _, ts, _ := newTestDualIDSweep(t)
+
+	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
+		return nil, errors.New("tomestone server error 500")
+	}
+
+	if _, err := h.Handle(context.Background(), idsweepPayloadWithSource(601, 601, "auto")); err == nil {
+		t.Fatal("expected error on tomestone transient error")
+	}
+}
+
+func TestIDSweep_NilTomestoneClient_ExplicitTomestoneSource(t *testing.T) {
+	h, _, _ := newTestIDSweep(t)
+
+	payload, _ := json.Marshal(IDSweepPayload{
+		From:   100,
+		To:     105,
+		Source: "tomestone",
+	})
+
+	_, err := h.Handle(context.Background(), payload)
+	if err == nil {
+		t.Fatal("expected error when source is tomestone but client is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "tomestone client unconfigured") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestIDSweep_NilClients_Error(t *testing.T) {
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	h := NewIDSweep(nil, nil, svc, nil)
+
+	payload, _ := json.Marshal(IDSweepPayload{
+		From:   100,
+		To:     105,
+		Source: "auto",
+	})
+
+	_, err := h.Handle(context.Background(), payload)
+	if err == nil {
+		t.Fatal("expected error when both clients are nil, got nil")
+	}
+}
+
+func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	ts := mocktomestone.NewFake()
+	h := NewIDSweep(nil, ts, svc, nil)
+
+	payload, _ := json.Marshal(IDSweepPayload{
+		From:   100,
+		To:     105,
+		Source: "lodestone",
+	})
+
+	_, err := h.Handle(context.Background(), payload)
+	if err == nil {
+		t.Fatal("expected error when source is lodestone but client is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "lodestone client unconfigured") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }

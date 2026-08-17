@@ -1,0 +1,43 @@
+<!-- Partial: Search Results -->
+{{if .Characters}}
+<div class="search-results-list">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>World</th>
+                <th>Datacenter</th>
+                <th>Race</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Characters}}
+            <tr class="clickable" onclick="window.location='/ui/characters/{{.ID}}'">
+                <td><code>#{{.ID}}</code></td>
+                <td><strong><a href="/ui/characters/{{.ID}}">{{.Name}}</a></strong></td>
+                <td>{{.World}}</td>
+                <td><span class="badge badge-region">{{.Datacenter}}</span></td>
+                <td>{{.Race}}</td>
+                <td>
+                    {{if .DeletedAt}}
+                    <span class="badge badge-inactive">Deleted</span>
+                    {{else if .IsActive}}
+                    <span class="badge badge-active">Active</span>
+                    {{else}}
+                    <span class="badge badge-inactive">Inactive</span>
+                    {{end}}
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="panel">
+    <div class="panel-body text-center">
+        <p class="text-dim">No characters found matching query.</p>
+    </div>
+</div>
+{{end}}

@@ -1,9 +1,13 @@
 package lodestone
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	"golang.org/x/time/rate"
@@ -13,6 +17,7 @@ import (
 	"github.com/xivapi/godestone/v2"
 	"github.com/xivapi/godestone/v2/provider/models"
 )
+
 var errScraper = errors.New("scraper boom")
 
 // fakeScraper implements the unexported scraper seam; each method delegates to
@@ -44,7 +49,7 @@ func (f *fakeScraper) FetchFreeCompany(id string) (*godestone.FreeCompany, error
 // fastClient builds a client wired to sc with backoff disabled and a high rate
 // limit so tests run instantly.
 func fastClient(sc scraper, maxRetries int) *Client {
-	c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 1000, MaxRetries: maxRetries})
+	c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 1000, MaxRetries: maxRetries}, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -152,7 +157,7 @@ func TestFetchFreeCompanyAndAchievements(t *testing.T) {
 func TestNewClient_ClampsRateToMaxSafe(t *testing.T) {
 	sc := &fakeScraper{}
 	t.Run("above cap clamps", func(t *testing.T) {
-		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 50.0})
+		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 50.0}, nil)
 		if err != nil {
 			t.Fatalf("newClient: %v", err)
 		}
@@ -161,7 +166,7 @@ func TestNewClient_ClampsRateToMaxSafe(t *testing.T) {
 		}
 	})
 	t.Run("below cap respected", func(t *testing.T) {
-		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 0.5})
+		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 0.5}, nil)
 		if err != nil {
 			t.Fatalf("newClient: %v", err)
 		}
@@ -170,7 +175,7 @@ func TestNewClient_ClampsRateToMaxSafe(t *testing.T) {
 		}
 	})
 	t.Run("zero defaults to cap", func(t *testing.T) {
-		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 0})
+		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 0}, nil)
 		if err != nil {
 			t.Fatalf("newClient: %v", err)
 		}
@@ -181,10 +186,10 @@ func TestNewClient_ClampsRateToMaxSafe(t *testing.T) {
 }
 
 func TestNewClientNilChecks(t *testing.T) {
-	if _, err := newClient(nil, &config.LodestoneConfig{}); err == nil {
+	if _, err := newClient(nil, &config.LodestoneConfig{}, nil); err == nil {
 		t.Error("newClient(nil, cfg) expected an error")
 	}
-	if _, err := newClient(&fakeScraper{}, nil); err == nil {
+	if _, err := newClient(&fakeScraper{}, nil, nil); err == nil {
 		t.Error("newClient(sc, nil) expected an error")
 	}
 }
@@ -221,5 +226,186 @@ func TestClient_FetchCharacter_ForbiddenTreatedAsNotFound(t *testing.T) {
 	}
 	if sc.charCalls != 1 {
 		t.Errorf("scraper calls = %d, want 1 (403 must not retry)", sc.charCalls)
+	}
+}
+
+func TestClient_LogsRateLimitedWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	attempts := 0
+	sc := &fakeScraper{
+		fetchChar: func(id uint32) (*godestone.Character, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("HTTP 429 Too Many Requests")
+			}
+			return &godestone.Character{ID: id, Name: "Recovered"}, nil
+		},
+	}
+	c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 1000, MaxRetries: 2}, logger)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	c.backoffBase = 0
+
+	got, err := c.FetchCharacter(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("FetchCharacter: %v", err)
+	}
+	if got.Name != "Recovered" {
+		t.Fatalf("got name = %s, want Recovered", got.Name)
+	}
+	logs := buf.String()
+	for _, want := range []string{"lodestone.rate_limited", "WARN", "id=100", "attempt=1", "max_attempts=3"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestClient_LogsScrapeRetryWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	attempts := 0
+	sc := &fakeScraper{
+		fetchChar: func(id uint32) (*godestone.Character, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("connection reset by peer")
+			}
+			return &godestone.Character{ID: id, Name: "Recovered"}, nil
+		},
+	}
+	c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 1000, MaxRetries: 2}, logger)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	c.backoffBase = 0
+
+	got, err := c.FetchCharacter(context.Background(), 200)
+	if err != nil {
+		t.Fatalf("FetchCharacter: %v", err)
+	}
+	if got.Name != "Recovered" {
+		t.Fatalf("got name = %s, want Recovered", got.Name)
+	}
+	logs := buf.String()
+	for _, want := range []string{"lodestone.scrape_retry", "WARN", "id=200", "attempt=1", "max_attempts=3", "connection reset by peer"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+type fakeHTTPGetter struct {
+	doFunc func(req *http.Request) (*http.Response, error)
+}
+
+func (f *fakeHTTPGetter) Do(req *http.Request) (*http.Response, error) {
+	return f.doFunc(req)
+}
+
+func TestClient_FetchFreeCompanyMembers(t *testing.T) {
+	html := `
+		<html>
+		<body>
+			<div class="entry">
+				<a href="/lodestone/character/12345/">Character One</a>
+				<a href="/lodestone/character/67890/">Character Two</a>
+				<a href="/lodestone/character/12345/">Duplicate Character</a>
+			</div>
+		</body>
+		</html>
+	`
+	sc := &fakeScraper{}
+	c := fastClient(sc, 0)
+	c.httpClient = &fakeHTTPGetter{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(html)),
+			}, nil
+		},
+	}
+
+	members, err := c.FetchFreeCompanyMembers(context.Background(), "9234567890123456789")
+	if err != nil {
+		t.Fatalf("FetchFreeCompanyMembers: %v", err)
+	}
+	if len(members) != 2 || members[0] != 12345 || members[1] != 67890 {
+		t.Errorf("members = %v, want [12345, 67890]", members)
+	}
+}
+
+func TestClient_FetchFreeCompanyMembers_NotFound(t *testing.T) {
+	sc := &fakeScraper{}
+	c := fastClient(sc, 0)
+	c.httpClient = &fakeHTTPGetter{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		},
+	}
+
+	_, err := c.FetchFreeCompanyMembers(context.Background(), "9234567890123456789")
+	if !errors.Is(err, contract.ErrFreeCompanyNotFound) {
+		t.Fatalf("err = %v, want ErrFreeCompanyNotFound", err)
+	}
+}
+
+func TestFetchFreeCompany_NotFound_ReturnsSentinelWithoutRetry(t *testing.T) {
+	sc := &fakeScraper{
+		fetchFC: func(id string) (*godestone.FreeCompany, error) {
+			return nil, errors.New("404 Not Found")
+		},
+	}
+	c := fastClient(sc, 3)
+	_, err := c.FetchFreeCompany(context.Background(), "9234567890123456789")
+	if !errors.Is(err, contract.ErrFreeCompanyNotFound) {
+		t.Fatalf("expected ErrFreeCompanyNotFound, got: %v", err)
+	}
+	if sc.fcCalls != 1 {
+		t.Errorf("fcCalls = %d, want 1 (fast-fail on 404 without retries)", sc.fcCalls)
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("read stream broken")
+}
+func (errReader) Close() error { return nil }
+
+func TestFetchFreeCompanyMembers_BodyReadError_Retries(t *testing.T) {
+	sc := &fakeScraper{}
+	c := fastClient(sc, 2)
+	calls := 0
+	c.httpClient = &fakeHTTPGetter{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       errReader{},
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<a href="/lodestone/character/111/">One</a>`)),
+			}, nil
+		},
+	}
+
+	members, err := c.FetchFreeCompanyMembers(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(members) != 1 || members[0] != 111 {
+		t.Errorf("members = %v, want [111]", members)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2", calls)
 	}
 }

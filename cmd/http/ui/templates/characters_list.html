@@ -1,0 +1,111 @@
+{{define "content"}}
+<div class="page-header">
+    <h1 class="page-title">
+        <span>🔎</span>
+        <span>{{.Data.Title}}</span>
+    </h1>
+    <p class="page-desc">Search and browse all player characters tracked by the Eorzea census engine.</p>
+</div>
+
+<!-- Search Panel -->
+<div class="panel" style="margin-bottom: 1.5rem;">
+    <div class="panel-body" style="padding: 1.25rem 1.5rem;">
+        <form action="/ui/characters/search" method="GET" style="display: flex; gap: 0.75rem; max-width: 600px;">
+            <input 
+                type="text" 
+                name="q" 
+                placeholder="Search character name or Lodestone ID..." 
+                class="search-input" 
+                value="{{.Data.Query}}" 
+                style="flex: 1; width: 100%;"
+                required
+            >
+            <button type="submit" class="btn btn-primary">Search</button>
+            {{if .Data.Query}}
+            <a href="/ui/characters" class="btn btn-outline">Clear</a>
+            {{end}}
+        </form>
+    </div>
+</div>
+
+<!-- Characters Table Panel -->
+<div class="panel">
+    <div class="panel-header">
+        <h2 class="panel-title">
+            <span>📋</span>
+            <span>Character Records</span>
+        </h2>
+        <span class="badge badge-gold">{{formatNumber .Data.TotalCount}} Total</span>
+    </div>
+    <div class="panel-body">
+        {{if .Data.Characters}}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>World</th>
+                        <th>Datacenter</th>
+                        <th>Race / Tribe</th>
+                        <th>Free Company</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Data.Characters}}
+                    <tr class="clickable" onclick="window.location='/ui/characters/{{.ID}}'">
+                        <td style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-dim);">#{{.ID}}</td>
+                        <td><strong><a href="/ui/characters/{{.ID}}">{{.Name}}</a></strong></td>
+                        <td>{{.World}}</td>
+                        <td><span class="badge badge-region">{{.Datacenter}}</span></td>
+                        <td>{{.Race}}{{if .Tribe}} ({{.Tribe}}){{end}}</td>
+                        <td>
+                            {{if .FreeCompanyName}}
+                            <span style="color: var(--cyan); font-size: 0.88rem;">{{.FreeCompanyName}}</span>
+                            {{else}}
+                            <span class="text-dim">-</span>
+                            {{end}}
+                        </td>
+                        <td>
+                            {{if .DeletedAt}}
+                            <span class="badge badge-inactive">Deleted</span>
+                            {{else if .IsActive}}
+                            <span class="badge badge-active">Active</span>
+                            {{else}}
+                            <span class="badge badge-inactive">Inactive</span>
+                            {{end}}
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        {{if gt .Data.TotalPages 1}}
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+            <div>
+                <span class="text-dim" style="font-size: 0.88rem;">Page {{.Data.CurrentPage}} of {{.Data.TotalPages}}</span>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                {{if .Data.HasPrev}}
+                <a href="/ui/characters?page={{.Data.PrevPage}}" class="btn btn-outline" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">
+                    &larr; Previous
+                </a>
+                {{end}}
+                {{if .Data.HasNext}}
+                <a href="/ui/characters?page={{.Data.NextPage}}" class="btn btn-outline" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">
+                    Next &rarr;
+                </a>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{else}}
+        <p class="text-dim">No characters found matching the query.</p>
+        {{end}}
+    </div>
+</div>
+{{end}}

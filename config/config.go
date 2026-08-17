@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bufio"
 	"bytes"
 	"embed"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -21,6 +23,7 @@ type Config struct {
 	SQLite    *SQLiteConfig    `mapstructure:"sqlite"`
 	Queue     *QueueConfig     `mapstructure:"queue"`
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
+	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
 	Census    *CensusConfig    `mapstructure:"census"`
 }
 
@@ -69,11 +72,47 @@ type LodestoneConfig struct {
 	RateLimit  float64 `mapstructure:"rate_limit"`
 	MaxRetries int     `mapstructure:"max_retries"`
 }
+type TomestoneConfig struct {
+	APIToken  string  `mapstructure:"api_token"`
+	BaseURL   string  `mapstructure:"base_url"`
+	RateLimit float64 `mapstructure:"rate_limit"`
+	Timeout   string  `mapstructure:"timeout"`
+}
 type CensusConfig struct {
 	ActivityWindowDays int `mapstructure:"activity_window_days"`
 }
 
+func loadDotEnv() {
+	f, err := os.Open(".env")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
+			val = val[1 : len(val)-1]
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, val)
+		}
+	}
+}
+
 func NewConfig() (*Config, error) {
+	loadDotEnv()
+
 	content, err := configFS.ReadFile("config.toml")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded config: %w", err)

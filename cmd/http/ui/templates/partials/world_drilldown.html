@@ -1,0 +1,33 @@
+<!-- Partial: World Drilldown -->
+{{if .Worlds}}
+<div class="drilldown-container" id="drilldown-{{.Region}}">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Datacenter</th>
+                <th>World</th>
+                <th class="text-right">Total</th>
+                <th class="text-right">Active (30d)</th>
+                <th class="text-right">Active Ratio</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Worlds}}
+            <tr>
+                <td><span class="badge badge-region">{{.Datacenter}}</span></td>
+                <td><strong>{{.World}}</strong></td>
+                <td class="text-right">{{formatNumber .Total}}</td>
+                <td class="text-right">{{formatNumber .Active}}</td>
+                <td class="text-right">
+                    <span class="badge {{if ge .Active 1000}}badge-active{{else}}badge-inactive{{end}}">
+                        {{formatPercent .Active .Total}}
+                    </span>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<p class="text-dim">No worlds found for region {{.Region}}.</p>
+{{end}}

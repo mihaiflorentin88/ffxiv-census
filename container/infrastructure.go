@@ -11,6 +11,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
 	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/repository"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -20,6 +21,7 @@ type InfrastructureContainer struct {
 	sqliteDriver          contract.SQLiteDriver
 	queue                 contract.Queue
 	lodestoneClient       contract.LodestoneClient
+	tomestoneClient       contract.TomestoneClient
 	characterRepository   contract.CharacterRepository
 	freeCompanyRepository contract.FreeCompanyRepository
 	achievementRepository contract.AchievementRepository
@@ -101,20 +103,41 @@ func (s *ServiceContainer) Queue() contract.Queue {
 }
 
 func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.lodestoneClient != nil {
 		return s.infrastructure.lodestoneClient
 	}
-	cfg := s.Config().Lodestone
+	cfg := s.configUnlocked().Lodestone
 	if cfg == nil {
 		logging.Warn("container.lodestone", "lodestone config missing")
 		return nil
 	}
-	client, err := lodestone.NewClient(cfg)
+	client, err := lodestone.NewClient(cfg, s.Logger())
 	if err != nil {
 		logging.Error("container.lodestone", fmt.Sprintf("failed to create lodestone client: %v", err))
 		return nil
 	}
 	s.infrastructure.lodestoneClient = client
+	return client
+}
+func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.tomestoneClient != nil {
+		return s.infrastructure.tomestoneClient
+	}
+	cfg := s.configUnlocked().Tomestone
+	if cfg == nil {
+		logging.Warn("container.tomestone", "tomestone config missing")
+		return nil
+	}
+	client, err := tomestone.NewClient(cfg, s.Logger())
+	if err != nil {
+		logging.Error("container.tomestone", fmt.Sprintf("failed to create tomestone client: %v", err))
+		return nil
+	}
+	s.infrastructure.tomestoneClient = client
 	return client
 }
 
