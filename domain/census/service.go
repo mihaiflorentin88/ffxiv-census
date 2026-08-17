@@ -14,10 +14,11 @@ import (
 // persisted records and computes milestone/activity facts. It depends only on
 // contracts, never on SQL or HTTP.
 type Service struct {
-	characters    contract.CharacterRepository
-	freeCompanies contract.FreeCompanyRepository
-	achievements  contract.AchievementRepository
-	censusRuns    contract.CensusRunRepository
+	characters     contract.CharacterRepository
+	freeCompanies  contract.FreeCompanyRepository
+	achievements   contract.AchievementRepository
+	censusRuns     contract.CensusRunRepository
+	activityWindow time.Duration
 }
 
 func NewService(
@@ -27,10 +28,11 @@ func NewService(
 	censusRuns contract.CensusRunRepository,
 ) *Service {
 	return &Service{
-		characters:    characters,
-		freeCompanies: freeCompanies,
-		achievements:  achievements,
-		censusRuns:    censusRuns,
+		characters:     characters,
+		freeCompanies:  freeCompanies,
+		achievements:   achievements,
+		censusRuns:     censusRuns,
+		activityWindow: defaultActivityWindow,
 	}
 }
 
@@ -171,9 +173,24 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 }
 
 // IsActive reports whether a latest-achievement timestamp falls within the
-// census activity window (default 30 days).
+// census activity window (default 30 days, overridable via SetActivityWindow).
 func (s *Service) IsActive(latestAt time.Time) bool {
-	return !latestAt.IsZero() && time.Since(latestAt) <= defaultActivityWindow
+	return !latestAt.IsZero() && time.Since(latestAt) <= s.activityWindow
+}
+
+// SetActivityWindow overrides the activity window used by IsActive, Summary,
+// and Breakdown. Non-positive durations are ignored, keeping the current
+// window.
+func (s *Service) SetActivityWindow(d time.Duration) {
+	if d > 0 {
+		s.activityWindow = d
+	}
+}
+
+// activitySince returns the UTC instant marking the start of the activity
+// window: anything at or after it counts as active.
+func (s *Service) activitySince() time.Time {
+	return time.Now().UTC().Add(-s.activityWindow)
 }
 
 // MarkCharacterDeleted records that a character no longer exists on Lodestone.
@@ -199,4 +216,99 @@ func toFreeCompanyRecord(fc *godestone.FreeCompany) contract.FreeCompanyRecord {
 		rec.FormedAt = &fc.Formed
 	}
 	return rec
+}
+
+// ErrInvalidDimension is returned by Breakdown when by is not one of
+// race|world|datacenter|region.
+var ErrInvalidDimension = errors.New("invalid breakdown dimension: want race|world|datacenter|region")
+
+// CharacterDetail aggregates a character's persisted profile, jobs, milestones,
+// and free company into one response payload. FreeCompany is nil when the
+// character is not in an FC or the referenced FC was never ingested.
+type CharacterDetail struct {
+	Character   contract.CharacterRecord
+	Jobs        []contract.ClassJobRecord
+	Milestones  []contract.CharacterMilestone
+	FreeCompany *contract.FreeCompanyRecord
+}
+
+// Summary returns the total number of non-deleted characters and how many of
+// them are active (latest achievement within the activity window).
+func (s *Service) Summary(ctx context.Context) (total, active int64, err error) {
+	total, err = s.characters.Count(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	active, err = s.characters.CountActive(ctx, s.activitySince())
+	if err != nil {
+		return 0, 0, err
+	}
+	return total, active, nil
+}
+
+// ListCharacters returns one page of non-deleted characters (ordered by id,
+// limited/offset) plus the total non-deleted count for pagination.
+func (s *Service) ListCharacters(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, int64, error) {
+	chars, err := s.characters.List(ctx, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := s.characters.Count(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return chars, total, nil
+}
+
+// CharacterDetail returns the full profile for one character, or nil (no
+// error) when the id is unknown.
+func (s *Service) CharacterDetail(ctx context.Context, id uint32) (*CharacterDetail, error) {
+	rec, err := s.characters.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
+	}
+	jobs, err := s.characters.GetJobs(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	milestones, err := s.achievements.ListCharacterMilestones(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	detail := &CharacterDetail{Character: *rec, Jobs: jobs, Milestones: milestones}
+	if rec.FreeCompanyID != nil {
+		fc, err := s.freeCompanies.Get(ctx, *rec.FreeCompanyID)
+		if err != nil {
+			return nil, err
+		}
+		detail.FreeCompany = fc
+	}
+	return detail, nil
+}
+
+// Breakdown groups non-deleted characters by by (race|world|datacenter|region)
+// with total and activity-window counts per group. Unknown dimensions return
+// ErrInvalidDimension without touching the repository.
+func (s *Service) Breakdown(ctx context.Context, by string) ([]contract.GroupCount, error) {
+	switch by {
+	case "race", "world", "datacenter", "region":
+	default:
+		return nil, ErrInvalidDimension
+	}
+	return s.characters.Breakdown(ctx, by, s.activitySince())
+}
+
+// NewCharacters returns non-deleted characters first seen in [since, until),
+// counted per UTC day, ordered ascending by day.
+func (s *Service) NewCharacters(ctx context.Context, since, until time.Time) ([]contract.DailyCount, error) {
+	return s.characters.NewPerDay(ctx, since, until)
+}
+
+// ExpansionCompletions returns how many distinct characters completed each
+// expansion's MSQ.
+func (s *Service) ExpansionCompletions(ctx context.Context) ([]contract.ExpansionCount, error) {
+	return s.achievements.CountExpansions(ctx)
 }

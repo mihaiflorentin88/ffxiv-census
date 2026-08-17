@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
@@ -29,6 +30,10 @@ func (s *ServiceContainer) CensusService() *census.Service {
 		achievements,
 		s.CensusRunRepository(),
 	)
+	// Honor the configured activity window ([census] activity_window_days).
+	if c := s.Config().Census; c != nil && c.ActivityWindowDays > 0 {
+		svc.SetActivityWindow(time.Duration(c.ActivityWindowDays) * 24 * time.Hour)
+	}
 	// Seed the milestone registry (idempotent) so achievement processing never
 	// runs against an empty registry.
 	if err := svc.SyncMilestones(context.Background()); err != nil {
