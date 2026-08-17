@@ -43,6 +43,19 @@ type QueueJobSummaryDTO struct {
 	CompletedAt *time.Time      `json:"completed_at,omitempty"`
 }
 
+type QueueOverviewSummary struct {
+	Total   int `json:"total"`
+	Pending int `json:"pending"`
+	Claimed int `json:"claimed"`
+	Done    int `json:"done"`
+	Failed  int `json:"failed"`
+}
+
+type QueueOverviewResponse struct {
+	Summary QueueOverviewSummary    `json:"summary"`
+	Events  []QueueEventTypeSummary `json:"events"`
+}
+
 type QueueEventTypeSummary struct {
 	Type        string               `json:"type"`
 	Description string               `json:"description"`
@@ -55,7 +68,6 @@ type QueueEventTypeSummary struct {
 	NextJobs    []QueueJobSummaryDTO `json:"next_jobs"`
 	FailedJobs  []QueueJobSummaryDTO `json:"failed_jobs"`
 }
-
 type QueueRetryFailedResponse struct {
 	Retried int    `json:"retried"`
 	Message string `json:"message"`
@@ -63,6 +75,7 @@ type QueueRetryFailedResponse struct {
 
 type QueuePurgeResponse struct {
 	Purged    int64  `json:"purged"`
+	EventType string `json:"event_type,omitempty"`
 	Status    string `json:"status"`
 	OlderThan string `json:"older_than"`
 }

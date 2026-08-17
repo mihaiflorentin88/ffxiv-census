@@ -20,6 +20,7 @@ type CharacterListItem struct {
 	FreeCompanyName     *string    `json:"free_company_name,omitempty"`
 	AchievementsPrivate bool       `json:"achievements_private"`
 	LatestAchievementID *uint32    `json:"latest_achievement_id,omitempty"`
+	IsActive            bool       `json:"is_active"`
 	FirstSeenAt         time.Time  `json:"first_seen_at"`
 	LastCensusAt        *time.Time `json:"last_census_at,omitempty"`
 }

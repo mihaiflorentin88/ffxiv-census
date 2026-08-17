@@ -222,6 +222,11 @@ func (c *CensusController) Expansion(w http.ResponseWriter, r *http.Request) {
 // toCharacterListItem maps a persisted character record to the API list item.
 // Every field the DTO declares is copied; pointer fields pass through as-is.
 func toCharacterListItem(rec *contract.CharacterRecord) response.CharacterListItem {
+	isActive := false
+	if rec.LatestAchievementAt != nil {
+		cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+		isActive = !rec.LatestAchievementAt.Before(cutoff)
+	}
 	return response.CharacterListItem{
 		ID:                  rec.ID,
 		Name:                rec.Name,
@@ -234,6 +239,7 @@ func toCharacterListItem(rec *contract.CharacterRecord) response.CharacterListIt
 		FreeCompanyName:     rec.FreeCompanyName,
 		AchievementsPrivate: rec.AchievementsPrivate,
 		LatestAchievementID: rec.LatestAchievementID,
+		IsActive:            isActive,
 		FirstSeenAt:         rec.FirstSeenAt,
 		LastCensusAt:        rec.LastCensusAt,
 	}

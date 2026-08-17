@@ -197,13 +197,16 @@ func (f *Fake) RetryFailed(ctx context.Context, jobType string, limit int) (int,
 	return len(failedIDs), nil
 }
 
-func (f *Fake) PurgeJobs(ctx context.Context, status contract.QueueJobStatus, olderThan time.Duration) (int64, error) {
+func (f *Fake) PurgeJobs(ctx context.Context, eventType string, status contract.QueueJobStatus, olderThan time.Duration) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cutoff := time.Now().UTC().Add(-olderThan)
 	var count int64
 	for id, j := range f.jobs {
-		if j.Status != status {
+		if eventType != "" && eventType != "all" && j.Type != eventType {
+			continue
+		}
+		if status != "" && status != "all" && j.Status != status {
 			continue
 		}
 		var ts time.Time

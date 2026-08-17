@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"sort"
 	"strconv"
 	"time"
 
@@ -22,23 +21,102 @@ func NewQueueController(q contract.Queue) *QueueController {
 	return &QueueController{q: q}
 }
 
-// Depth serves GET /api/v1/queue: one entry per job status, sorted by status.
+// Depth serves GET /api/v1/queue: provides full overview with status summary and per-event breakdowns.
 func (c *QueueController) Depth(w http.ResponseWriter, r *http.Request) {
 	if c.q == nil {
 		writeError(w, http.StatusInternalServerError, "queue service unavailable")
 		return
 	}
+
 	depth, err := c.q.Depth(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	items := make([]response.QueueDepthItem, 0, len(depth))
-	for status, count := range depth {
-		items = append(items, response.QueueDepthItem{Status: string(status), Count: count})
+
+	summary := response.QueueOverviewSummary{
+		Pending: depth[contract.QueueJobPending],
+		Claimed: depth[contract.QueueJobClaimed],
+		Done:    depth[contract.QueueJobDone],
+		Failed:  depth[contract.QueueJobFailed],
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Status < items[j].Status })
-	writeJSON(w, http.StatusOK, items)
+	summary.Total = summary.Pending + summary.Claimed + summary.Done + summary.Failed
+
+	sampleLimit := 5
+	if raw := r.URL.Query().Get("sample_limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			if n > 50 {
+				n = 50
+			}
+			sampleLimit = n
+		}
+	}
+
+	details, err := c.q.GetEventDetails(r.Context(), sampleLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	detailsMap := make(map[string]contract.QueueEventDetail, len(details))
+	for _, d := range details {
+		detailsMap[d.Type] = d
+	}
+
+	seen := make(map[string]bool)
+	var events []response.QueueEventTypeSummary
+
+	for _, eventType := range canonicalEventTypes {
+		seen[eventType] = true
+		desc := knownEventDescriptions[eventType]
+		d, ok := detailsMap[eventType]
+		if !ok {
+			d = contract.QueueEventDetail{
+				Type:       eventType,
+				ActiveJobs: []contract.QueueJob{},
+				NextJobs:   []contract.QueueJob{},
+				FailedJobs: []contract.QueueJob{},
+			}
+		}
+		events = append(events, response.QueueEventTypeSummary{
+			Type:        eventType,
+			Description: desc,
+			Pending:     d.Pending,
+			Claimed:     d.Claimed,
+			Done:        d.Done,
+			Failed:      d.Failed,
+			Total:       d.Total,
+			ActiveJobs:  toQueueJobSummaryDTOs(d.ActiveJobs),
+			NextJobs:    toQueueJobSummaryDTOs(d.NextJobs),
+			FailedJobs:  toQueueJobSummaryDTOs(d.FailedJobs),
+		})
+	}
+
+	for _, d := range details {
+		if !seen[d.Type] {
+			desc, ok := knownEventDescriptions[d.Type]
+			if !ok {
+				desc = "Custom queue event"
+			}
+			events = append(events, response.QueueEventTypeSummary{
+				Type:        d.Type,
+				Description: desc,
+				Pending:     d.Pending,
+				Claimed:     d.Claimed,
+				Done:        d.Done,
+				Failed:      d.Failed,
+				Total:       d.Total,
+				ActiveJobs:  toQueueJobSummaryDTOs(d.ActiveJobs),
+				NextJobs:    toQueueJobSummaryDTOs(d.NextJobs),
+				FailedJobs:  toQueueJobSummaryDTOs(d.FailedJobs),
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, response.QueueOverviewResponse{
+		Summary: summary,
+		Events:  events,
+	})
 }
 
 var knownEventDescriptions = map[string]string{
@@ -274,11 +352,13 @@ func (c *QueueController) RetryFailed(w http.ResponseWriter, r *http.Request) {
 }
 
 type purgeRequest struct {
+	EventType string `json:"event_type"`
+	Type      string `json:"type"`
 	Status    string `json:"status"`
 	OlderThan string `json:"older_than"`
 }
 
-// Purge serves POST /api/v1/queue/purge: purges jobs matching status older than a given duration.
+// Purge serves POST /api/v1/queue/purge: purges jobs matching event type and status older than a given duration.
 func (c *QueueController) Purge(w http.ResponseWriter, r *http.Request) {
 	if c.q == nil {
 		writeError(w, http.StatusInternalServerError, "queue service unavailable")
@@ -290,6 +370,15 @@ func (c *QueueController) Purge(w http.ResponseWriter, r *http.Request) {
 		if mt, _, err := mime.ParseMediaType(ct); err == nil && mt == "application/json" {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 		}
+	}
+	if req.EventType == "" {
+		req.EventType = req.Type
+	}
+	if req.EventType == "" {
+		req.EventType = r.URL.Query().Get("event_type")
+	}
+	if req.EventType == "" {
+		req.EventType = r.URL.Query().Get("type")
 	}
 	if req.Status == "" {
 		req.Status = r.URL.Query().Get("status")
@@ -303,25 +392,38 @@ func (c *QueueController) Purge(w http.ResponseWriter, r *http.Request) {
 
 	duration, err := time.ParseDuration(req.OlderThan)
 	if err != nil || duration < 0 {
-		writeError(w, http.StatusBadRequest, "invalid older_than duration format (e.g. 24h, 30m)")
+		writeError(w, http.StatusBadRequest, "invalid older_than duration format (e.g. 24h, 30m, 0s)")
 		return
 	}
 
-	status := contract.QueueJobStatus(req.Status)
-	if status != contract.QueueJobDone && status != contract.QueueJobFailed {
-		writeError(w, http.StatusBadRequest, "invalid status (allowed: done, failed)")
-		return
+	var status contract.QueueJobStatus
+	if req.Status != "" && req.Status != "all" {
+		status = contract.QueueJobStatus(req.Status)
+		if status != contract.QueueJobDone && status != contract.QueueJobFailed && status != contract.QueueJobPending && status != contract.QueueJobClaimed {
+			writeError(w, http.StatusBadRequest, "invalid status (allowed: done, failed, pending, claimed, all)")
+			return
+		}
 	}
 
-	purged, err := c.q.PurgeJobs(r.Context(), status, duration)
+	purged, err := c.q.PurgeJobs(r.Context(), req.EventType, status, duration)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	displayStatus := req.Status
+	if displayStatus == "" {
+		displayStatus = "all"
+	}
+	displayEvent := req.EventType
+	if displayEvent == "" {
+		displayEvent = "all"
+	}
+
 	writeJSON(w, http.StatusOK, response.QueuePurgeResponse{
 		Purged:    purged,
-		Status:    req.Status,
+		EventType: displayEvent,
+		Status:    displayStatus,
 		OlderThan: req.OlderThan,
 	})
 }

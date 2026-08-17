@@ -46,6 +46,9 @@ func TestQueueCmd_FlagsRegistered(t *testing.T) {
 	}
 
 	// purge flags
+	if purgeCmd.Flags().Lookup("event-type") == nil {
+		t.Error("expected --event-type flag on queue purge")
+	}
 	if purgeCmd.Flags().Lookup("status") == nil {
 		t.Error("expected --status flag on queue purge")
 	}
@@ -154,7 +157,7 @@ func TestQueuePurgeCmd_Run(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !bytes.Contains(buf.Bytes(), []byte("Purged 1 done jobs")) {
+	if !bytes.Contains(buf.Bytes(), []byte("Purged 1 jobs (event: all, status: done)")) {
 		t.Errorf("unexpected output: %s", out)
 	}
 }

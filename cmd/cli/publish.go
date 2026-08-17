@@ -87,6 +87,7 @@ var publishIDSweepCmd = &cobra.Command{
 		fillGaps, _ := cmd.Flags().GetBool("fill-gaps")
 		daemon, _ := cmd.Flags().GetBool("daemon")
 		daemonInterval, _ := cmd.Flags().GetDuration("daemon-interval")
+		purgeEvent, _ := cmd.Flags().GetBool("purge-event")
 		minPendingJobs, _ := cmd.Flags().GetInt("min-pending-jobs")
 		maxGaps, _ := cmd.Flags().GetInt("max-gaps")
 
@@ -108,6 +109,13 @@ var publishIDSweepCmd = &cobra.Command{
 			return fmt.Errorf("queue not initialised")
 		}
 		logger := container.Load.Logger()
+		if purgeEvent {
+			purged, err := q.PurgeJobs(cmd.Context(), "id-sweep", "", 0)
+			if err != nil {
+				return fmt.Errorf("purge id-sweep jobs: %w", err)
+			}
+			logger.InfoContext(cmd.Context(), "publish.id_sweep_purged", slog.Int64("purged", purged))
+		}
 
 		publishBatch := func() (int, error) {
 			var jobs []contract.QueueJob
@@ -310,6 +318,7 @@ func init() {
 	publishIDSweepCmd.Flags().Uint32("chunk-size", 100, "IDs per id-sweep job")
 	publishIDSweepCmd.Flags().String("source", "auto", "ingest source (auto, tomestone, lodestone)")
 	publishIDSweepCmd.Flags().Bool("fill-gaps", false, "scan unscanned holes between 1 and MaxID")
+	publishIDSweepCmd.Flags().Bool("purge-event", false, "purge existing id-sweep jobs in queue before publishing")
 	publishIDSweepCmd.Flags().Bool("daemon", false, "run continuous auto-sweep loop")
 	publishIDSweepCmd.Flags().Duration("daemon-interval", 30*time.Second, "tick interval for daemon checks")
 	publishIDSweepCmd.Flags().Int("min-pending-jobs", 5, "threshold of pending jobs below which new batches are enqueued")

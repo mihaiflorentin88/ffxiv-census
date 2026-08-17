@@ -347,7 +347,7 @@ func TestFake_ReliabilityAndEventDetails(t *testing.T) {
 	}
 
 	// Test PurgeJobs
-	purged, err := f.PurgeJobs(ctx, contract.QueueJobDone, 0)
+	purged, err := f.PurgeJobs(ctx, "id-sweep", contract.QueueJobDone, 0)
 	if err != nil || purged != 1 {
 		t.Fatalf("PurgeJobs: n=%d err=%v", purged, err)
 	}
@@ -374,7 +374,7 @@ func TestFake_CreatedAtAndRunAtPopulatedOnPublish(t *testing.T) {
 	}
 
 	// PurgeJobs with olderThan 1h should NOT purge newly created pending jobs
-	purged, err := f.PurgeJobs(ctx, contract.QueueJobPending, time.Hour)
+	purged, err := f.PurgeJobs(ctx, "id-sweep", contract.QueueJobPending, time.Hour)
 	if err != nil || purged != 0 {
 		t.Errorf("PurgeJobs purged %d fresh jobs, want 0", purged)
 	}

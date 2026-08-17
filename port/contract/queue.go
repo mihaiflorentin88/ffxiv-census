@@ -85,8 +85,9 @@ type Queue interface {
 	// RetryFailed transitions failed jobs back to pending with run_at = now.
 	// If jobType is non-empty, only jobs of that type are retried. Returns number of jobs retried.
 	RetryFailed(ctx context.Context, jobType string, limit int) (int, error)
-	// PurgeJobs deletes jobs matching status that were completed/failed/created older than olderThan duration.
-	PurgeJobs(ctx context.Context, status QueueJobStatus, olderThan time.Duration) (int64, error)
+	// PurgeJobs deletes jobs matching eventType and status that were completed/failed/created older than olderThan duration.
+	// An empty string or "all" for eventType or status matches all event types or statuses.
+	PurgeJobs(ctx context.Context, eventType string, status QueueJobStatus, olderThan time.Duration) (int64, error)
 	// GetEventDetails returns aggregated queue status counts and sampled active, upcoming, and failed jobs.
 	GetEventDetails(ctx context.Context, sampleLimit int) ([]QueueEventDetail, error)
 	// Depth returns the number of jobs per status.

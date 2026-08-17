@@ -402,10 +402,13 @@ func TestQueueController_Depth(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	var items []response.QueueDepthItem
-	decodeJSON(t, doGET(t, rig.qc.Depth, "/api/v1/queue"), &items)
-	if len(items) != 1 || items[0].Status != "pending" || items[0].Count != 1 {
-		t.Errorf("depth = %+v, want [{pending 1}]", items)
+	var overview response.QueueOverviewResponse
+	decodeJSON(t, doGET(t, rig.qc.Depth, "/api/v1/queue"), &overview)
+	if overview.Summary.Pending != 1 || overview.Summary.Total != 1 {
+		t.Errorf("summary = %+v, want pending=1, total=1", overview.Summary)
+	}
+	if len(overview.Events) != 4 {
+		t.Errorf("events length = %d, want 4", len(overview.Events))
 	}
 }
 
@@ -648,7 +651,7 @@ func TestQueueController_Purge(t *testing.T) {
 	}
 
 	// Invalid status
-	reqInv := httptest.NewRequest(http.MethodPost, "/api/v1/queue/purge", strings.NewReader(`{"status":"pending"}`))
+	reqInv := httptest.NewRequest(http.MethodPost, "/api/v1/queue/purge", strings.NewReader(`{"status":"invalid-status"}`))
 	reqInv.Header.Set("Content-Type", "application/json")
 	recInv := httptest.NewRecorder()
 	rig.qc.Purge(recInv, reqInv)

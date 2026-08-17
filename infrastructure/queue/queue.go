@@ -218,21 +218,22 @@ func (q *Queue) RetryFailed(ctx context.Context, jobType string, limit int) (int
 	return int(n), nil
 }
 
-func (q *Queue) PurgeJobs(ctx context.Context, status contract.QueueJobStatus, olderThan time.Duration) (int64, error) {
+func (q *Queue) PurgeJobs(ctx context.Context, eventType string, status contract.QueueJobStatus, olderThan time.Duration) (int64, error) {
 	cutoff := q.now().UTC().Add(-olderThan).Format(timeLayout)
 	query := `DELETE FROM queue_jobs
-	          WHERE status = ?
+	          WHERE (? = '' OR ? = 'all' OR type = ?)
+	            AND (? = '' OR ? = 'all' OR status = ?)
 	            AND (
 	              (status = 'done' AND COALESCE(completed_at, created_at) <= ?)
 	              OR (status = 'failed' AND COALESCE(failed_at, created_at) <= ?)
 	              OR (status NOT IN ('done', 'failed') AND created_at <= ?)
 	            )`
-	res, err := q.driver.Execute(ctx, query, string(status), cutoff, cutoff, cutoff)
+	res, err := q.driver.Execute(ctx, query, eventType, eventType, eventType, string(status), string(status), string(status), cutoff, cutoff, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("purge jobs: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	q.logger.InfoContext(ctx, "queue.purge", slog.String("status", string(status)), slog.Duration("older_than", olderThan), slog.Int64("purged", n))
+	q.logger.InfoContext(ctx, "queue.purge", slog.String("event_type", eventType), slog.String("status", string(status)), slog.Duration("older_than", olderThan), slog.Int64("purged", n))
 	return n, nil
 }
 

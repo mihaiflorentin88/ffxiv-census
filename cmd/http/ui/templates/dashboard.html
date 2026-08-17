@@ -88,9 +88,7 @@
                             <button 
                                 class="btn btn-outline" 
                                 style="font-size: 0.8rem; padding: 0.3rem 0.75rem;"
-                                hx-get="/ui/partials/world-breakdown?region={{.Region}}" 
-                                hx-target="#drilldown-{{.Region}}" 
-                                hx-swap="innerHTML"
+                                onclick="toggleWorldDrilldown(this, '{{.Region}}')"
                             >
                                 View Worlds ▾
                             </button>
@@ -176,5 +174,22 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     });
 });
+
+function toggleWorldDrilldown(btn, region) {
+    const target = document.getElementById('drilldown-' + region);
+    if (!target) return;
+    if (target.innerHTML.trim().length > 0) {
+        target.innerHTML = '';
+        btn.innerHTML = 'View Worlds ▾';
+        btn.classList.remove('active');
+    } else {
+        htmx.ajax('GET', '/ui/partials/world-breakdown?region=' + encodeURIComponent(region), {
+            target: target,
+            swap: 'innerHTML'
+        });
+        btn.innerHTML = 'Hide Worlds ▴';
+        btn.classList.add('active');
+    }
+}
 </script>
 {{end}}

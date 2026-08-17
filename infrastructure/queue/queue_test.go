@@ -479,7 +479,7 @@ func TestQueue_RetryFailedAndPurgeJobs(t *testing.T) {
 	}
 
 	// Purge done jobs older than 0
-	purgedDone, err := q.PurgeJobs(ctx, contract.QueueJobDone, 0)
+	purgedDone, err := q.PurgeJobs(ctx, "character-census", contract.QueueJobDone, 0)
 	if err != nil || purgedDone != 1 {
 		t.Fatalf("PurgeJobs done: count=%d err=%v", purgedDone, err)
 	}

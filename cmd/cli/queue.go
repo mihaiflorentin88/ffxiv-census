@@ -139,7 +139,7 @@ var retryFailedCmd = &cobra.Command{
 
 var purgeCmd = &cobra.Command{
 	Use:   "purge",
-	Short: "Purge completed or failed jobs older than a specified duration",
+	Short: "Purge jobs older than a specified duration filtered by event type and status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		q := container.Load.Queue()
@@ -147,24 +147,37 @@ var purgeCmd = &cobra.Command{
 			return fmt.Errorf("queue service unavailable")
 		}
 
+		eventType, _ := cmd.Flags().GetString("event-type")
 		statusStr, _ := cmd.Flags().GetString("status")
-		status := contract.QueueJobStatus(statusStr)
-		if status != contract.QueueJobDone && status != contract.QueueJobFailed {
-			return fmt.Errorf("invalid status %q (allowed: done, failed)", statusStr)
+		var status contract.QueueJobStatus
+		if statusStr != "" && statusStr != "all" {
+			status = contract.QueueJobStatus(statusStr)
+			if status != contract.QueueJobDone && status != contract.QueueJobFailed && status != contract.QueueJobPending && status != contract.QueueJobClaimed {
+				return fmt.Errorf("invalid status %q (allowed: done, failed, pending, claimed, all)", statusStr)
+			}
 		}
 
 		olderThanStr, _ := cmd.Flags().GetString("older-than")
 		duration, err := time.ParseDuration(olderThanStr)
 		if err != nil || duration < 0 {
-			return fmt.Errorf("invalid --older-than duration %q (e.g. 24h, 30m)", olderThanStr)
+			return fmt.Errorf("invalid --older-than duration %q (e.g. 24h, 30m, 0s)", olderThanStr)
 		}
 
-		purged, err := q.PurgeJobs(ctx, status, duration)
+		purged, err := q.PurgeJobs(ctx, eventType, status, duration)
 		if err != nil {
 			return fmt.Errorf("purge jobs: %w", err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Purged %d %s jobs older than %s\n", purged, status, olderThanStr)
+		displayEvent := eventType
+		if displayEvent == "" {
+			displayEvent = "all"
+		}
+		displayStatus := string(status)
+		if displayStatus == "" {
+			displayStatus = "all"
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Purged %d jobs (event: %s, status: %s) older than %s\n", purged, displayEvent, displayStatus, olderThanStr)
 		return nil
 	},
 }
@@ -184,8 +197,9 @@ func init() {
 	retryFailedCmd.Flags().String("event-type", "", "optional event type filter")
 	retryFailedCmd.Flags().Int("limit", 100, "maximum number of failed jobs to replay")
 
-	purgeCmd.Flags().String("status", "done", "job status to purge (done or failed)")
-	purgeCmd.Flags().String("older-than", "24h", "duration threshold (e.g. 24h, 72h)")
+	purgeCmd.Flags().StringP("event-type", "e", "all", "event type to purge (e.g. id-sweep, character-census, or all)")
+	purgeCmd.Flags().StringP("status", "s", "done", "job status to purge (done, failed, pending, claimed, or all)")
+	purgeCmd.Flags().String("older-than", "24h", "duration threshold (e.g. 24h, 72h, 0s)")
 
 	queueCmd.AddCommand(statsCmd)
 	queueCmd.AddCommand(retryFailedCmd)
