@@ -238,7 +238,7 @@ func TestService_ListCharacters_Pagination(t *testing.T) {
 	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 4, Name: "gone", World: "Ultros", FirstSeenAt: now}, nil)
 	_ = chars.MarkDeleted(ctx, 4, now)
 
-	page, total, err := svc.ListCharacters(ctx, 2, 0)
+	page, total, err := svc.ListCharacters(ctx, contract.CharacterFilter{}, 2, 0)
 	if err != nil {
 		t.Fatalf("ListCharacters: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestService_ListCharacters_Pagination(t *testing.T) {
 		t.Errorf("page(2,0) = %+v, want ids [1 2]", page)
 	}
 
-	page, total, err = svc.ListCharacters(ctx, 2, 2)
+	page, total, err = svc.ListCharacters(ctx, contract.CharacterFilter{}, 2, 2)
 	if err != nil {
 		t.Fatalf("ListCharacters: %v", err)
 	}
@@ -258,6 +258,26 @@ func TestService_ListCharacters_Pagination(t *testing.T) {
 	}
 	if len(page) != 1 || page[0].ID != 3 {
 		t.Errorf("page(2,2) = %+v, want id [3]", page)
+	}
+}
+
+func TestService_ListCharacters_Filter(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 1, Name: "Feed How", World: "Louisoix", Race: "Au Ra", FirstSeenAt: now}, nil)
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 2, Name: "Ninto Thegen", World: "Louisoix", Race: "Miqo'te", FirstSeenAt: now}, nil)
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 3, Name: "Ahribella White", World: "Zodiark", Race: "Miqo'te", FirstSeenAt: now}, nil)
+
+	page, total, err := svc.ListCharacters(ctx, contract.CharacterFilter{World: "Louisoix"}, 10, 0)
+	if err != nil {
+		t.Fatalf("ListCharacters: %v", err)
+	}
+	if total != 2 || len(page) != 2 {
+		t.Fatalf("total = %d, len = %d, want 2", total, len(page))
+	}
+	if page[0].ID != 1 || page[1].ID != 2 {
+		t.Errorf("got ids [%d, %d], want [1, 2]", page[0].ID, page[1].ID)
 	}
 }
 

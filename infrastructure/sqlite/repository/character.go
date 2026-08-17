@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -186,11 +187,42 @@ func (r *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 // column name is interpolated directly into SQL, so anything else is rejected.
 var breakdownColumns = map[string]bool{"race": true, "world": true, "datacenter": true, "region": true}
 
-// List returns up to limit non-deleted characters ordered by id, starting at offset.
-func (r *CharacterRepository) List(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, error) {
-	rows, err := r.driver.FetchMany(ctx,
-		`SELECT `+characterColumns+` FROM characters WHERE deleted_at IS NULL ORDER BY id LIMIT ? OFFSET ?`,
-		limit, offset)
+// characterFilterWhere returns the additional " AND ..." conditions for a
+// filter, plus their args. Returns "" (and nil args) when the filter is empty.
+func characterFilterWhere(f contract.CharacterFilter) (string, []any) {
+	var conds []string
+	var args []any
+	if f.World != "" {
+		conds = append(conds, "world = ?")
+		args = append(args, f.World)
+	}
+	if f.Datacenter != "" {
+		conds = append(conds, "datacenter = ?")
+		args = append(args, f.Datacenter)
+	}
+	if f.Region != "" {
+		conds = append(conds, "region = ?")
+		args = append(args, f.Region)
+	}
+	if f.Race != "" {
+		conds = append(conds, "race = ?")
+		args = append(args, f.Race)
+	}
+	if f.Name != "" {
+		conds = append(conds, "name LIKE ?")
+		args = append(args, "%"+f.Name+"%")
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " AND " + strings.Join(conds, " AND "), args
+}
+
+func (r *CharacterRepository) List(ctx context.Context, f contract.CharacterFilter, limit, offset int) ([]contract.CharacterRecord, error) {
+	conds, args := characterFilterWhere(f)
+	q := `SELECT ` + characterColumns + ` FROM characters WHERE deleted_at IS NULL` + conds + ` ORDER BY id LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	rows, err := r.driver.FetchMany(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,9 +238,9 @@ func (r *CharacterRepository) List(ctx context.Context, limit, offset int) ([]co
 	return out, rows.Err()
 }
 
-// Count returns the number of non-deleted characters.
-func (r *CharacterRepository) Count(ctx context.Context) (int64, error) {
-	row, err := r.driver.FetchOne(ctx, `SELECT COUNT(*) FROM characters WHERE deleted_at IS NULL`)
+func (r *CharacterRepository) Count(ctx context.Context, f contract.CharacterFilter) (int64, error) {
+	conds, args := characterFilterWhere(f)
+	row, err := r.driver.FetchOne(ctx, `SELECT COUNT(*) FROM characters WHERE deleted_at IS NULL`+conds, args...)
 	if err != nil {
 		return 0, err
 	}

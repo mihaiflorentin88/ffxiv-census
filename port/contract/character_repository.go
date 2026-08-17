@@ -5,6 +5,17 @@ import (
 	"time"
 )
 
+// CharacterFilter is an optional AND-combined filter for List/Count. Empty
+// fields are ignored. World/Datacenter/Region/Race match exactly; Name is a
+// case-insensitive substring match.
+type CharacterFilter struct {
+	World      string
+	Datacenter string
+	Region     string
+	Race       string
+	Name       string
+}
+
 // CharacterRepository persists character snapshots and their job levels.
 type CharacterRepository interface {
 	// Upsert replaces the character row and its jobs in one transaction.
@@ -25,11 +36,11 @@ type CharacterRepository interface {
 	// ListStale returns up to limit characters whose last_census_at is before
 	// cutoff (NULL last_census_at counts as stale), ordered oldest-first.
 	ListStale(ctx context.Context, cutoff time.Time, limit int) ([]CharacterRecord, error)
-	// List returns up to limit non-deleted characters ordered by id, starting
-	// at offset (pagination for the REST API).
-	List(ctx context.Context, limit, offset int) ([]CharacterRecord, error)
-	// Count returns the number of non-deleted characters.
-	Count(ctx context.Context) (int64, error)
+	// List returns up to limit non-deleted characters matching filter,
+	// ordered by id, starting at offset (pagination for the REST API).
+	List(ctx context.Context, filter CharacterFilter, limit, offset int) ([]CharacterRecord, error)
+	// Count returns the number of non-deleted characters matching filter.
+	Count(ctx context.Context, filter CharacterFilter) (int64, error)
 	// CountActive returns the number of non-deleted characters whose
 	// latest_achievement_at is at or after since.
 	CountActive(ctx context.Context, since time.Time) (int64, error)

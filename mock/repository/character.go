@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,11 +159,30 @@ func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 	return stale, nil
 }
 
-// List mirrors the SQL: non-deleted rows ordered by id, limited/offset.
+func matchesFilter(rec contract.CharacterRecord, f contract.CharacterFilter) bool {
+	if f.World != "" && rec.World != f.World {
+		return false
+	}
+	if f.Datacenter != "" && rec.Datacenter != f.Datacenter {
+		return false
+	}
+	if f.Region != "" && rec.Region != f.Region {
+		return false
+	}
+	if f.Race != "" && rec.Race != f.Race {
+		return false
+	}
+	if f.Name != "" && !strings.Contains(strings.ToLower(rec.Name), strings.ToLower(f.Name)) {
+		return false
+	}
+	return true
+}
+
+// List mirrors the SQL: non-deleted rows matching filter ordered by id, limited/offset.
 // SQLite LIMIT semantics: LIMIT 0 -> zero rows (offset is irrelevant),
 // negative LIMIT -> unlimited, positive -> cap. Negative OFFSET is treated
 // as 0 by SQLite.
-func (f *CharacterRepository) List(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, error) {
+func (f *CharacterRepository) List(ctx context.Context, filter contract.CharacterFilter, limit, offset int) ([]contract.CharacterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ListErr != nil {
@@ -173,7 +193,7 @@ func (f *CharacterRepository) List(ctx context.Context, limit, offset int) ([]co
 	}
 	var out []contract.CharacterRecord
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil {
+		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
 			continue
 		}
 		out = append(out, cloneCharacter(rec))
@@ -192,8 +212,8 @@ func (f *CharacterRepository) List(ctx context.Context, limit, offset int) ([]co
 	return out, nil
 }
 
-// Count mirrors SELECT COUNT(*) WHERE deleted_at IS NULL.
-func (f *CharacterRepository) Count(ctx context.Context) (int64, error) {
+// Count mirrors SELECT COUNT(*) WHERE deleted_at IS NULL AND filter.
+func (f *CharacterRepository) Count(ctx context.Context, filter contract.CharacterFilter) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CountErr != nil {
@@ -201,7 +221,7 @@ func (f *CharacterRepository) Count(ctx context.Context) (int64, error) {
 	}
 	var n int64
 	for _, rec := range f.characters {
-		if rec.DeletedAt == nil {
+		if rec.DeletedAt == nil && matchesFilter(rec, filter) {
 			n++
 		}
 	}

@@ -235,7 +235,7 @@ type CharacterDetail struct {
 // Summary returns the total number of non-deleted characters and how many of
 // them are active (latest achievement within the activity window).
 func (s *Service) Summary(ctx context.Context) (total, active int64, err error) {
-	total, err = s.characters.Count(ctx)
+	total, err = s.characters.Count(ctx, contract.CharacterFilter{})
 	if err != nil {
 		return 0, 0, err
 	}
@@ -246,14 +246,14 @@ func (s *Service) Summary(ctx context.Context) (total, active int64, err error) 
 	return total, active, nil
 }
 
-// ListCharacters returns one page of non-deleted characters (ordered by id,
-// limited/offset) plus the total non-deleted count for pagination.
-func (s *Service) ListCharacters(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, int64, error) {
-	chars, err := s.characters.List(ctx, limit, offset)
+// ListCharacters returns one page of non-deleted characters matching filter
+// (ordered by id, limited/offset) plus the matching count for pagination.
+func (s *Service) ListCharacters(ctx context.Context, f contract.CharacterFilter, limit, offset int) ([]contract.CharacterRecord, int64, error) {
+	chars, err := s.characters.List(ctx, f, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := s.characters.Count(ctx)
+	total, err := s.characters.Count(ctx, f)
 	if err != nil {
 		return nil, 0, err
 	}

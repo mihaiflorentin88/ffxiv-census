@@ -56,7 +56,7 @@ The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/late
 |---|---|---|---|---|
 | GET | `/health` | — | `{"status": "ok"}` | — |
 | GET | `/api/v1/census/latest` | — | `CensusSummary` | 500 |
-| GET | `/api/v1/census/characters` | `limit` (int, default 100, max 500), `offset` (int, default 0) | `PaginatedCharacters` | 400 (invalid `limit`/`offset`), 500 |
+| GET | `/api/v1/census/characters` | `limit` (int, default 100, max 500), `offset` (int, default 0), `world` (string), `datacenter` (string), `region` (string), `race` (string), `name` (string) | `PaginatedCharacters` | 400 (invalid `limit`/`offset`), 500 |
 | GET | `/api/v1/census/characters/{id}` | `id` (path, uint32 Lodestone character id) | `CharacterDetail` | 400 (invalid id), 404 (not found), 500 |
 | GET | `/api/v1/stats/breakdown` | `by` (required, `race`\|`world`\|`datacenter`\|`region`) | `[BreakdownGroup]` | 400 (missing/unknown `by`), 500 |
 | GET | `/api/v1/stats/new-characters` | `since` (required, `YYYY-MM-DD`), `until` (optional, `YYYY-MM-DD`, default now) | `[NewCharactersDay]` | 400 (missing/invalid `since`/`until`), 500 |
@@ -85,8 +85,7 @@ Total and active character counts plus the active ratio (`active / total`; `0` w
 
 ### GET /api/v1/census/characters
 
-One page of characters. `limit` defaults to 100 and is clamped to 500; `offset` defaults to 0. Missing/empty parameters fall back to the defaults; non-numeric or negative values are rejected with 400.
-
+One page of characters. Supports optional AND-combined filters: `world`, `datacenter`, `region`, `race` (exact match), and `name` (case-insensitive substring). `limit` defaults to 100 and is clamped to 500; `offset` defaults to 0. Missing/empty parameters fall back to the defaults (no filter / full list); non-numeric or non-positive `limit` (<= 0) and negative `offset` (< 0) are rejected with 400.
 ```json
 {
   "items": [

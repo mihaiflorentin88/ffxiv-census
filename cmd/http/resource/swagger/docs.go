@@ -71,6 +71,41 @@ const docTemplate = `{
             "type": "integer",
             "default": 0,
             "minimum": 0
+          },
+          {
+            "name": "world",
+            "in": "query",
+            "description": "Filter by exact world (e.g. Louisoix).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "datacenter",
+            "in": "query",
+            "description": "Filter by exact datacenter (e.g. Chaos).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "description": "Filter by exact region (e.g. EU).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "race",
+            "in": "query",
+            "description": "Filter by exact race (e.g. Miqo'te).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by case-insensitive name substring.",
+            "type": "string",
+            "required": false
           }
         ],
         "responses": {

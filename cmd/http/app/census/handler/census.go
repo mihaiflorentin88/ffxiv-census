@@ -77,7 +77,14 @@ func (c *CensusController) List(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 
-	chars, total, err := c.svc.ListCharacters(r.Context(), limit, offset)
+	f := contract.CharacterFilter{
+		World:      query.Get("world"),
+		Datacenter: query.Get("datacenter"),
+		Region:     query.Get("region"),
+		Race:       query.Get("race"),
+		Name:       query.Get("name"),
+	}
+	chars, total, err := c.svc.ListCharacters(r.Context(), f, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

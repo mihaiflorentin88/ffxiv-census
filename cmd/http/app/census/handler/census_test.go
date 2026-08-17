@@ -168,6 +168,51 @@ func TestCensusController_List(t *testing.T) {
 	}
 }
 
+func TestCensusController_List_Filters(t *testing.T) {
+	rig := newRig(t)
+	rig.seed(t, &godestone.Character{ID: 1, Name: "Feed How", World: "Louisoix", DC: "Chaos", Race: &models.GenderedEntity{Name: "Au Ra"}})
+	rig.seed(t, &godestone.Character{ID: 2, Name: "Ninto Thegen", World: "Louisoix", DC: "Chaos", Race: &models.GenderedEntity{Name: "Miqo'te"}})
+	rig.seed(t, &godestone.Character{ID: 3, Name: "Ahribella White", World: "Zodiark", DC: "Light", Race: &models.GenderedEntity{Name: "Miqo'te"}})
+	rig.seed(t, &godestone.Character{ID: 4, Name: "Alpha Test", World: "Ultros", DC: "Primal", Race: &models.GenderedEntity{Name: "Hyur"}})
+
+	tests := []struct {
+		name      string
+		query     string
+		wantIDs   []uint32
+		wantTotal int64
+	}{
+		{name: "filter by world", query: "world=Louisoix", wantIDs: []uint32{1, 2}, wantTotal: 2},
+		{name: "filter by datacenter", query: "datacenter=Chaos", wantIDs: []uint32{1, 2}, wantTotal: 2},
+		{name: "filter by region", query: "region=EU", wantIDs: []uint32{1, 2, 3}, wantTotal: 3},
+		{name: "filter by race", query: "race=Miqo%27te", wantIDs: []uint32{2, 3}, wantTotal: 2},
+		{name: "filter by name substring", query: "name=feed", wantIDs: []uint32{1}, wantTotal: 1},
+		{name: "combined filters", query: "world=Louisoix&race=Miqo%27te", wantIDs: []uint32{2}, wantTotal: 1},
+		{name: "no match", query: "world=Balmung", wantIDs: nil, wantTotal: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doGET(t, rig.c.List, "/api/v1/census/characters"+querySuffix(tt.query))
+			var body response.PaginatedCharacters
+			decodeJSON(t, rec, &body)
+			if body.Total != tt.wantTotal {
+				t.Errorf("total = %d, want %d", body.Total, tt.wantTotal)
+			}
+			var gotIDs []uint32
+			for _, item := range body.Items {
+				gotIDs = append(gotIDs, item.ID)
+			}
+			if len(gotIDs) != len(tt.wantIDs) {
+				t.Fatalf("got ids %v, want %v", gotIDs, tt.wantIDs)
+			}
+			for i := range gotIDs {
+				if gotIDs[i] != tt.wantIDs[i] {
+					t.Fatalf("got ids %v, want %v", gotIDs, tt.wantIDs)
+				}
+			}
+		})
+	}
+}
+
 func TestCensusController_Get(t *testing.T) {
 	rig := newRig(t)
 	now := time.Now().UTC()
