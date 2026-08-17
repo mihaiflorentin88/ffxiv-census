@@ -76,11 +76,15 @@ func TestAchievementRepository_CountExpansions(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	// Character 1 earned Heavensward twice (achievements 1139 and 1000) plus
 	// Stormblood; the duplicate must collapse via COUNT(DISTINCT character_id).
+	// Character 1 also earned the chocobo milestone (590): that join row must be
+	// excluded by the kind='expansion_msq' AND expansion IS NOT NULL filter, or
+	// the counts below break (a third, empty-expansion group appears).
 	// Character 2 earned Heavensward once.
 	if err := repo.UpsertCharacterMilestones(context.Background(), 1, []contract.CharacterMilestone{
 		{CharacterID: 1, AchievementID: 1139, AchievedAt: now},
 		{CharacterID: 1, AchievementID: 1000, AchievedAt: now.Add(-time.Hour)},
 		{CharacterID: 1, AchievementID: 1794, AchievedAt: now.Add(-2 * time.Hour)},
+		{CharacterID: 1, AchievementID: 590, AchievedAt: now.Add(-3 * time.Hour)}, // chocobo, non-expansion
 	}); err != nil {
 		t.Fatalf("UpsertCharacterMilestones(1): %v", err)
 	}

@@ -128,6 +128,8 @@ Full detail for one character. A non-numeric id is a 400 (`{"error": "invalid ch
     "region": "EU",
     "race": "Miqo'te",
     "gender": 1,
+    "free_company_id": "9234567890123456789",
+    "free_company_name": "Example Free Company",
     "achievements_private": false,
     "first_seen_at": "2026-08-17T10:00:00Z",
     "last_census_at": "2026-08-17T10:05:00Z"

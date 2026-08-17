@@ -47,7 +47,7 @@ func (c *CensusController) Latest(w http.ResponseWriter, r *http.Request) {
 // List serves GET /api/v1/census/characters: one page of characters plus the
 // total count. limit defaults to 100 and is clamped to 500; offset defaults
 // to 0. Missing/empty parameters fall back to defaults; non-numeric or
-// negative values are rejected with 400.
+// non-positive values (limit <= 0) are rejected with 400.
 func (c *CensusController) List(w http.ResponseWriter, r *http.Request) {
 	if c.svc == nil {
 		writeError(w, http.StatusInternalServerError, "census service unavailable")
@@ -58,7 +58,7 @@ func (c *CensusController) List(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if raw := query.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
+		if err != nil || n <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid limit")
 			return
 		}

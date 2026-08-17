@@ -128,6 +128,7 @@ func TestCensusController_List(t *testing.T) {
 		{name: "page two", query: "limit=2&offset=2", wantStatus: 200, wantItems: 1, wantTotal: 3, wantLimit: 2, wantOffset: 2},
 		{name: "limit clamped", query: "limit=1000", wantStatus: 200, wantItems: 3, wantTotal: 3, wantLimit: 500, wantOffset: 0},
 		{name: "invalid limit", query: "limit=abc", wantStatus: 400},
+		{name: "zero limit", query: "limit=0", wantStatus: 400},
 		{name: "negative limit", query: "limit=-1", wantStatus: 400},
 		{name: "negative offset", query: "offset=-5", wantStatus: 400},
 	}
@@ -267,16 +268,24 @@ func TestCensusController_Breakdown_InvalidDimension(t *testing.T) {
 
 func TestCensusController_NewCharacters(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &godestone.Character{ID: 1, Name: "A", World: "Ultros", DC: "Primal"})
+	// Seed the fake directly with a fixed FirstSeenAt so the expected UTC day
+	// is deterministic — UpsertCharacter would stamp time.Now() internally,
+	// which flakes across a UTC-midnight crossing. The handler and service
+	// path (NewCharacters -> NewPerDay) is still fully exercised.
+	if err := rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 1, Name: "A", World: "Ultros", Datacenter: "Primal", Region: "NA",
+		FirstSeenAt: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	}, nil); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
 
 	var days []response.NewCharactersDay
-	decodeJSON(t, doGET(t, rig.c.NewCharacters, "/api/v1/stats/new-characters?since=2020-01-01"), &days)
+	decodeJSON(t, doGET(t, rig.c.NewCharacters, "/api/v1/stats/new-characters?since=2026-08-01&until=2026-09-01"), &days)
 	if len(days) != 1 {
-		t.Fatalf("days = %+v, want exactly today's bucket", days)
+		t.Fatalf("days = %+v, want exactly one bucket", days)
 	}
-	wantDay := time.Now().UTC().Format("2006-01-02")
-	if days[0].Day != wantDay || days[0].Count != 1 {
-		t.Errorf("days[0] = %+v, want day %s count 1", days[0], wantDay)
+	if days[0].Day != "2026-08-10" || days[0].Count != 1 {
+		t.Errorf("days[0] = %+v, want day 2026-08-10 count 1", days[0])
 	}
 }
 

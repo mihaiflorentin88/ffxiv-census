@@ -159,11 +159,17 @@ func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 }
 
 // List mirrors the SQL: non-deleted rows ordered by id, limited/offset.
+// SQLite LIMIT semantics: LIMIT 0 -> zero rows (offset is irrelevant),
+// negative LIMIT -> unlimited, positive -> cap. Negative OFFSET is treated
+// as 0 by SQLite.
 func (f *CharacterRepository) List(ctx context.Context, limit, offset int) ([]contract.CharacterRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.ListErr != nil {
 		return nil, f.ListErr
+	}
+	if limit == 0 {
+		return nil, nil
 	}
 	var out []contract.CharacterRecord
 	for _, rec := range f.characters {
