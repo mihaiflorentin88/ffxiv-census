@@ -96,5 +96,5 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 
 ## Not yet implemented (later phases)
 
-- **Ingest handlers** — `id-sweep`, `character-census`, `achievement-census`, `fc-census` consume queue jobs and call `CensusService` + the repositories.
+- **Remaining ingest handlers** — `character-census`, `achievement-census`, `fc-census` (the `id-sweep` handler is implemented; see `docs/events.md`).
 - **Aggregate/stats queries** — population breakdowns (per race/world/DC/region, new-since-date, expansion-completed counts) will be added with the REST API phase.
