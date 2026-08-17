@@ -8,7 +8,7 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 |---|---|---|
 | `id-sweep` | Probe a range of character IDs; ingest any that exist | ✅ implemented |
 | `character-census` | Re-census a known character's profile + jobs | ⏳ next phase |
-| `achievement-census` | Fetch achievements, filter milestones, track latest | ⏳ next phase |
+| `achievement-census` | Fetch achievements, filter milestones, track latest | ✅ implemented |
 | `fc-census` | Fetch a free company + members | ⏳ next phase |
 
 ## Payloads
