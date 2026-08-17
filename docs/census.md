@@ -78,12 +78,19 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 
 ## CensusService
 
-`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the four repositories; the ingest handlers (next phase) call it.
+`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the four repositories; the ingest handlers call it.
 
 - `SyncMilestones(ctx)` — seeds `MilestoneSet` into the DB (idempotent).
 - `UpsertCharacter(ctx, *godestone.Character)` — converts a character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
 - `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones).
-- `IsActive(latestAt)` — true when the latest achievement is within the 30-day activity window.
+- `IsActive(latestAt)` — true when the latest achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`).
+- `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
+- `Summary(ctx)` — total and active character counts (`total, active, err`), where active means the latest achievement is within the activity window.
+- `ListCharacters(ctx, limit, offset)` — one page of characters plus the total non-deleted count (the HTTP pagination source).
+- `CharacterDetail(ctx, id)` — character plus jobs and milestones, with the free company when the character is in one; `nil` when the id is unknown.
+- `Breakdown(ctx, by)` — per-`race`/`world`/`datacenter`/`region` totals and active counts; any other dimension returns `ErrInvalidDimension`.
+- `NewCharacters(ctx, since, until)` — characters first seen per UTC day in `[since, until)`.
+- `ExpansionCompletions(ctx)` — distinct characters per expansion that completed that expansion's MSQ.
 
 **DC→region mapping** (`domain/census/region.go`):
 
@@ -97,4 +104,3 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 ## Not yet implemented (later phases)
 
 - **FC member-list re-census** — `fc-census` upserts FC basic info; chaining `character-census` for stale members is deferred until `FetchFreeCompanyMembers` is exposed by the LodestoneClient contract (see `docs/events.md`).
-- **Aggregate/stats queries** — population breakdowns (per race/world/DC/region, new-since-date, expansion-completed counts) will be added with the REST API phase.
