@@ -98,7 +98,7 @@ SQLITE_PATH=$DB ./bin/ffxiv-census consume id-sweep                             
 |---|---|
 | `SQLITE_PATH` | `[sqlite] path` (default `data/ffxiv-census.db`) |
 | `LOGGING_LEVEL` | `[logging] level` — `info` (default), `debug`, `warn`, `error` |
-| `LODESTONE_RATE_LIMIT` | `[lodestone] rate_limit` (requests/second) |
+| `LODESTONE_RATE_LIMIT` | `[lodestone] rate_limit` (requests/second, capped at 1.0 req/s safety ceiling; 403/404 handled as non-existent) |
 
 Queue/worker/handler progress is logged through the process-wide logger: `Info` for
 lifecycle and per-job completion, `Warn` for retries, `Error` for terminal failures,

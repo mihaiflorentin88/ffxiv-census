@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"testing"
 
+	"golang.org/x/time/rate"
+
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"github.com/xivapi/godestone/v2"
 	"github.com/xivapi/godestone/v2/provider/models"
 )
-
 var errScraper = errors.New("scraper boom")
 
 // fakeScraper implements the unexported scraper seam; each method delegates to
@@ -148,17 +149,35 @@ func TestFetchFreeCompanyAndAchievements(t *testing.T) {
 	}
 }
 
-func TestNewClientRateLimit(t *testing.T) {
-	c, err := newClient(&fakeScraper{}, &config.LodestoneConfig{RateLimit: 2.5, MaxRetries: 1})
-	if err != nil {
-		t.Fatalf("newClient: %v", err)
-	}
-	if got := c.limiter.Limit(); got != 2.5 {
-		t.Errorf("limiter limit = %v, want 2.5", got)
-	}
-	if got := c.limiter.Burst(); got != 1 {
-		t.Errorf("limiter burst = %d, want 1", got)
-	}
+func TestNewClient_ClampsRateToMaxSafe(t *testing.T) {
+	sc := &fakeScraper{}
+	t.Run("above cap clamps", func(t *testing.T) {
+		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 50.0})
+		if err != nil {
+			t.Fatalf("newClient: %v", err)
+		}
+		if got := c.limiter.Limit(); got != rate.Limit(maxSafeRate) {
+			t.Fatalf("limiter rate = %v, want %v (clamped)", got, maxSafeRate)
+		}
+	})
+	t.Run("below cap respected", func(t *testing.T) {
+		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 0.5})
+		if err != nil {
+			t.Fatalf("newClient: %v", err)
+		}
+		if got := c.limiter.Limit(); got != rate.Limit(0.5) {
+			t.Fatalf("limiter rate = %v, want 0.5", got)
+		}
+	})
+	t.Run("zero defaults to cap", func(t *testing.T) {
+		c, err := newClient(sc, &config.LodestoneConfig{RateLimit: 0})
+		if err != nil {
+			t.Fatalf("newClient: %v", err)
+		}
+		if got := c.limiter.Limit(); got != rate.Limit(maxSafeRate) {
+			t.Fatalf("limiter rate = %v, want %v (default)", got, maxSafeRate)
+		}
+	})
 }
 
 func TestNewClientNilChecks(t *testing.T) {
@@ -186,5 +205,21 @@ func TestFetchCharacterNotFound(t *testing.T) {
 	// A 404 is not transient: it must not retry.
 	if sc.charCalls != 1 {
 		t.Errorf("scraper calls = %d, want 1 (404 must not retry)", sc.charCalls)
+	}
+}
+
+func TestClient_FetchCharacter_ForbiddenTreatedAsNotFound(t *testing.T) {
+	sc := &fakeScraper{
+		fetchChar: func(id uint32) (*godestone.Character, error) {
+			return nil, errors.New("fetch character 75: Forbidden")
+		},
+	}
+	c := fastClient(sc, 3)
+	_, err := c.FetchCharacter(context.Background(), 75)
+	if !errors.Is(err, contract.ErrCharacterNotFound) {
+		t.Fatalf("err = %v, want ErrCharacterNotFound", err)
+	}
+	if sc.charCalls != 1 {
+		t.Errorf("scraper calls = %d, want 1 (403 must not retry)", sc.charCalls)
 	}
 }

@@ -95,3 +95,31 @@ func TestIDSweep_InvalidRange(t *testing.T) {
 		t.Fatal("expected error for from > to")
 	}
 }
+
+func TestIDSweep_NotFoundSkipsCharacterWithoutFailingChunk(t *testing.T) {
+	h, ls, chars := newTestIDSweep(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		if id == 75 {
+			// Simulates a 403 Forbidden or 404 Not Found mapped to ErrCharacterNotFound
+			return nil, contract.ErrCharacterNotFound
+		}
+		return &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal"}, nil
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayload(74, 76))
+	if err != nil {
+		t.Fatalf("Handle should succeed when character returns ErrCharacterNotFound: %v", err)
+	}
+	if len(next) != 2 {
+		t.Fatalf("next jobs = %d, want 2 (ids 74 and 76)", len(next))
+	}
+	if got, _ := chars.Get(context.Background(), 75); got != nil {
+		t.Errorf("id 75 should not be upserted (non-existent)")
+	}
+	if got, _ := chars.Get(context.Background(), 74); got == nil {
+		t.Errorf("id 74 should be upserted")
+	}
+	if got, _ := chars.Get(context.Background(), 76); got == nil {
+		t.Errorf("id 76 should be upserted")
+	}
+}

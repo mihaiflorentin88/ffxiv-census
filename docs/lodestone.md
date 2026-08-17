@@ -24,16 +24,16 @@ max_retries = 3
 
 | Field | Default | Purpose |
 | ----- | ------- | ------- |
-| `rate_limit` | `1.0` | Token-bucket fill rate in requests/second; burst is always 1. |
-| `max_retries` | `3` | Retries per call → up to `max_retries + 1` attempts. |
+| `rate_limit` | `1.0` | Token-bucket fill rate in requests/second (capped at `1.0` req/s ceiling to avoid Lodestone Cloudflare IP bans); burst is always 1. |
+| `max_retries` | `3` | Retries per call on transient errors → up to `max_retries + 1` attempts. |
 
-Environment overrides work like the other sections: `LODESTONE_RATE_LIMIT=2.5`, `LODESTONE_MAX_RETRIES=5`.
+Environment overrides work like the other sections: `LODESTONE_RATE_LIMIT=0.5`, `LODESTONE_MAX_RETRIES=5`. Note that rates configured above `1.0` are clamped to `1.0` for safety.
 
 **Limitation:** throttling is per *method call*, not per HTTP request. `FetchCharacter` issues 2 internal requests (profile page + class/job page), so character throughput is up to `2 × rate_limit`. A per-request throttle would require forking godestone — accepted for now.
 
-## Retry policy
+## Error handling & Retry policy
 
-Every scraper error is retried (no 404/403 special-casing at this layer — godestone already converts achievement privacy into `AllAchievementInfo.Private = true` without error; distinguishing 404 from transient failures is a handlers-phase concern). Backoff is exponential: `500 ms · 2^attempt` (500 ms, 1 s, 2 s, …). With the default `max_retries = 3` a call makes up to 4 attempts.
+Non-existent or banned/terminated character profiles (HTTP 404 "Not Found" and HTTP 403 "Forbidden") are immediately recognized as `contract.ErrCharacterNotFound` and are **never retried**. All other scraper errors are treated as transient and retried with exponential backoff: `500 ms · 2^attempt` (500 ms, 1 s, 2 s, …). With the default `max_retries = 3` a call makes up to 4 attempts.
 
 ## Context handling
 

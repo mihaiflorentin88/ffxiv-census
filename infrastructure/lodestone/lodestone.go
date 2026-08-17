@@ -39,6 +39,12 @@ type Client struct {
 	backoffBase time.Duration
 }
 
+// maxSafeRate is the hard ceiling on the Lodestone request rate (method calls
+// per second). Lodestone is Cloudflare-fronted; 1 req/s is the established safe
+// pace for FFXIV tooling. Higher rates risk HTTP 429s and IP bans. The
+// configured rate is clamped to this ceiling.
+const maxSafeRate = 1.0
+
 // NewClient builds the real godestone scraper (bingode provider, EN locale).
 func NewClient(cfg *config.LodestoneConfig) (contract.LodestoneClient, error) {
 	return newClient(godestone.NewScraper(bingode.New(), godestone.EN), cfg)
@@ -53,7 +59,10 @@ func newClient(sc scraper, cfg *config.LodestoneConfig) (*Client, error) {
 	}
 	rps := cfg.RateLimit
 	if rps <= 0 {
-		rps = 1.0
+		rps = maxSafeRate
+	}
+	if rps > maxSafeRate {
+		rps = maxSafeRate
 	}
 	return &Client{
 		scraper:     sc,
@@ -156,9 +165,14 @@ func (c *Client) FetchFreeCompany(ctx context.Context, id string) (*godestone.Fr
 	return nil, fmt.Errorf("fetch free company %s: %w", id, lastErr)
 }
 
-// isNotFound reports whether a godestone scrape error is an HTTP 404. godestone's
-// character collector forwards colly errors verbatim, and colly surfaces a 404 as
-// http.StatusText(404) == "Not Found".
+// isNotFound reports whether a godestone scrape error indicates the resource
+// does not exist on Lodestone (HTTP 404 "Not Found" or HTTP 403 "Forbidden").
+// Lodestone returns 403 for deleted/banned/terminated legacy character profiles.
 func isNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), http.StatusText(http.StatusNotFound))
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, http.StatusText(http.StatusNotFound)) ||
+		strings.Contains(msg, http.StatusText(http.StatusForbidden))
 }
