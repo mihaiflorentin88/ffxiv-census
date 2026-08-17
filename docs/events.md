@@ -7,24 +7,29 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 | Event | Purpose | Status |
 |---|---|---|
 | `id-sweep` | Probe a range of character IDs; ingest any that exist | ✅ implemented |
-| `character-census` | Re-census a known character's profile + jobs | ⏳ next phase |
+| `character-census` | Re-census a known character's profile + jobs | ✅ implemented |
 | `achievement-census` | Fetch achievements, filter milestones, track latest | ✅ implemented |
-| `fc-census` | Fetch a free company + members | ⏳ next phase |
+| `fc-census` | Fetch a free company's basic info | ✅ implemented (member chaining deferred) |
 
 ## Payloads
 
 Queue job payloads are JSON. Types are declared in `domain/census/handler/event.go`.
 
 - **id-sweep**: `{"from": 1, "to": 1000}` — inclusive range of character IDs to probe.
+- **character-census**: `{"character_id": 123}` — a character to re-census.
 - **achievement-census**: `{"character_id": 123}` — a character to run an achievement census on.
+- **fc-census**: `{"fc_id": "9234567890123456789"}` — a free company to census.
 
 ## Chaining
 
 Handlers return the jobs they want published next; the worker persists them atomically with the current job's completion via `Queue.Complete(id, nextJobs...)` (same transaction). This is how downstream work is scheduled without losing atomicity.
 
 - `id-sweep` → `achievement-census` (one per discovered character)
+- `character-census` → `achievement-census` (+ `fc-census` when the character is in a free company)
+- `achievement-census` → (leaf)
+- `fc-census` → (leaf)
 
-Future chains (next phase): `character-census` → `achievement-census` + `fc-census`; `fc-census` → `character-census` (stale members).
+Member-list re-census (`fc-census` → `character-census` for stale members) is deferred until `FetchFreeCompanyMembers` is exposed by the `LodestoneClient` contract.
 
 ## Loop safety
 
@@ -46,6 +51,9 @@ The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an iden
 
 # One-shot publisher (cronjob entrypoint).
 ./bin/ffxiv-census publish id-sweep --from 1 --to 50000000 --chunk-size 100
+
+# Re-census characters not seen in 30 days (recheck cron).
+./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```
 
 `consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` chunks the ID range into `chunk-size`-sized `id-sweep` jobs.

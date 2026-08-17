@@ -96,5 +96,5 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 
 ## Not yet implemented (later phases)
 
-- **Remaining ingest handlers** — `character-census`, `fc-census` (the `id-sweep` and `achievement-census` handlers are implemented; see `docs/events.md`).
+- **FC member-list re-census** — `fc-census` upserts FC basic info; chaining `character-census` for stale members is deferred until `FetchFreeCompanyMembers` is exposed by the LodestoneClient contract (see `docs/events.md`).
 - **Aggregate/stats queries** — population breakdowns (per race/world/DC/region, new-since-date, expansion-completed counts) will be added with the REST API phase.
