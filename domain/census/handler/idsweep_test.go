@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/xivapi/godestone/v2"
@@ -74,5 +75,23 @@ func TestIDSweep_TransientErrorReturnsError(t *testing.T) {
 	}
 	if _, err := h.Handle(context.Background(), idsweepPayload(1, 1)); err == nil {
 		t.Fatal("expected error on transient fetch failure")
+	}
+}
+
+func TestIDSweep_MaxUint32DoesNotOverflow(t *testing.T) {
+	h, ls, _ := newTestIDSweep(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+	// A single ID at MaxUint32 must terminate, not wrap into an infinite loop.
+	if _, err := h.Handle(context.Background(), idsweepPayload(math.MaxUint32, math.MaxUint32)); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestIDSweep_InvalidRange(t *testing.T) {
+	h, _, _ := newTestIDSweep(t)
+	if _, err := h.Handle(context.Background(), idsweepPayload(5, 3)); err == nil {
+		t.Fatal("expected error for from > to")
 	}
 }

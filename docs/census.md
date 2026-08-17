@@ -24,7 +24,7 @@ One row per Lodestone character. `id` is the Lodestone character ID (externally 
 | `last_census_at` | TEXT (nullable) | NULL until a full census has run |
 | `deleted_at` | TEXT (nullable) | set when Lodestone returns 404 (character gone) |
 
-**Discovery stub convention:** the `id-sweep` (a later phase) inserts a stub row with `name = ''` and `last_census_at = NULL` to mark that an ID exists. A full `character-census` later fills in the profile and sets `last_census_at`. `ListStale` treats NULL `last_census_at` as stale.
+**Discovery:** the `id-sweep` handler ingests a discovered character fully (profile + jobs) in one `UpsertCharacter` call, since godestone's `FetchCharacter` already returns the complete profile. `last_census_at` is set by the upsert; `latest_achievement_at` stays NULL until the achievement census runs. `ListStale` treats NULL `last_census_at` as stale.
 
 ### `character_jobs`
 

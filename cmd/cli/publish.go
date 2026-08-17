@@ -31,13 +31,17 @@ var publishIDSweepCmd = &cobra.Command{
 		}
 
 		var jobs []contract.QueueJob
-		for start := from; start <= to; start += chunkSize {
+		for start := from; start <= to; {
 			end := start + chunkSize - 1
-			if end > to {
-				end = to
+			if end > to || end < start {
+				end = to // last chunk, or uint32 overflow guard
 			}
 			b, _ := json.Marshal(handler.IDSweepPayload{From: start, To: end})
 			jobs = append(jobs, contract.QueueJob{Type: handler.EventIDSweep, Payload: b})
+			if end == to {
+				break
+			}
+			start = end + 1
 		}
 
 		q := container.Load.Queue()

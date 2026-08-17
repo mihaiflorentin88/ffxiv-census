@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,7 +24,11 @@ var consumeCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		w := worker.New(container.Load.Queue(), container.Load.Handlers())
+		q := container.Load.Queue()
+		if q == nil {
+			return fmt.Errorf("queue not initialised")
+		}
+		w := worker.New(q, container.Load.Handlers())
 		return w.Run(ctx, eventType, concurrency)
 	},
 }

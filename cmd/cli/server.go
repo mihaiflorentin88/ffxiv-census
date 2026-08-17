@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/spf13/cobra"
 	httpserver "github.com/mihaiflorentin88/ffxiv-census/cmd/http"
 	"github.com/mihaiflorentin88/ffxiv-census/container"
+	"github.com/spf13/cobra"
 )
 
 var httpCmd = &cobra.Command{

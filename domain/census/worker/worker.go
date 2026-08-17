@@ -59,6 +59,9 @@ func (w *Worker) loop(ctx context.Context, eventType string, h handler.Handler) 
 		}
 		jobs, err := w.queue.Claim(ctx, eventType, 1)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil // clean shutdown
+			}
 			return fmt.Errorf("claim %s: %w", eventType, err)
 		}
 		if len(jobs) == 0 {
@@ -73,11 +76,17 @@ func (w *Worker) loop(ctx context.Context, eventType string, h handler.Handler) 
 			next, err := h.Handle(ctx, job.Payload)
 			if err != nil {
 				if rerr := w.queue.Retry(ctx, job.ID); rerr != nil {
+					if ctx.Err() != nil {
+						return nil // clean shutdown
+					}
 					return fmt.Errorf("retry job %d: %w", job.ID, rerr)
 				}
 				continue
 			}
 			if err := w.queue.Complete(ctx, job.ID, next...); err != nil {
+				if ctx.Err() != nil {
+					return nil // clean shutdown
+				}
 				return fmt.Errorf("complete job %d: %w", job.ID, err)
 			}
 		}

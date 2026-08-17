@@ -32,20 +32,25 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return nil, fmt.Errorf("id-sweep payload: %w", err)
 	}
+	if p.From > p.To {
+		return nil, fmt.Errorf("id-sweep range invalid: from %d > to %d", p.From, p.To)
+	}
 
 	var next []contract.QueueJob
-	for id := p.From; id <= p.To; id++ {
+	// Break-based loop (not `id <= p.To`) so id++ never wraps past MaxUint32.
+	for id := p.From; ; id++ {
 		char, err := h.lodestone.FetchCharacter(ctx, id)
-		if errors.Is(err, contract.ErrCharacterNotFound) {
-			continue // doesn't exist
-		}
-		if err != nil {
+		if err == nil {
+			if uerr := h.census.UpsertCharacter(ctx, char); uerr != nil {
+				return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
+			}
+			next = append(next, AchievementCensusJob(id))
+		} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 			return nil, fmt.Errorf("id-sweep fetch %d: %w", id, err)
 		}
-		if err := h.census.UpsertCharacter(ctx, char); err != nil {
-			return nil, fmt.Errorf("id-sweep upsert %d: %w", id, err)
+		if id == p.To {
+			break
 		}
-		next = append(next, AchievementCensusJob(id))
 	}
 	return next, nil
 }
