@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/karashiiro/bingode"
@@ -76,6 +78,9 @@ func (c *Client) FetchCharacter(ctx context.Context, id uint32) (*godestone.Char
 		char, err := c.scraper.FetchCharacter(id)
 		if err == nil {
 			return char, nil
+		}
+		if isNotFound(err) {
+			return nil, contract.ErrCharacterNotFound
 		}
 		lastErr = err
 		if attempt < c.maxRetries {
@@ -149,4 +154,11 @@ func (c *Client) FetchFreeCompany(ctx context.Context, id string) (*godestone.Fr
 		}
 	}
 	return nil, fmt.Errorf("fetch free company %s: %w", id, lastErr)
+}
+
+// isNotFound reports whether a godestone scrape error is an HTTP 404. godestone's
+// character collector forwards colly errors verbatim, and colly surfaces a 404 as
+// http.StatusText(404) == "Not Found".
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), http.StatusText(http.StatusNotFound))
 }

@@ -3,9 +3,11 @@ package lodestone
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"github.com/xivapi/godestone/v2"
 	"github.com/xivapi/godestone/v2/provider/models"
 )
@@ -165,5 +167,24 @@ func TestNewClientNilChecks(t *testing.T) {
 	}
 	if _, err := newClient(&fakeScraper{}, nil); err == nil {
 		t.Error("newClient(sc, nil) expected an error")
+	}
+}
+
+func TestFetchCharacterNotFound(t *testing.T) {
+	sc := &fakeScraper{fetchChar: func(id uint32) (*godestone.Character, error) {
+		return nil, errors.New(http.StatusText(http.StatusNotFound))
+	}}
+	c := fastClient(sc, 3)
+
+	got, err := c.FetchCharacter(context.Background(), 99999999)
+	if got != nil {
+		t.Errorf("character = %v, want nil on 404", got)
+	}
+	if !errors.Is(err, contract.ErrCharacterNotFound) {
+		t.Errorf("error = %v, want ErrCharacterNotFound", err)
+	}
+	// A 404 is not transient: it must not retry.
+	if sc.charCalls != 1 {
+		t.Errorf("scraper calls = %d, want 1 (404 must not retry)", sc.charCalls)
 	}
 }
