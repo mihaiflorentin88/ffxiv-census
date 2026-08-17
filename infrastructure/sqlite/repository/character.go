@@ -382,6 +382,30 @@ func (r *CharacterRepository) List(ctx context.Context, f contract.CharacterFilt
 	return out, rows.Err()
 }
 
+// Stream iterates non-deleted characters matching filter ordered by id, invoking fn for each record.
+func (r *CharacterRepository) Stream(ctx context.Context, f contract.CharacterFilter, fn func(rec contract.CharacterRecord) error) error {
+	conds, args := characterFilterWhere(f)
+	q := `SELECT ` + characterColumns + ` FROM characters WHERE deleted_at IS NULL` + conds + ` ORDER BY id`
+	rows, err := r.driver.FetchMany(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rec, err := scanCharacter(rows)
+		if err != nil {
+			return err
+		}
+		if err := fn(*rec); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func (r *CharacterRepository) Count(ctx context.Context, f contract.CharacterFilter) (int64, error) {
 	conds, args := characterFilterWhere(f)
 	row, err := r.driver.FetchOne(ctx, `SELECT COUNT(*) FROM characters WHERE deleted_at IS NULL`+conds, args...)

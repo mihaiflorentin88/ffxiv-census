@@ -390,6 +390,11 @@ func (s *Service) ListCharacters(ctx context.Context, f contract.CharacterFilter
 	return chars, total, nil
 }
 
+// StreamCharacters streams non-deleted characters matching filter in ID order, invoking fn for each record.
+func (s *Service) StreamCharacters(ctx context.Context, f contract.CharacterFilter, fn func(rec contract.CharacterRecord) error) error {
+	return s.characters.Stream(ctx, f, fn)
+}
+
 // CharacterDetail returns the full profile for one character, or nil (no
 // error) when the id is unknown.
 func (s *Service) CharacterDetail(ctx context.Context, id uint32) (*CharacterDetail, error) {

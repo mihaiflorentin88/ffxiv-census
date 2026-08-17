@@ -45,6 +45,9 @@ type CharacterRepository interface {
 	// List returns up to limit non-deleted characters matching filter,
 	// ordered by id, starting at offset (pagination for the REST API).
 	List(ctx context.Context, filter CharacterFilter, limit, offset int) ([]CharacterRecord, error)
+	// Stream iterates non-deleted characters matching filter ordered by id,
+	// invoking fn for each record. Returning an error from fn halts the stream.
+	Stream(ctx context.Context, filter CharacterFilter, fn func(rec CharacterRecord) error) error
 	// Count returns the number of non-deleted characters matching filter.
 	Count(ctx context.Context, filter CharacterFilter) (int64, error)
 	// CountActive returns the number of non-deleted characters whose

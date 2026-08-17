@@ -17,6 +17,7 @@ func Register(mux *http.ServeMux) {
 	qc := handler.NewQueueController(q)
 	mux.HandleFunc("GET /api/v1/census/latest", c.Latest)
 	mux.HandleFunc("GET /api/v1/census/characters", c.List)
+	mux.HandleFunc("GET /api/v1/census/export", c.Export)
 	mux.HandleFunc("GET /api/v1/census/characters/{id}", c.Get)
 	mux.HandleFunc("GET /api/v1/stats/breakdown", c.Breakdown)
 	mux.HandleFunc("GET /api/v1/stats/new-characters", c.NewCharacters)

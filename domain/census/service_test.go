@@ -78,6 +78,27 @@ func TestService_UpsertCharacter(t *testing.T) {
 	}
 }
 
+func TestService_StreamCharacters(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 1, Name: "Char 1", World: "Ultros", FirstSeenAt: now}, nil)
+	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 2, Name: "Char 2", World: "Leviathan", FirstSeenAt: now}, nil)
+
+	var streamed []uint32
+	err := svc.StreamCharacters(ctx, contract.CharacterFilter{World: "Ultros"}, func(rec contract.CharacterRecord) error {
+		streamed = append(streamed, rec.ID)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamCharacters: %v", err)
+	}
+	if len(streamed) != 1 || streamed[0] != 1 {
+		t.Fatalf("streamed = %v, want [1]", streamed)
+	}
+}
+
 func TestService_UpsertCharacter_NilSafe(t *testing.T) {
 	svc, _ := newTestService(t)
 	// Minimal character with nil race/tribe/grand company must not panic.

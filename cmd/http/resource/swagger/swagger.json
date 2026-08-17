@@ -43,6 +43,81 @@
         }
       }
     },
+    "/api/v1/census/export": {
+      "get": {
+        "summary": "Export characters",
+        "description": "Stream bulk census character records in CSV, JSON, or NDJSON format with optional gzip compression.",
+        "produces": [
+          "text/csv",
+          "application/json",
+          "application/x-ndjson"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Export format (csv, json, ndjson, or jsonl).",
+            "type": "string",
+            "default": "csv",
+            "enum": ["csv", "json", "ndjson", "jsonl"]
+          },
+          {
+            "name": "gzip",
+            "in": "query",
+            "description": "Whether to compress the stream with gzip.",
+            "type": "boolean",
+            "default": false
+          },
+          {
+            "name": "world",
+            "in": "query",
+            "description": "Filter by home world.",
+            "type": "string"
+          },
+          {
+            "name": "datacenter",
+            "in": "query",
+            "description": "Filter by logical datacenter.",
+            "type": "string"
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "description": "Filter by regional datacenter grouping (NA, EU, JP, OC).",
+            "type": "string"
+          },
+          {
+            "name": "race",
+            "in": "query",
+            "description": "Filter by character race.",
+            "type": "string"
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Case-insensitive character name substring filter.",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Streamed character records export"
+          },
+          "400": {
+            "description": "Bad request (invalid format)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
     "/api/v1/census/characters": {
       "get": {
         "summary": "List characters",

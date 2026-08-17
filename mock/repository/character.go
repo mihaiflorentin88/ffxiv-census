@@ -29,6 +29,7 @@ type CharacterRepository struct {
 	UpdateErr       error
 	ListStaleErr    error
 	ListErr         error
+	StreamErr       error
 	CountErr        error
 	CountActiveErr  error
 	BreakdownErr    error
@@ -284,6 +285,32 @@ func (f *CharacterRepository) List(ctx context.Context, filter contract.Characte
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// Stream mirrors the streaming behavior: iterates non-deleted characters matching filter in ID order, invoking fn.
+func (f *CharacterRepository) Stream(ctx context.Context, filter contract.CharacterFilter, fn func(rec contract.CharacterRecord) error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.StreamErr != nil {
+		return f.StreamErr
+	}
+	var out []contract.CharacterRecord
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
+			continue
+		}
+		out = append(out, cloneCharacter(rec))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	for _, rec := range out {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(rec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Count mirrors SELECT COUNT(*) WHERE deleted_at IS NULL AND filter.

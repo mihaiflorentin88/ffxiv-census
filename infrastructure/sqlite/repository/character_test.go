@@ -56,6 +56,83 @@ func TestCharacterRepository_UpsertAndGet(t *testing.T) {
 	}
 }
 
+func TestCharacterRepository_Stream(t *testing.T) {
+	repo := newTestCharacterRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	for i := uint32(1); i <= 5; i++ {
+		world := "Ultros"
+		if i%2 == 0 {
+			world = "Leviathan"
+		}
+		rec := contract.CharacterRecord{
+			ID:          i,
+			Name:        fmt.Sprintf("Char %d", i),
+			World:       world,
+			Datacenter:  "Primal",
+			Region:      "NA",
+			Race:        "Hyur",
+			Gender:      1,
+			FirstSeenAt: now,
+		}
+		if err := repo.Upsert(ctx, rec, nil); err != nil {
+			t.Fatalf("Upsert(%d): %v", i, err)
+		}
+	}
+
+	// Test streaming all characters
+	var streamed []contract.CharacterRecord
+	err := repo.Stream(ctx, contract.CharacterFilter{}, func(rec contract.CharacterRecord) error {
+		streamed = append(streamed, rec)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(streamed) != 5 {
+		t.Fatalf("got %d records, want 5", len(streamed))
+	}
+	for i, rec := range streamed {
+		if rec.ID != uint32(i+1) {
+			t.Errorf("streamed[%d].ID = %d, want %d", i, rec.ID, i+1)
+		}
+	}
+
+	// Test streaming with filter
+	var filtered []contract.CharacterRecord
+	err = repo.Stream(ctx, contract.CharacterFilter{World: "Leviathan"}, func(rec contract.CharacterRecord) error {
+		filtered = append(filtered, rec)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream filtered: %v", err)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("got %d filtered records, want 2", len(filtered))
+	}
+	if filtered[0].ID != 2 || filtered[1].ID != 4 {
+		t.Errorf("filtered IDs = [%d, %d], want [2, 4]", filtered[0].ID, filtered[1].ID)
+	}
+
+	// Test early abort via returned error
+	var count int
+	abortErr := fmt.Errorf("stop early")
+	err = repo.Stream(ctx, contract.CharacterFilter{}, func(rec contract.CharacterRecord) error {
+		count++
+		if count == 2 {
+			return abortErr
+		}
+		return nil
+	})
+	if err != abortErr {
+		t.Fatalf("expected abortErr, got %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+}
+
 func TestCharacterRepository_GetNotFound(t *testing.T) {
 	repo := newTestCharacterRepo(t)
 	got, err := repo.Get(context.Background(), 99999999)

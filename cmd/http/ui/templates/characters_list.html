@@ -35,7 +35,15 @@
             <span>📋</span>
             <span>Character Records</span>
         </h2>
-        <span class="badge badge-gold">{{formatNumber .Data.TotalCount}} Total</span>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span class="badge badge-gold">{{formatNumber .Data.TotalCount}} Total</span>
+            <div style="display: flex; gap: 0.25rem;">
+                <a href="/api/v1/census/export?format=csv{{if .Data.Query}}&name={{.Data.Query}}{{end}}" class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Export as CSV">CSV</a>
+                <a href="/api/v1/census/export?format=json{{if .Data.Query}}&name={{.Data.Query}}{{end}}" class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Export as JSON">JSON</a>
+                <a href="/api/v1/census/export?format=ndjson{{if .Data.Query}}&name={{.Data.Query}}{{end}}" class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Export as NDJSON">NDJSON</a>
+                <a href="/api/v1/census/export?format=csv&gzip=true{{if .Data.Query}}&name={{.Data.Query}}{{end}}" class="btn btn-outline" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Export as Gzipped CSV">CSV.GZ</a>
+            </div>
+        </div>
     </div>
     <div class="panel-body">
         {{if .Data.Characters}}

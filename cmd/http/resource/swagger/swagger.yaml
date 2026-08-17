@@ -28,6 +28,64 @@ paths:
           description: Internal server error
           schema:
             $ref: "#/definitions/Error"
+  /api/v1/census/export:
+    get:
+      summary: Export characters
+      description: Stream bulk census character records in CSV, JSON, or NDJSON format with optional gzip compression.
+      produces:
+        - text/csv
+        - application/json
+        - application/x-ndjson
+      parameters:
+        - name: format
+          in: query
+          description: Export format (csv, json, ndjson, or jsonl).
+          type: string
+          default: csv
+          enum: [csv, json, ndjson, jsonl]
+          required: false
+        - name: gzip
+          in: query
+          description: Whether to compress the stream with gzip.
+          type: boolean
+          default: false
+          required: false
+        - name: world
+          in: query
+          description: Filter by exact world (e.g. Louisoix).
+          type: string
+          required: false
+        - name: datacenter
+          in: query
+          description: Filter by exact datacenter (e.g. Chaos).
+          type: string
+          required: false
+        - name: region
+          in: query
+          description: Filter by exact region (e.g. EU).
+          type: string
+          required: false
+        - name: race
+          in: query
+          description: Filter by exact race (e.g. Miqo'te).
+          type: string
+          required: false
+        - name: name
+          in: query
+          description: Case-insensitive character name substring filter.
+          type: string
+          required: false
+      responses:
+        "200":
+          description: Streamed character records export
+        "400":
+          description: Bad request (invalid format)
+          schema:
+            $ref: "#/definitions/Error"
+        "500":
+          description: Internal server error
+          schema:
+            $ref: "#/definitions/Error"
   /api/v1/census/characters:
     get:
       summary: List characters
