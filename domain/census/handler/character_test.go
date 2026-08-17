@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -77,5 +78,15 @@ func TestCharacterCensus_NotFoundMarksDeleted(t *testing.T) {
 	got, _ := chars.Get(context.Background(), 42)
 	if got.DeletedAt == nil {
 		t.Errorf("character 42 should be marked deleted")
+	}
+}
+
+func TestCharacterCensus_FetchError(t *testing.T) {
+	h, ls, _ := newTestCharacterCensus(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, errors.New("boom")
+	}
+	if _, err := h.Handle(context.Background(), characterPayload(1)); err == nil {
+		t.Fatal("expected error on fetch failure")
 	}
 }

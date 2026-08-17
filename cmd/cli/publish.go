@@ -62,6 +62,9 @@ var publishCharacterCensusCmd = &cobra.Command{
 		if olderThan <= 0 {
 			return fmt.Errorf("--older-than must be positive")
 		}
+		if limit <= 0 {
+			return fmt.Errorf("--limit must be positive")
+		}
 		repo := container.Load.CharacterRepository()
 		if repo == nil {
 			return fmt.Errorf("character repository not initialised")

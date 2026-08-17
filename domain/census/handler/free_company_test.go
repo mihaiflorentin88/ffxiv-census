@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/xivapi/godestone/v2"
@@ -40,5 +41,15 @@ func TestFreeCompanyCensus_Upserts(t *testing.T) {
 	got, _ := fcs.Get(context.Background(), "9234567890123456789")
 	if got == nil || got.Name != "The Scions" || got.MemberCount != 42 {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestFreeCompanyCensus_FetchError(t *testing.T) {
+	h, ls, _ := newTestFCCensus(t)
+	ls.FetchFreeCompanyFunc = func(id string) (*godestone.FreeCompany, error) {
+		return nil, errors.New("boom")
+	}
+	if _, err := h.Handle(context.Background(), fcPayload("9234567890123456789")); err == nil {
+		t.Fatal("expected error on fetch failure")
 	}
 }

@@ -30,7 +30,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	char, err := h.lodestone.FetchCharacter(ctx, p.CharacterID)
 	if errors.Is(err, contract.ErrCharacterNotFound) {
 		if derr := h.census.MarkCharacterDeleted(ctx, p.CharacterID, time.Now().UTC()); derr != nil {
-			return nil, derr
+			return nil, fmt.Errorf("character-census mark-deleted %d: %w", p.CharacterID, derr)
 		}
 		return nil, nil // deleted: no chained jobs
 	}
@@ -40,7 +40,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	if err := h.census.UpsertCharacter(ctx, char); err != nil {
 		return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, err)
 	}
-	next := []contract.QueueJob{AchievementCensusJob(p.CharacterID)}
+	next := []contract.QueueJob{AchievementCensusJob(char.ID)}
 	if char.FreeCompanyID != "" {
 		next = append(next, FreeCompanyCensusJob(char.FreeCompanyID))
 	}
