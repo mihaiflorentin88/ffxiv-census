@@ -18,6 +18,7 @@ import (
 type InfrastructureContainer struct {
 	httpClient            contract.HTTPClient
 	statsd                contract.StatsdClient
+	prometheusRegistry    *metrics.Registry
 	sqliteDriver          contract.SQLiteDriver
 	queue                 contract.Queue
 	lodestoneClient       contract.LodestoneClient
@@ -59,6 +60,14 @@ func (s *ServiceContainer) Statsd() contract.StatsdClient {
 	}
 	s.infrastructure.statsd = client
 	return client
+}
+func (s *ServiceContainer) PrometheusRegistry() *metrics.Registry {
+	if s.infrastructure.prometheusRegistry != nil {
+		return s.infrastructure.prometheusRegistry
+	}
+	reg := metrics.NewRegistry()
+	s.infrastructure.prometheusRegistry = reg
+	return reg
 }
 
 func (s *ServiceContainer) SQLite() contract.SQLiteDriver {

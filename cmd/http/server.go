@@ -97,10 +97,8 @@ func initLoggingMiddleware(mw *middleware.Middleware) {
 }
 func initMetricsMiddleWare(mw *middleware.Middleware) {
 	statsd := container.Load.Statsd()
-	if statsd == nil {
-		return
-	}
-	mw.Register(middleware.Metrics(statsd))
+	registry := container.Load.PrometheusRegistry()
+	mw.Register(middleware.MetricsWithRegistry(statsd, registry))
 }
 
 func startPprofServer() {

@@ -9,13 +9,58 @@
     "/health": {
       "get": {
         "summary": "Health check",
-        "description": "Returns application status",
+        "description": "Returns application liveness status",
         "produces": [
           "application/json"
         ],
         "responses": {
           "200": {
             "description": "OK"
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "summary": "Liveness probe",
+        "description": "Returns application liveness status and uptime",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness probe",
+        "description": "Performs deep health check on database and queue subsystems",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is ready to receive traffic"
+          },
+          "503": {
+            "description": "Service is unhealthy or dependencies are unreachable"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Prometheus metrics exporter",
+        "description": "Exposes standard Prometheus metrics exposition format (version 0.0.4)",
+        "produces": [
+          "text/plain; version=0.0.4; charset=utf-8"
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text formatted metrics"
           }
         }
       }
