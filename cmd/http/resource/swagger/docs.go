@@ -13,13 +13,58 @@ const docTemplate = `{
     "/health": {
       "get": {
         "summary": "Health check",
-        "description": "Returns application status",
+        "description": "Returns application liveness status",
         "produces": [
           "application/json"
         ],
         "responses": {
           "200": {
             "description": "OK"
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "summary": "Liveness probe",
+        "description": "Returns application liveness status and uptime",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness probe",
+        "description": "Performs deep health check on database and queue subsystems",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is ready to receive traffic"
+          },
+          "503": {
+            "description": "Service is unhealthy or dependencies are unreachable"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Prometheus metrics exporter",
+        "description": "Exposes standard Prometheus metrics exposition format (version 0.0.4)",
+        "produces": [
+          "text/plain; version=0.0.4; charset=utf-8"
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text formatted metrics"
           }
         }
       }
@@ -43,8 +88,117 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/census/export": {
+      "get": {
+        "summary": "Export characters",
+        "description": "Stream bulk census character records in CSV, JSON, or NDJSON format with optional gzip compression.",
+        "produces": [
+          "text/csv",
+          "application/json",
+          "application/x-ndjson"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Export format (csv, json, ndjson, or jsonl).",
+            "type": "string",
+            "default": "csv",
+            "enum": [
+              "csv",
+              "json",
+              "ndjson",
+              "jsonl"
+            ],
+            "required": false
+          },
+          {
+            "name": "gzip",
+            "in": "query",
+            "description": "Whether to compress the stream with gzip.",
+            "type": "boolean",
+            "default": false,
+            "required": false
+          },
+          {
+            "name": "world",
+            "in": "query",
+            "description": "Filter by exact world (e.g. Louisoix).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "datacenter",
+            "in": "query",
+            "description": "Filter by exact datacenter (e.g. Chaos).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "description": "Filter by exact region (e.g. EU).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "race",
+            "in": "query",
+            "description": "Filter by exact race (e.g. Miqo'te).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Case-insensitive character name substring filter.",
+            "type": "string",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Streamed character records export"
+          },
+          "400": {
+            "description": "Bad request (invalid format)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/census/characters": {
@@ -106,6 +260,54 @@ const docTemplate = `{
             "description": "Filter by case-insensitive name substring.",
             "type": "string",
             "required": false
+          },
+          {
+            "name": "grand_company",
+            "in": "query",
+            "description": "Filter by exact Grand Company (e.g. Maelstrom).",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "free_company_id",
+            "in": "query",
+            "description": "Filter by exact Free Company ID.",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "Filter for active characters only.",
+            "type": "boolean",
+            "required": false
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "description": "Sort column (id, name, world, created_at, updated_at).",
+            "type": "string",
+            "enum": [
+              "id",
+              "name",
+              "world",
+              "created_at",
+              "updated_at"
+            ],
+            "default": "id",
+            "required": false
+          },
+          {
+            "name": "sort_order",
+            "in": "query",
+            "description": "Sort direction (asc, desc).",
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc",
+            "required": false
           }
         ],
         "responses": {
@@ -126,8 +328,174 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/census/free-companies": {
+      "get": {
+        "summary": "List Free Companies",
+        "description": "Paginated list of Free Companies (guilds).",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return (clamped to 500).",
+            "type": "integer",
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Number of items to skip.",
+            "type": "integer",
+            "default": 0,
+            "minimum": 0
+          },
+          {
+            "name": "world",
+            "in": "query",
+            "description": "Filter by exact world.",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "datacenter",
+            "in": "query",
+            "description": "Filter by exact datacenter.",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by case-insensitive name substring.",
+            "type": "string",
+            "required": false
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "description": "Sort column (member_count, name, world, formed).",
+            "type": "string",
+            "enum": [
+              "member_count",
+              "name",
+              "world",
+              "formed"
+            ],
+            "default": "member_count",
+            "required": false
+          },
+          {
+            "name": "sort_order",
+            "in": "query",
+            "description": "Sort direction (asc, desc).",
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated Free Company list",
+            "schema": {
+              "$ref": "#/definitions/PaginatedFreeCompanies"
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/census/free-companies/{id}": {
+      "get": {
+        "summary": "Free Company detail",
+        "description": "Detail for one Free Company.",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Lodestone Free Company ID.",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Free Company detail",
+            "schema": {
+              "$ref": "#/definitions/FreeCompanyDetail"
+            }
+          },
+          "404": {
+            "description": "Free Company not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/census/characters/{id}": {
@@ -165,8 +533,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/stats/breakdown": {
@@ -212,8 +591,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/stats/new-characters": {
@@ -262,8 +652,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/stats/expansion": {
@@ -297,8 +698,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/queue": {
@@ -323,8 +735,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/queue/events": {
@@ -361,8 +784,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/queue/retry-failed": {
@@ -401,8 +835,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/queue/purge": {
@@ -446,8 +891,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/queue/jobs": {
@@ -513,8 +969,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     },
     "/api/v1/queue/jobs/{id}": {
@@ -558,8 +1025,19 @@ const docTemplate = `{
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
       }
     }
   },
@@ -1082,9 +1560,6 @@ const docTemplate = `{
           "type": "integer",
           "format": "int32"
         },
-        "last_error": {
-          "type": "string"
-        },
         "claimed_at": {
           "type": "string",
           "format": "date-time"
@@ -1093,15 +1568,91 @@ const docTemplate = `{
           "type": "string",
           "format": "date-time"
         },
+        "last_error": {
+          "type": "string"
+        },
         "failed_at": {
           "type": "string",
           "format": "date-time"
         },
         "completed_at": {
+          "type": "string"
+        }
+      }
+    },
+    "PaginatedFreeCompanies": {
+      "type": "object",
+      "required": [
+        "items",
+        "total",
+        "limit",
+        "offset"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FreeCompanyListItem"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "limit": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "FreeCompanyListItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "world",
+        "datacenter",
+        "member_count",
+        "last_seen_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "world": {
+          "type": "string"
+        },
+        "datacenter": {
+          "type": "string"
+        },
+        "member_count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "formed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_seen_at": {
           "type": "string",
           "format": "date-time"
         }
       }
+    }
+  },
+  "securityDefinitions": {
+    "BearerAuth": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header",
+      "description": "Enter 'Bearer <token>'"
     }
   }
 }`

@@ -3,6 +3,12 @@ info:
   title: ffxiv-census API
   description: "REST API for the ffxiv-census service: census summaries, character listings and details, aggregate statistics, and queue status."
   version: "1.0"
+securityDefinitions:
+  BearerAuth:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: "Enter 'Bearer <token>'"
 paths:
   /health:
     get:
@@ -43,11 +49,16 @@ paths:
         "200":
           description: Prometheus text formatted metrics
   /api/v1/census/latest:
+    get:
       summary: Census summary
       description: Total and active character counts with the active ratio over the configured activity window.
       produces:
         - application/json
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Census population summary
           schema:
@@ -56,8 +67,12 @@ paths:
           description: Internal server error
           schema:
             $ref: "#/definitions/Error"
+      security:
+        - BearerAuth: []
   /api/v1/census/export:
     get:
+      security:
+        - BearerAuth: []
       summary: Export characters
       description: Stream bulk census character records in CSV, JSON, or NDJSON format with optional gzip compression.
       produces:
@@ -104,6 +119,10 @@ paths:
           type: string
           required: false
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Streamed character records export
         "400":
@@ -116,6 +135,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/census/characters:
     get:
+      security:
+        - BearerAuth: []
       summary: List characters
       description: Paginated list of census characters ordered by id.
       produces:
@@ -189,6 +210,10 @@ paths:
           default: asc
           required: false
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Paginated character list
           schema:
@@ -203,6 +228,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/census/free-companies:
     get:
+      security:
+        - BearerAuth: []
       summary: List Free Companies
       description: Paginated list of Free Companies (guilds).
       produces:
@@ -251,6 +278,10 @@ paths:
           default: desc
           required: false
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Paginated Free Company list
           schema:
@@ -265,6 +296,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/census/free-companies/{id}:
     get:
+      security:
+        - BearerAuth: []
       summary: Free Company detail
       description: Detail for one Free Company.
       produces:
@@ -276,6 +309,10 @@ paths:
           required: true
           type: string
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Free Company detail
           schema:
@@ -290,6 +327,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/census/characters/{id}:
     get:
+      security:
+        - BearerAuth: []
       summary: Character detail
       description: "Full census record for one character: profile, class jobs, milestones, and free company."
       produces:
@@ -302,6 +341,10 @@ paths:
           type: integer
           format: int64
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Character detail
           schema:
@@ -316,6 +359,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/stats/breakdown:
     get:
+      security:
+        - BearerAuth: []
       summary: Population breakdown
       description: Total and active character counts grouped by a census dimension.
       produces:
@@ -332,6 +377,10 @@ paths:
             - datacenter
             - region
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Per-group total and active counts, ordered by total descending
           schema:
@@ -348,6 +397,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/stats/new-characters:
     get:
+      security:
+        - BearerAuth: []
       summary: New characters per day
       description: Daily counts of newly seen characters in the given range.
       produces:
@@ -366,6 +417,10 @@ paths:
           type: string
           format: date
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Per-day counts ordered ascending
           schema:
@@ -382,6 +437,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/stats/expansion:
     get:
+      security:
+        - BearerAuth: []
       summary: Expansion completions
       description: Number of characters who completed each expansion's main scenario quest, optionally filtered by name.
       produces:
@@ -393,6 +450,10 @@ paths:
           required: false
           type: string
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Per-expansion completion counts
           schema:
@@ -405,11 +466,17 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/queue:
     get:
+      security:
+        - BearerAuth: []
       summary: Queue depth
       description: Number of jobs per queue status.
       produces:
         - application/json
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Queue depth by status
           schema:
@@ -422,6 +489,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/queue/events:
     get:
+      security:
+        - BearerAuth: []
       summary: Queue event types
       description: Supported event types, descriptions, and live breakdown by status.
       produces:
@@ -436,6 +505,10 @@ paths:
           minimum: 1
           required: false
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Queue event types summary
           schema:
@@ -448,6 +521,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/queue/retry-failed:
     post:
+      security:
+        - BearerAuth: []
       summary: Retry failed queue jobs
       description: Replays dead-letter failed jobs back to pending status for retry.
       produces:
@@ -465,6 +540,10 @@ paths:
           default: 100
           required: false
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Retry failed jobs response
           schema:
@@ -475,6 +554,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/queue/purge:
     post:
+      security:
+        - BearerAuth: []
       summary: Purge completed or failed queue jobs
       description: Purges jobs matching status older than the specified duration.
       produces:
@@ -491,6 +572,10 @@ paths:
           type: string
           required: false
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Purge response
           schema:
@@ -505,6 +590,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/queue/jobs:
     get:
+      security:
+        - BearerAuth: []
       summary: List queue jobs
       description: Paginated list of queue jobs filtered by event type and/or status.
       produces:
@@ -538,6 +625,10 @@ paths:
           type: integer
           default: 0
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Paginated list of queue jobs
           schema:
@@ -552,6 +643,8 @@ paths:
             $ref: "#/definitions/Error"
   /api/v1/queue/jobs/{id}:
     get:
+      security:
+        - BearerAuth: []
       summary: Get queue job
       description: Fetch a single queue job by ID with its payload and metadata.
       produces:
@@ -564,6 +657,10 @@ paths:
           type: integer
           format: int64
       responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/Error"
         "200":
           description: Queue job detail
           schema:
