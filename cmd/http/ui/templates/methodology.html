@@ -22,15 +22,9 @@
             <p style="margin-bottom: 1rem;">
                 The <strong style="color: var(--text-main);">FFXIV Census</strong> operates by indexing public character profiles from the official Square Enix <em>Final Fantasy XIV Lodestone</em> service and community APIs like <em>Tomestone</em>. 
             </p>
-            <p style="margin-bottom: 1rem;">
+            <p style="margin-bottom: 0;">
                 Character discovery runs via distributed, rate-limited background workers designed to scan ID sequences, detect new player registrations, and periodically refresh existing character profiles. All requests adhere to strict rate limiting and polite backoff policies to avoid impacting official infrastructure.
             </p>
-            <div style="background: var(--bg-elevated); border-left: 3px solid var(--cyan); padding: 1rem 1.25rem; border-radius: var(--radius-sm); margin-top: 1.25rem;">
-                <strong style="color: var(--cyan); display: block; margin-bottom: 0.25rem;">Privacy &amp; Aggregates</strong>
-                <p style="font-size: 0.92rem; margin: 0;">
-                    To protect player privacy, individual character lookup directories and Free Company membership search interfaces are not exposed publicly. The census focuses exclusively on macro-level demographic trends, world distributions, race statistics, and global progression curves.
-                </p>
-            </div>
         </div>
     </div>
 
