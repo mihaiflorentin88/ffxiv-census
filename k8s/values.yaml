@@ -36,6 +36,13 @@ vault:
   version: v2
   server: http://vault.default.svc.cluster.local:8200
 
+serviceMonitor:
+  enabled: true
+  release: monitoring
+  interval: 15s
+  scrapeTimeout: 10s
+  path: /metrics
+
 components:
   webserver:
     enabled: true
