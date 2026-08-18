@@ -95,7 +95,7 @@ func (s *Service) UploadToGDrive(ctx context.Context, filePath string, cfg *Conf
 		driveFile.Parents = []string{folderID}
 	}
 
-	res, err := srv.Files.Create(driveFile).Media(f).Context(ctx).Do()
+	res, err := srv.Files.Create(driveFile).Media(f).SupportsAllDrives(true).Context(ctx).Do()
 	if err != nil {
 		return nil, fmt.Errorf("upload to drive: %w", err)
 	}
