@@ -41,8 +41,10 @@ func (f *Fake) publishLocked(jobs []contract.QueueJob) int {
 	for _, j := range jobs {
 		j.PayloadHash = payloadHash(j.Payload)
 		j.Status = contract.QueueJobPending
-		if j.MaxAttempts <= 0 {
+		if j.MaxAttempts == 0 {
 			j.MaxAttempts = 5
+		} else if j.MaxAttempts < 0 {
+			j.MaxAttempts = 0
 		}
 		if j.CreatedAt.IsZero() {
 			j.CreatedAt = now

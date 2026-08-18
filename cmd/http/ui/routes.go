@@ -37,9 +37,11 @@ func (c *UIController) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/worlds/{world}", c.WorldDetail)
 	mux.HandleFunc("GET /ui/worlds", c.Worlds)
 	mux.HandleFunc("GET /ui/expansions", c.Expansions)
-	mux.HandleFunc("GET /ui/characters/{id}", c.CharacterDetail)
-	mux.HandleFunc("GET /ui/characters", c.CharacterList)
-	mux.HandleFunc("GET /ui/characters/search", c.CharacterSearch)
-	mux.HandleFunc("GET /ui/free-companies/{id}", c.FreeCompanyDetail)
-	mux.HandleFunc("GET /ui/free-companies", c.FreeCompanyList)
+	mux.HandleFunc("GET /ui/methodology", c.Methodology)
+	// Personal info routes are currently disabled to protect player privacy.
+	// mux.HandleFunc("GET /ui/characters/{id}", c.CharacterDetail)
+	// mux.HandleFunc("GET /ui/characters", c.CharacterList)
+	// mux.HandleFunc("GET /ui/characters/search", c.CharacterSearch)
+	// mux.HandleFunc("GET /ui/free-companies/{id}", c.FreeCompanyDetail)
+	// mux.HandleFunc("GET /ui/free-companies", c.FreeCompanyList)
 }

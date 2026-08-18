@@ -386,10 +386,9 @@ func (c *QueueController) Purge(w http.ResponseWriter, r *http.Request) {
 	if req.OlderThan == "" {
 		req.OlderThan = r.URL.Query().Get("older_than")
 	}
-	if req.OlderThan == "" {
+	if req.OlderThan == "" || req.OlderThan == "0" {
 		req.OlderThan = "0s"
 	}
-
 	duration, err := time.ParseDuration(req.OlderThan)
 	if err != nil || duration < 0 {
 		writeError(w, http.StatusBadRequest, "invalid older_than duration format (e.g. 24h, 30m, 0s)")

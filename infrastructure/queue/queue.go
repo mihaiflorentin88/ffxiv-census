@@ -51,8 +51,10 @@ func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) (int, er
 	now := q.now().UTC().Format(timeLayout)
 	var totalInserted int
 	for _, j := range jobs {
-		if j.MaxAttempts <= 0 {
+		if j.MaxAttempts == 0 {
 			j.MaxAttempts = q.cfg.MaxAttempts
+		} else if j.MaxAttempts < 0 {
+			j.MaxAttempts = 0
 		}
 		runAt := now
 		if !j.RunAt.IsZero() {
@@ -510,8 +512,10 @@ ORDER BY type ASC
 func (q *Queue) publishTx(ctx context.Context, tx *sql.Tx, jobs ...contract.QueueJob) error {
 	now := q.now().UTC().Format(timeLayout)
 	for _, j := range jobs {
-		if j.MaxAttempts <= 0 {
+		if j.MaxAttempts == 0 {
 			j.MaxAttempts = q.cfg.MaxAttempts
+		} else if j.MaxAttempts < 0 {
+			j.MaxAttempts = 0
 		}
 		runAt := now
 		if !j.RunAt.IsZero() {

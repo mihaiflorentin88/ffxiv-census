@@ -23,7 +23,7 @@ type AchievementRepository interface {
 	// expansion's MSQ, scoped to the provided filter.
 	CountExpansionsFiltered(ctx context.Context, filter CharacterFilter) ([]ExpansionCount, error)
 	// NewCharactersPerDay returns daily counts of new characters in [since, until),
-	// based on milestone 590 or first_seen_at.
+	// based on the Chocobo milestone (achievement ID 590).
 	NewCharactersPerDay(ctx context.Context, since, until time.Time, filter CharacterFilter) ([]DailyCount, error)
 	// CountChocoboMilestones returns the count of characters who obtained
 	// Milestone 590 (or first seen) at or after since.

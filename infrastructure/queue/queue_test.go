@@ -488,3 +488,113 @@ func TestQueue_RetryFailedAndPurgeJobs(t *testing.T) {
 		t.Fatalf("expected purged job to be deleted")
 	}
 }
+
+func TestQueue_PurgeByEachStatus(t *testing.T) {
+	statuses := []contract.QueueJobStatus{
+		contract.QueueJobPending,
+		contract.QueueJobClaimed,
+		contract.QueueJobDone,
+		contract.QueueJobFailed,
+	}
+
+	for _, targetStatus := range statuses {
+		t.Run(string(targetStatus), func(t *testing.T) {
+			q := testQueue(t)
+			ctx := context.Background()
+
+			// Insert 4 jobs, one for each status
+			_, err := q.Publish(ctx,
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":101,"to":200}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":201,"to":300}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":301,"to":400}`)},
+			)
+			if err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+
+			// Claim 3 jobs (job 1 stays pending)
+			claimed, err := q.Claim(ctx, "id-sweep", 3)
+			if err != nil || len(claimed) != 3 {
+				t.Fatalf("Claim: %v", err)
+			}
+			// Complete job 2
+			if err := q.Complete(ctx, claimed[1].ID); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			// Fail job 3
+			if err := q.Fail(ctx, claimed[2].ID, "test failure"); err != nil {
+				t.Fatalf("Fail: %v", err)
+			}
+			// Now we have:
+			// Job 1: pending
+			// Job 2 (claimed[0]): claimed
+			// Job 3 (claimed[1]): done
+			// Job 4 (claimed[2]): failed
+
+			depthBefore, _ := q.Depth(ctx)
+			if depthBefore[contract.QueueJobPending] != 1 ||
+				depthBefore[contract.QueueJobClaimed] != 1 ||
+				depthBefore[contract.QueueJobDone] != 1 ||
+				depthBefore[contract.QueueJobFailed] != 1 {
+				t.Fatalf("unexpected depth before purge: %+v", depthBefore)
+			}
+
+			// Purge only the targetStatus
+			purged, err := q.PurgeJobs(ctx, "id-sweep", targetStatus, 0)
+			if err != nil {
+				t.Fatalf("PurgeJobs %s failed: %v", targetStatus, err)
+			}
+			if purged != 1 {
+				t.Errorf("expected 1 job purged for status %s, got %d", targetStatus, purged)
+			}
+
+			depthAfter, _ := q.Depth(ctx)
+			if depthAfter[targetStatus] != 0 {
+				t.Errorf("expected 0 %s jobs after purge, got %d", targetStatus, depthAfter[targetStatus])
+			}
+			// Verify other statuses are still 1
+			for _, s := range statuses {
+				if s != targetStatus && depthAfter[s] != 1 {
+					t.Errorf("expected status %s to still have 1 job, got %d", s, depthAfter[s])
+				}
+			}
+		})
+	}
+
+	// Test purging ALL statuses at once
+	t.Run("all_statuses", func(t *testing.T) {
+		q := testQueue(t)
+		ctx := context.Background()
+
+		_, err := q.Publish(ctx,
+			contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)},
+			contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":101,"to":200}`)},
+		)
+		if err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		claimed, err := q.Claim(ctx, "id-sweep", 1)
+		if err != nil || len(claimed) != 1 {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := q.Complete(ctx, claimed[0].ID); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+
+		// We have 1 pending, 1 done
+		purged, err := q.PurgeJobs(ctx, "id-sweep", "", 0)
+		if err != nil {
+			t.Fatalf("PurgeJobs all failed: %v", err)
+		}
+		if purged != 2 {
+			t.Errorf("expected 2 jobs purged, got %d", purged)
+		}
+		depthAfter, _ := q.Depth(ctx)
+		for s, count := range depthAfter {
+			if count != 0 {
+				t.Errorf("expected 0 %s jobs after purge all, got %d", s, count)
+			}
+		}
+	})
+}

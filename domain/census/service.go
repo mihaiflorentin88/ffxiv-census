@@ -534,7 +534,7 @@ func (s *Service) Breakdown(ctx context.Context, by string, filter ...contract.C
 }
 
 // NewCharacters returns daily counts of new characters in [since, until),
-// using the early-game Chocobo milestone or first_seen_at fallback.
+// using the early-game Chocobo milestone (achievement ID 590).
 func (s *Service) NewCharacters(ctx context.Context, since, until time.Time, filter ...contract.CharacterFilter) ([]contract.DailyCount, error) {
 	f := contract.CharacterFilter{}
 	if len(filter) > 0 {

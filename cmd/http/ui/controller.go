@@ -74,3 +74,11 @@ func (c *UIController) renderPartial(w http.ResponseWriter, partialTemplate stri
 		logging.Error("ui.renderPartial.execute", err.Error())
 	}
 }
+
+// Methodology handles GET /ui/methodology.
+func (c *UIController) Methodology(w http.ResponseWriter, r *http.Request) {
+	c.render(w, "templates/methodology.html", PageData{
+		Title:     "Methodology",
+		ActiveNav: "methodology",
+	})
+}

@@ -147,8 +147,12 @@ var purgeCmd = &cobra.Command{
 			return fmt.Errorf("queue service unavailable")
 		}
 
+		all, _ := cmd.Flags().GetBool("all")
 		eventType, _ := cmd.Flags().GetString("event-type")
 		statusStr, _ := cmd.Flags().GetString("status")
+		if all && !cmd.Flags().Changed("status") {
+			statusStr = "all"
+		}
 		var status contract.QueueJobStatus
 		if statusStr != "" && statusStr != "all" {
 			status = contract.QueueJobStatus(statusStr)
@@ -158,11 +162,13 @@ var purgeCmd = &cobra.Command{
 		}
 
 		olderThanStr, _ := cmd.Flags().GetString("older-than")
+		if all || olderThanStr == "0" || olderThanStr == "" {
+			olderThanStr = "0s"
+		}
 		duration, err := time.ParseDuration(olderThanStr)
 		if err != nil || duration < 0 {
 			return fmt.Errorf("invalid --older-than duration %q (e.g. 24h, 30m, 0s)", olderThanStr)
 		}
-
 		purged, err := q.PurgeJobs(ctx, eventType, status, duration)
 		if err != nil {
 			return fmt.Errorf("purge jobs: %w", err)
@@ -199,8 +205,8 @@ func init() {
 
 	purgeCmd.Flags().StringP("event-type", "e", "all", "event type to purge (e.g. id-sweep, character-census, or all)")
 	purgeCmd.Flags().StringP("status", "s", "done", "job status to purge (done, failed, pending, claimed, or all)")
-	purgeCmd.Flags().String("older-than", "24h", "duration threshold (e.g. 24h, 72h, 0s)")
-
+	purgeCmd.Flags().String("older-than", "24h", "duration threshold (e.g. 24h, 72h, 0s; use 0s or --all to purge all current jobs)")
+	purgeCmd.Flags().Bool("all", false, "purge all matching jobs immediately without age filter (sets --older-than 0s)")
 	queueCmd.AddCommand(statsCmd)
 	queueCmd.AddCommand(retryFailedCmd)
 	queueCmd.AddCommand(purgeCmd)

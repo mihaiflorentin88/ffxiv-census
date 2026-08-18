@@ -34,7 +34,7 @@ make fmt                     # gofmt
 - Service locator resolves adapters via `container.Load.MySQL()`, `container.Load.Queue()`, etc. — not DI
 - Adapters implement interfaces from `port/contract`; domain depends only on contracts
 - `cmd/` constructs domain objects directly; everything else stays decoupled
-- Config embedded via `//go:embed config.toml` + Viper; env overrides: `SQLITE_PATH`, `LODESTONE_RATE_LIMIT` (dots → underscores)
+- Config embedded via `//go:embed config.toml` + Viper; env overrides: `SQLITE_PATH`, `LODESTONE_RATE_LIMIT` (dots and hyphens → underscores)
 
 ## Build Constraints
 

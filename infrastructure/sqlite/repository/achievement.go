@@ -130,7 +130,7 @@ func (r *AchievementRepository) CountExpansionsFiltered(ctx context.Context, fil
 }
 
 // NewCharactersPerDay returns daily counts of new characters in [since, until).
-// Prioritizes the Chocobo milestone (achievement_id = 590) achieved_at, falling back to first_seen_at.
+// Calculates counts strictly by the timestamp characters achieved the Chocobo milestone (achievement_id = 590).
 func (r *AchievementRepository) NewCharactersPerDay(ctx context.Context, since, until time.Time, filter contract.CharacterFilter) ([]contract.DailyCount, error) {
 	conds, filterArgs := characterFilterWhere(filter)
 
@@ -138,16 +138,13 @@ func (r *AchievementRepository) NewCharactersPerDay(ctx context.Context, since, 
 		WITH character_dates AS (
 			SELECT
 				c.id,
-				COALESCE(
-					(SELECT cm.achieved_at FROM character_milestones cm WHERE cm.character_id = c.id AND cm.achievement_id = 590 LIMIT 1),
-					c.first_seen_at
-				) AS event_time
+				(SELECT cm.achieved_at FROM character_milestones cm WHERE cm.character_id = c.id AND cm.achievement_id = 590 LIMIT 1) AS event_time
 			FROM characters c
 			WHERE c.deleted_at IS NULL` + conds + `
 		)
 		SELECT substr(event_time, 1, 10) AS day, COUNT(*) AS count
 		FROM character_dates
-		WHERE event_time >= ? AND event_time < ?
+		WHERE event_time IS NOT NULL AND event_time >= ? AND event_time < ?
 		GROUP BY substr(event_time, 1, 10)
 		ORDER BY 1 ASC`
 

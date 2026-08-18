@@ -28,23 +28,10 @@
                 <li class="nav-item {{if eq .ActiveNav "expansions"}}active{{end}}">
                     <a href="/ui/expansions">Expansions</a>
                 </li>
-                <li class="nav-item {{if eq .ActiveNav "characters"}}active{{end}}">
-                    <a href="/ui/characters">Characters</a>
+                <li class="nav-item {{if eq .ActiveNav "methodology"}}active{{end}}">
+                    <a href="/ui/methodology">Methodology</a>
                 </li>
-                <li class="nav-item {{if eq .ActiveNav "free-companies"}}active{{end}}">
-                    <a href="/ui/free-companies">Free Companies</a>
-                </li>
-            <form action="/ui/characters/search" method="GET" class="search-form">
-                <input 
-                    type="text" 
-                    name="q" 
-                    placeholder="Search character name or ID..." 
-                    class="search-input"
-                    value="{{.SearchQuery}}"
-                    required
-                >
-                <button type="submit" class="search-btn" title="Search">🔍</button>
-            </form>
+            </ul>
         </div>
     </header>
 

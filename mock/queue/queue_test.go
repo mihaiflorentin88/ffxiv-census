@@ -421,3 +421,42 @@ func TestFake_RetryAppliesBackoff(t *testing.T) {
 		t.Errorf("expected RunAt to be pushed into the future with backoff: %v", retried.RunAt)
 	}
 }
+
+func TestFake_PurgeByEachStatus(t *testing.T) {
+	statuses := []contract.QueueJobStatus{
+		contract.QueueJobPending,
+		contract.QueueJobClaimed,
+		contract.QueueJobDone,
+		contract.QueueJobFailed,
+	}
+
+	for _, targetStatus := range statuses {
+		t.Run(string(targetStatus), func(t *testing.T) {
+			f := NewFake()
+			ctx := context.Background()
+
+			_, _ = f.Publish(ctx,
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":101,"to":200}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":201,"to":300}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":301,"to":400}`)},
+			)
+
+			claimed, _ := f.Claim(ctx, "id-sweep", 3)
+			_ = f.Complete(ctx, claimed[1].ID)
+			_ = f.Fail(ctx, claimed[2].ID, "err")
+
+			purged, err := f.PurgeJobs(ctx, "id-sweep", targetStatus, 0)
+			if err != nil {
+				t.Fatalf("PurgeJobs failed: %v", err)
+			}
+			if purged != 1 {
+				t.Errorf("expected 1 job purged for %s, got %d", targetStatus, purged)
+			}
+			depthAfter, _ := f.Depth(ctx)
+			if depthAfter[targetStatus] != 0 {
+				t.Errorf("expected 0 %s jobs after purge, got %d", targetStatus, depthAfter[targetStatus])
+			}
+		})
+	}
+}

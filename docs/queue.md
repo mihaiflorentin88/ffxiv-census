@@ -97,7 +97,7 @@ These capabilities are surfaced over HTTP in the REST API (see `docs/http-api.md
 CLI commands are available under `ffxiv-census queue`:
 - `ffxiv-census queue stats [--event-type TYPE] [--sample-limit N]` — prints ASCII table of queue status and lists sampled active, upcoming, and failed jobs.
 - `ffxiv-census queue retry-failed [--event-type TYPE] [--limit N]` — replays dead-letter failed jobs back to pending.
-- `ffxiv-census queue purge [--status done|failed] [--older-than 24h]` — purges old done or failed jobs.
+- `ffxiv-census queue purge [--status done|failed|pending|claimed|all] [--older-than 24h] [--all]` — purges old or all jobs immediately.
 ## Container wiring
 
 `container.Load.Queue()` lazily builds the adapter on top of the SQLite driver (which self-migrates on first use) and caches it. Like `SQLite()`, it degrades to a logged `nil` if the driver or `[queue]` config is unavailable.

@@ -1,0 +1,158 @@
+{{define "content"}}
+<div class="page-header">
+    <h1 class="page-title">
+        <span>📖</span>
+        <span>Census Methodology &amp; Metrics</span>
+    </h1>
+    <p class="page-desc">Detailed breakdown of how the FFXIV Census collects data, determines active player populations, tracks new character creation, and measures storyline progression.</p>
+</div>
+
+<!-- Grid with Methodology Sections -->
+<div style="display: grid; grid-template-columns: 1fr; gap: 2rem; max-width: 1000px; margin: 0 auto;">
+
+    <!-- Section 1: Overview & Data Ingestion -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>🛰️</span>
+                <span>Data Ingestion &amp; Discovery</span>
+            </h2>
+        </div>
+        <div class="panel-body" style="line-height: 1.7; color: var(--text-muted);">
+            <p style="margin-bottom: 1rem;">
+                The <strong style="color: var(--text-main);">FFXIV Census</strong> operates by indexing public character profiles from the official Square Enix <em>Final Fantasy XIV Lodestone</em> service and community APIs like <em>Tomestone</em>. 
+            </p>
+            <p style="margin-bottom: 1rem;">
+                Character discovery runs via distributed, rate-limited background workers designed to scan ID sequences, detect new player registrations, and periodically refresh existing character profiles. All requests adhere to strict rate limiting and polite backoff policies to avoid impacting official infrastructure.
+            </p>
+            <div style="background: var(--bg-elevated); border-left: 3px solid var(--cyan); padding: 1rem 1.25rem; border-radius: var(--radius-sm); margin-top: 1.25rem;">
+                <strong style="color: var(--cyan); display: block; margin-bottom: 0.25rem;">Privacy &amp; Aggregates</strong>
+                <p style="font-size: 0.92rem; margin: 0;">
+                    To protect player privacy, individual character lookup directories and Free Company membership search interfaces are not exposed publicly. The census focuses exclusively on macro-level demographic trends, world distributions, race statistics, and global progression curves.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 2: Active Players (30-Day Activity Window) -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>⚡</span>
+                <span>Active Player Criteria</span>
+            </h2>
+        </div>
+        <div class="panel-body" style="line-height: 1.7; color: var(--text-muted);">
+            <p style="margin-bottom: 1rem;">
+                Because Square Enix does not publish real-time login statistics or active subscription counts, player activity is calculated based on an observable <strong style="color: var(--cyan);">rolling 30-day activity window</strong>.
+            </p>
+            <p style="margin-bottom: 1rem;">
+                A character is designated as <span class="badge badge-active" style="display: inline-block; vertical-align: middle;">Active</span> if:
+            </p>
+            <ul style="list-style-type: disc; margin-left: 1.5rem; margin-bottom: 1.25rem;">
+                <li style="margin-bottom: 0.5rem;"><strong style="color: var(--text-main);">Level or Job Progression:</strong> The character has gained experience or levels in any combat or Disciples of the Hand/Land class within the last 30 days.</li>
+                <li style="margin-bottom: 0.5rem;"><strong style="color: var(--text-main);">Achievement Timestamps:</strong> Any new in-game achievement has been unlocked and verified within the 30-day window.</li>
+                <li style="margin-bottom: 0.5rem;"><strong style="color: var(--text-main);">Profile &amp; Gear Updates:</strong> The character's Lodestone profile, equipped gear, Grand Company rank, or minion/mount collection has been updated within the last 30 days.</li>
+            </ul>
+            <p style="font-size: 0.92rem; color: var(--text-dim);">
+                Characters with no observable profile changes or achievements in the last 30 days are categorized as inactive until new in-game activity is observed on Lodestone.
+            </p>
+        </div>
+    </div>
+
+    <!-- Section 3: New Characters Created (The Chocobo Milestone) -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>🐥</span>
+                <span>New Characters Created (Chocobo Milestone)</span>
+            </h2>
+        </div>
+        <div class="panel-body" style="line-height: 1.7; color: var(--text-muted);">
+            <p style="margin-bottom: 1rem;">
+                In previous iterations, "New Characters" were estimated based on the date a character ID was first crawled. However, discovery timestamps can be misleading when older or returning characters are indexed during routine sweeps.
+            </p>
+            <p style="margin-bottom: 1rem;">
+                To guarantee true accuracy, the <strong style="color: var(--gold-light);">New Characters Created (Last 30 days)</strong> metric calculates new characters strictly by using the timestamp they achieved the early-game Chocobo milestone:
+            </p>
+            <div style="background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.25rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">🏅</span>
+                    <div>
+                        <strong style="color: var(--gold-light); font-size: 1.05rem;">Achievement ID 590: "My Little Chocobo"</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-dim);">Grand Company Questline &bull; Level 20 MSQ Milestone</div>
+                    </div>
+                </div>
+                <p style="font-size: 0.92rem; margin: 0; color: var(--text-muted);">
+                    Unlocked upon acquiring a company chocobo issued by the player's chosen Grand Company (Maelstrom, Order of the Twin Adder, or Immortal Flames) following the completion of the Level 20 Main Scenario quest <em>"Hero in the Making"</em>.
+                </p>
+            </div>
+            <p style="margin-bottom: 0;">
+                <strong style="color: var(--text-main);">Strict Inclusion:</strong> Characters who have not earned this milestone (or whose Lodestone achievements remain private) are excluded from the New Characters timeline. This eliminates indexing artifacts and ensures that every counted point represents an authentic player who progressed past character creation into Eorzea.
+            </p>
+        </div>
+    </div>
+
+    <!-- Section 4: Main Scenario Quest (MSQ) & Expansion Progression -->
+    <div class="panel">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>⚔️</span>
+                <span>Main Scenario Quest (MSQ) Progression</span>
+            </h2>
+        </div>
+        <div class="panel-body" style="line-height: 1.7; color: var(--text-muted);">
+            <p style="margin-bottom: 1rem;">
+                Expansion storyline completion is tracked through the official capstone achievements awarded at the conclusion of each expansion's base Main Scenario Questline:
+            </p>
+            <div class="table-responsive" style="margin-bottom: 1.25rem;">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Expansion</th>
+                            <th>Milestone Achievement</th>
+                            <th class="text-right">Level Cap</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>A Realm Reborn</strong></td>
+                            <td><em>The Ultimate Weapon</em> / <em>In Pursuit of the Past</em></td>
+                            <td class="text-right"><span class="badge badge-region">Lv. 50</span></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Heavensward</strong></td>
+                            <td><em>Heavensward</em> (MSQ 3.0 Finale)</td>
+                            <td class="text-right"><span class="badge badge-region">Lv. 60</span></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Stormblood</strong></td>
+                            <td><em>Stormblood</em> (MSQ 4.0 Finale)</td>
+                            <td class="text-right"><span class="badge badge-region">Lv. 70</span></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Shadowbringers</strong></td>
+                            <td><em>Shadowbringers</em> (MSQ 5.0 Finale)</td>
+                            <td class="text-right"><span class="badge badge-region">Lv. 80</span></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Endwalker</strong></td>
+                            <td><em>Endwalker</em> (MSQ 6.0 Finale)</td>
+                            <td class="text-right"><span class="badge badge-region">Lv. 90</span></td>
+                        </tr>
+                        <tr>
+                            <td><strong>Dawntrail</strong></td>
+                            <td><em>Dawntrail</em> (MSQ 7.0 Finale)</td>
+                            <td class="text-right"><span class="badge badge-gold">Lv. 100</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p style="font-size: 0.92rem; color: var(--text-dim); margin: 0;">
+                Milestone achievements allow the census to construct accurate completion funnels showing how players advance through each era of the story.
+            </p>
+        </div>
+    </div>
+
+</div>
+{{end}}

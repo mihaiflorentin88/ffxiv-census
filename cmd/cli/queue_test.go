@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -54,6 +55,9 @@ func TestQueueCmd_FlagsRegistered(t *testing.T) {
 	}
 	if purgeCmd.Flags().Lookup("older-than") == nil {
 		t.Error("expected --older-than flag on queue purge")
+	}
+	if purgeCmd.Flags().Lookup("all") == nil {
+		t.Error("expected --all flag on queue purge")
 	}
 }
 
@@ -150,14 +154,76 @@ func TestQueuePurgeCmd_Run(t *testing.T) {
 	var buf bytes.Buffer
 	rootCmd.SetOut(&buf)
 	rootCmd.SetErr(&buf)
-	rootCmd.SetArgs([]string{"queue", "purge", "--status", "done", "--older-than", "0s"})
+	rootCmd.SetArgs([]string{"queue", "purge", "--status", "done", "--older-than", "0"})
 
 	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("queue purge execute: %v", err)
+		t.Fatalf("queue purge execute with --older-than 0: %v", err)
 	}
 
 	out := buf.String()
 	if !bytes.Contains(buf.Bytes(), []byte("Purged 1 jobs (event: all, status: done)")) {
 		t.Errorf("unexpected output: %s", out)
+	}
+
+	// Test --all flag on pending jobs
+	_, err = q.Publish(ctx, contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	buf.Reset()
+	rootCmd.SetArgs([]string{"queue", "purge", "--status", "pending", "--all"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("queue purge execute with --all: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("Purged 1 jobs (event: all, status: pending)")) {
+		t.Errorf("unexpected output: %s", buf.String())
+	}
+}
+
+func TestQueuePurgeCmd_ByStatus(t *testing.T) {
+	statuses := []struct {
+		status string
+		flag   string
+	}{
+		{"pending", "pending"},
+		{"claimed", "claimed"},
+		{"done", "done"},
+		{"failed", "failed"},
+	}
+
+	for _, tc := range statuses {
+		t.Run(tc.status, func(t *testing.T) {
+			q := setupTestQueue(t)
+			ctx := context.Background()
+
+			_, err := q.Publish(ctx,
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":101,"to":200}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":201,"to":300}`)},
+				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":301,"to":400}`)},
+			)
+			if err != nil {
+				t.Fatalf("publish: %v", err)
+			}
+
+			claimed, _ := q.Claim(ctx, "id-sweep", 3)
+			_ = q.Complete(ctx, claimed[1].ID)
+			_ = q.Fail(ctx, claimed[2].ID, "test err")
+
+			var buf bytes.Buffer
+			rootCmd.SetOut(&buf)
+			rootCmd.SetErr(&buf)
+			rootCmd.SetArgs([]string{"queue", "purge", "--status", tc.flag, "--all"})
+
+			if err := rootCmd.Execute(); err != nil {
+				t.Fatalf("queue purge execute: %v", err)
+			}
+
+			expectedMsg := fmt.Sprintf("Purged 1 jobs (event: all, status: %s)", tc.status)
+			if !bytes.Contains(buf.Bytes(), []byte(expectedMsg)) {
+				t.Errorf("expected %q, got: %s", expectedMsg, buf.String())
+			}
+		})
 	}
 }

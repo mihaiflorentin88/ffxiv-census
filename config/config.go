@@ -119,10 +119,9 @@ func NewConfig() (*Config, error) {
 	}
 
 	v := viper.New()
-	v.SetConfigType("toml")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	v.AutomaticEnv()
-
+	v.SetConfigType("toml")
 	if err := v.ReadConfig(bytes.NewBuffer(content)); err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}

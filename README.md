@@ -80,16 +80,54 @@ When an external provider (Lodestone or Tomestone) returns HTTP 429 (rate limit 
 
 Enqueues census jobs to be processed asynchronously by worker consumers.
 
-#### `publish id-sweep`
-Probes character ID ranges across Lodestone or Tomestone. Uses chunking and infinite retries (`max_attempts = 0`).
+#### `publish id-sweep` — Forward Range, Gap-Fill & Kubernetes CronJob Execution
+Probes character ID ranges across Lodestone or Tomestone. Designed for both single-shot scheduled execution (e.g. **Kubernetes CronJob**) and continuous loop mode (`--daemon`). Uses chunking and infinite retries (`max_attempts = 0`).
+
 ```bash
-# Probe character IDs 1 to 10,000 in chunks of 100
+# Auto-forward mode (recommended for CronJobs): sweeps next 1,000 IDs starting from MaxID + 1
+./bin/ffxiv-census publish id-sweep --auto --batch-size 1000 --chunk-size 100
+
+# Gap-fill mode: scans unscanned holes between 1 and MaxID
+./bin/ffxiv-census publish id-sweep --fill-gaps --chunk-size 100
+
+# Explicit range: probe character IDs 1 to 10,000 in chunks of 100
 ./bin/ffxiv-census publish id-sweep --from 1 --to 10000 --chunk-size 100
 
 # Sweep using Tomestone API instead of Lodestone
-./bin/ffxiv-census publish id-sweep --from 1 --to 5000 --source tomestone
+./bin/ffxiv-census publish id-sweep --auto --source tomestone
 ```
 
+##### Kubernetes CronJob Manifest
+The publisher runs as a lightweight periodic CronJob that spins up, queries `MaxID`, enqueues chunked work, and exits immediately:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ffxiv-census-publisher
+spec:
+  schedule: "0 * * * *" # Hourly
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: publisher
+              image: ffxiv-census:latest
+              args: ["publish", "id-sweep", "--auto", "--batch-size", "1000", "--chunk-size", "100"]
+              env:
+                - name: SQLITE_PATH
+                  value: /data/ffxiv-census.db
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: census-pvc
+```
 #### `publish character-census`
 Enqueues known characters that have not been updated within a specified duration.
 ```bash
@@ -120,7 +158,12 @@ Administrative commands to inspect queue depth, replay failed jobs, or purge his
 
 # Purge completed jobs older than 7 days
 ./bin/ffxiv-census queue purge --status done --older-than 168h
-```
+
+# Purge all pending jobs immediately
+./bin/ffxiv-census queue purge --status pending --all
+
+# Purge entire queue (all statuses, all events)
+./bin/ffxiv-census queue purge --all
 
 ### 5. `export` — Data Export (CSV & JSON)
 
@@ -186,8 +229,7 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 
 ## Configuration & Environment Variables
 
-`ffxiv-census` reads `config.toml` by default and supports overriding any setting via uppercase environment variables (replacing dots with underscores).
-
+`ffxiv-census` embeds `config.toml` by default and uses Viper with `strings.NewReplacer("-", "_", ".", "_")` and `AutomaticEnv()`. Any configuration key can be overridden using uppercase environment variables (both nested keys with `.` and hyphenated keys with `-` map to underscores `_`).
 | Environment Variable | Description | Default |
 |---|---|---|
 | `SQLITE_PATH` | Path to SQLite database file | `data/ffxiv-census.db` |

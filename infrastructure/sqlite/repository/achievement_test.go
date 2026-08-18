@@ -135,11 +135,23 @@ func TestAchievementRepository_NewCharactersAndChocobo(t *testing.T) {
 		{CharacterID: 1, AchievementID: 590, AchievedAt: day(2026, 8, 1, 12)},
 	})
 
-	// Char 2: No milestone, first_seen on 2026-08-01 -> event_time 2026-08-01
+	// Char 2: Chocobo milestone on 2026-08-01 (first_seen 2026-08-01) -> event_time 2026-08-01
 	_ = charRepo.Upsert(context.Background(), contract.CharacterRecord{ID: 2, Name: "Char 2", World: "Balmung", FirstSeenAt: day(2026, 8, 1, 15)}, nil)
+	_ = repo.UpsertCharacterMilestones(context.Background(), 2, []contract.CharacterMilestone{
+		{CharacterID: 2, AchievementID: 590, AchievedAt: day(2026, 8, 1, 16)},
+	})
 
-	// Char 3: No milestone, first_seen on 2026-08-02, World: Mateus -> event_time 2026-08-02
+	// Char 3: Chocobo milestone on 2026-08-02, World: Mateus -> event_time 2026-08-02
 	_ = charRepo.Upsert(context.Background(), contract.CharacterRecord{ID: 3, Name: "Char 3", World: "Mateus", FirstSeenAt: day(2026, 8, 2, 8)}, nil)
+	_ = repo.UpsertCharacterMilestones(context.Background(), 3, []contract.CharacterMilestone{
+		{CharacterID: 3, AchievementID: 590, AchievedAt: day(2026, 8, 2, 9)},
+	})
+
+	// Char 4: No milestone, first_seen before since (2026-07-20) -> excluded from NewCharactersPerDay and CountChocoboMilestones
+	_ = charRepo.Upsert(context.Background(), contract.CharacterRecord{ID: 4, Name: "Char 4", World: "Balmung", FirstSeenAt: day(2026, 7, 20, 18)}, nil)
+
+	// Char 5: No milestone, first_seen during range (2026-08-01) -> excluded from NewCharactersPerDay, counted in CountChocoboMilestones
+	_ = charRepo.Upsert(context.Background(), contract.CharacterRecord{ID: 5, Name: "Char 5", World: "Balmung", FirstSeenAt: day(2026, 8, 1, 18)}, nil)
 
 	since := day(2026, 7, 25, 0)
 	until := day(2026, 8, 3, 0)
@@ -162,12 +174,12 @@ func TestAchievementRepository_NewCharactersAndChocobo(t *testing.T) {
 		t.Fatalf("NewCharactersPerDay Balmung = %+v, want 2 on day 1", daysBalmung)
 	}
 
-	// CountChocoboMilestones
+	// CountChocoboMilestones (Chars 1, 2, 3 have milestone >= since, Char 5 has first_seen >= since)
 	chocoboCount, err := repo.CountChocoboMilestones(context.Background(), since, contract.CharacterFilter{})
 	if err != nil {
 		t.Fatalf("CountChocoboMilestones: %v", err)
 	}
-	if chocoboCount != 3 {
-		t.Fatalf("CountChocoboMilestones = %d, want 3", chocoboCount)
+	if chocoboCount != 4 {
+		t.Fatalf("CountChocoboMilestones = %d, want 4", chocoboCount)
 	}
 }

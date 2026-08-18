@@ -13,12 +13,21 @@ func TestComputeIDSweepRange_AutoDiscovery(t *testing.T) {
 		return 500, nil
 	}
 
-	from, to, err := computeIDSweepRange(0, 0, 100, maxIDFunc)
+	from, to, err := computeIDSweepRange(0, 0, 100, false, maxIDFunc)
 	if err != nil {
 		t.Fatalf("computeIDSweepRange: %v", err)
 	}
 	if from != 501 || to != 600 {
 		t.Errorf("got [%d, %d], want [501, 600]", from, to)
+	}
+
+	// Explicit auto flag overrides explicit from/to
+	from, to, err = computeIDSweepRange(10, 20, 100, true, maxIDFunc)
+	if err != nil {
+		t.Fatalf("computeIDSweepRange with auto=true: %v", err)
+	}
+	if from != 501 || to != 600 {
+		t.Errorf("got [%d, %d], want [501, 600] with auto=true", from, to)
 	}
 }
 
@@ -27,7 +36,7 @@ func TestComputeIDSweepRange_AutoDiscovery_EmptyDB(t *testing.T) {
 		return 0, nil
 	}
 
-	from, to, err := computeIDSweepRange(0, 0, 1000, maxIDFunc)
+	from, to, err := computeIDSweepRange(0, 0, 1000, false, maxIDFunc)
 	if err != nil {
 		t.Fatalf("computeIDSweepRange: %v", err)
 	}
@@ -37,7 +46,7 @@ func TestComputeIDSweepRange_AutoDiscovery_EmptyDB(t *testing.T) {
 }
 
 func TestComputeIDSweepRange_FromOnly(t *testing.T) {
-	from, to, err := computeIDSweepRange(100, 0, 50, nil)
+	from, to, err := computeIDSweepRange(100, 0, 50, false, nil)
 	if err != nil {
 		t.Fatalf("computeIDSweepRange: %v", err)
 	}
@@ -47,7 +56,7 @@ func TestComputeIDSweepRange_FromOnly(t *testing.T) {
 }
 
 func TestComputeIDSweepRange_ToOnly(t *testing.T) {
-	from, to, err := computeIDSweepRange(0, 50, 1000, nil)
+	from, to, err := computeIDSweepRange(0, 50, 1000, false, nil)
 	if err != nil {
 		t.Fatalf("computeIDSweepRange: %v", err)
 	}
@@ -57,7 +66,7 @@ func TestComputeIDSweepRange_ToOnly(t *testing.T) {
 }
 
 func TestComputeIDSweepRange_ExplicitBoth(t *testing.T) {
-	from, to, err := computeIDSweepRange(10, 20, 1000, nil)
+	from, to, err := computeIDSweepRange(10, 20, 1000, false, nil)
 	if err != nil {
 		t.Fatalf("computeIDSweepRange: %v", err)
 	}
@@ -67,16 +76,16 @@ func TestComputeIDSweepRange_ExplicitBoth(t *testing.T) {
 }
 
 func TestComputeIDSweepRange_Invalid(t *testing.T) {
-	if _, _, err := computeIDSweepRange(20, 10, 1000, nil); err == nil {
+	if _, _, err := computeIDSweepRange(20, 10, 1000, false, nil); err == nil {
 		t.Fatal("expected error for from > to")
 	}
 
-	if _, _, err := computeIDSweepRange(0, 0, 0, nil); err == nil {
+	if _, _, err := computeIDSweepRange(0, 0, 0, false, nil); err == nil {
 		t.Fatal("expected error for count = 0")
 	}
 
 	errMaxID := errors.New("db error")
-	if _, _, err := computeIDSweepRange(0, 0, 100, func() (uint32, error) { return 0, errMaxID }); !errors.Is(err, errMaxID) {
+	if _, _, err := computeIDSweepRange(0, 0, 100, false, func() (uint32, error) { return 0, errMaxID }); !errors.Is(err, errMaxID) {
 		t.Fatalf("expected db error, got %v", err)
 	}
 }
@@ -107,13 +116,16 @@ func TestBuildIDSweepJobs(t *testing.T) {
 		if p.Source != "tomestone" {
 			t.Errorf("job[%d] source = %q, want tomestone", i, p.Source)
 		}
+		if j.MaxAttempts != -1 {
+			t.Errorf("job[%d] MaxAttempts = %d, want -1 (infinite retry)", i, j.MaxAttempts)
+		}
 	}
 }
 
 func TestPublishIDSweepCmd_FlagsRegistered(t *testing.T) {
 	flags := publishIDSweepCmd.Flags()
 	for _, name := range []string{
-		"from", "to", "count", "chunk-size", "source",
+		"auto", "batch-size", "from", "to", "count", "chunk-size", "source",
 		"fill-gaps", "daemon", "daemon-interval", "min-pending-jobs", "max-gaps",
 	} {
 		if flags.Lookup(name) == nil {
@@ -151,6 +163,52 @@ func TestBuildGapSweepJobs(t *testing.T) {
 		if p.Source != "auto" {
 			t.Errorf("job[%d] source = %q, want auto", i, p.Source)
 		}
+	}
+}
+
+func TestPublishIDSweep_AutoAndGapBatchGeneration(t *testing.T) {
+	// Test Auto-Range generation for CronJob
+	maxID := uint32(124000)
+	maxIDFunc := func() (uint32, error) {
+		return maxID, nil
+	}
+
+	from, to, err := computeIDSweepRange(0, 0, 1000, true, maxIDFunc)
+	if err != nil {
+		t.Fatalf("computeIDSweepRange auto failed: %v", err)
+	}
+	if from != 124001 || to != 125000 {
+		t.Fatalf("expected range [124001, 125000], got [%d, %d]", from, to)
+	}
+
+	jobs := buildIDSweepJobs(from, to, 100, "auto")
+	if len(jobs) != 10 {
+		t.Fatalf("expected 10 jobs for 1000 IDs with chunk size 100, got %d", len(jobs))
+	}
+
+	for idx, j := range jobs {
+		if j.MaxAttempts != -1 {
+			t.Errorf("job %d max attempts = %d, want -1", idx, j.MaxAttempts)
+		}
+		var p handler.IDSweepPayload
+		if err := json.Unmarshal(j.Payload, &p); err != nil {
+			t.Fatalf("job %d payload unmarshal error: %v", idx, err)
+		}
+		expectedFrom := 124001 + uint32(idx*100)
+		expectedTo := expectedFrom + 99
+		if p.From != expectedFrom || p.To != expectedTo {
+			t.Errorf("job %d range = [%d, %d], want [%d, %d]", idx, p.From, p.To, expectedFrom, expectedTo)
+		}
+	}
+
+	// Test Gap-fill generation
+	gaps := [][2]uint32{
+		{50, 150},  // 101 IDs -> 2 chunks: [50, 149], [150, 150]
+		{500, 550}, // 51 IDs -> 1 chunk: [500, 550]
+	}
+	gapJobs := buildGapSweepJobs(gaps, 100, "lodestone")
+	if len(gapJobs) != 3 {
+		t.Fatalf("expected 3 gap jobs, got %d", len(gapJobs))
 	}
 }
 

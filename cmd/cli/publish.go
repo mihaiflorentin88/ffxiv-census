@@ -21,13 +21,13 @@ var publishCmd = &cobra.Command{
 	Short: "Publish queue jobs (cronjob entrypoint)",
 }
 
-func computeIDSweepRange(from, to, count uint32, maxIDFunc func() (uint32, error)) (uint32, uint32, error) {
+func computeIDSweepRange(from, to, count uint32, auto bool, maxIDFunc func() (uint32, error)) (uint32, uint32, error) {
 	if count == 0 {
-		return 0, 0, fmt.Errorf("--count must be > 0")
+		return 0, 0, fmt.Errorf("--count / --batch-size must be > 0")
 	}
-	if from == 0 && to == 0 {
+	if auto || (from == 0 && to == 0) {
 		if maxIDFunc == nil {
-			return 0, 0, fmt.Errorf("maxIDFunc required when both from and to are 0")
+			return 0, 0, fmt.Errorf("maxIDFunc required when auto-discovering ID sweep range")
 		}
 		maxID, err := maxIDFunc()
 		if err != nil {
@@ -57,7 +57,11 @@ func buildIDSweepJobs(from, to, chunkSize uint32, source string) []contract.Queu
 			end = to // last chunk, or uint32 overflow guard
 		}
 		b, _ := json.Marshal(handler.IDSweepPayload{From: start, To: end, Source: source})
-		jobs = append(jobs, contract.QueueJob{Type: handler.EventIDSweep, Payload: b})
+		jobs = append(jobs, contract.QueueJob{
+			Type:        handler.EventIDSweep,
+			Payload:     b,
+			MaxAttempts: -1, // infinite retries for ID sweeps so rate limits never drop jobs
+		})
 		if end == to {
 			break
 		}
@@ -79,9 +83,14 @@ var publishIDSweepCmd = &cobra.Command{
 	Use:   "id-sweep",
 	Short: "Publish id-sweep jobs covering an ID range (chunked, auto-discovery, gap-fill, daemon)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		auto, _ := cmd.Flags().GetBool("auto")
 		from, _ := cmd.Flags().GetUint32("from")
 		to, _ := cmd.Flags().GetUint32("to")
 		count, _ := cmd.Flags().GetUint32("count")
+		batchSize, _ := cmd.Flags().GetUint32("batch-size")
+		if cmd.Flags().Changed("batch-size") {
+			count = batchSize
+		}
 		chunkSize, _ := cmd.Flags().GetUint32("chunk-size")
 		source, _ := cmd.Flags().GetString("source")
 		fillGaps, _ := cmd.Flags().GetBool("fill-gaps")
@@ -90,7 +99,6 @@ var publishIDSweepCmd = &cobra.Command{
 		purgeEvent, _ := cmd.Flags().GetBool("purge-event")
 		minPendingJobs, _ := cmd.Flags().GetInt("min-pending-jobs")
 		maxGaps, _ := cmd.Flags().GetInt("max-gaps")
-
 		if daemon && daemonInterval <= 0 {
 			return fmt.Errorf("invalid --daemon-interval %v: must be positive", daemonInterval)
 		}
@@ -126,7 +134,7 @@ var publishIDSweepCmd = &cobra.Command{
 				}
 				if maxID == 0 {
 					// Empty DB: fallback to sweeping first count
-					actualFrom, actualTo, err := computeIDSweepRange(0, 0, count, func() (uint32, error) { return 0, nil })
+					actualFrom, actualTo, err := computeIDSweepRange(0, 0, count, true, func() (uint32, error) { return 0, nil })
 					if err != nil {
 						return 0, err
 					}
@@ -146,7 +154,7 @@ var publishIDSweepCmd = &cobra.Command{
 				maxIDFunc := func() (uint32, error) {
 					return repo.MaxID(cmd.Context())
 				}
-				actualFrom, actualTo, err := computeIDSweepRange(from, to, count, maxIDFunc)
+				actualFrom, actualTo, err := computeIDSweepRange(from, to, count, auto, maxIDFunc)
 				if err != nil {
 					return 0, err
 				}
@@ -312,6 +320,8 @@ var publishFCCensusCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(publishCmd)
 	publishCmd.AddCommand(publishIDSweepCmd)
+	publishIDSweepCmd.Flags().Bool("auto", false, "automatically determine next ID range starting from max_id + 1")
+	publishIDSweepCmd.Flags().Uint32("batch-size", 1000, "number of character IDs to sweep (alias for --count)")
 	publishIDSweepCmd.Flags().Uint32("from", 0, "first character ID (default: max_id + 1)")
 	publishIDSweepCmd.Flags().Uint32("to", 0, "last character ID (default: from + count - 1)")
 	publishIDSweepCmd.Flags().Uint32("count", 1000, "number of character IDs to sweep when --to is omitted")
