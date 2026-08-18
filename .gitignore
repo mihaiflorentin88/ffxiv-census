@@ -16,3 +16,5 @@ Dockerfile.*
 data/
 charts/*.tgz
 k8s/charts/*.tgz
+backups/
+*.sql.gz
