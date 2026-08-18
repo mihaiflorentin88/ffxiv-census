@@ -28,6 +28,7 @@ persistence:
 
 postgresql:
   enabled: true
+  replicaCount: 2
   image:
     repository: postgres
     tag: 16-alpine
