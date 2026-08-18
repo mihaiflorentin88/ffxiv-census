@@ -281,19 +281,33 @@ make build
 
 ## Release Workflow
 
-The application release process involves checking existing release tags, bumping the version tag according to Semantic Versioning (`vMAJOR.MINOR.PATCH`), building cross-compiled Linux/ARM64 artifacts, containerizing, pushing to Docker Hub, creating a Git tag, and deploying via Helm to Kubernetes.
+The application release process involves reading current release tags from GitHub, bumping the version tag according to Semantic Versioning (`vMAJOR.MINOR.PATCH`), creating and pushing the Git tag, building cross-compiled Linux/ARM64 artifacts, pushing Docker images, and deploying via Helm to Kubernetes.
 
 > **Important**: Always check existing Git and Docker tags before releasing, and bump the version tag (e.g., `v1.0.0` -> `v1.0.1`). Do not reuse or overwrite existing release tags.
 
-### 1. Check Existing Tags & Determine Next Version
+### 1. Read Current Tags from GitHub & Determine Next Version
+
+Fetch and list the latest tags from GitHub:
 
 ```bash
-# Check local and remote git tags
-git tag -l
+# Fetch and inspect all tags from origin
+git fetch --tags origin
+git tag -l --sort=-v:refname
 git ls-remote --tags origin
 ```
 
-### 2. Build & Push Docker Image
+### 2. Create & Push New Git Tag
+
+Determine the next Semantic Version (e.g., `v1.0.2`), create the Git tag, and push it to GitHub:
+
+```bash
+git tag -a v1.0.1 -m "Release v1.0.1"
+git push origin v1.0.1
+```
+
+### 3. Build & Push Docker Image
+
+Build the production image for ARM64 and push both the release tag and `latest` to Docker Hub:
 
 ```bash
 # 1. Build ARM64 binary and Docker image (tagged as latest)
@@ -305,13 +319,6 @@ make docker-tag TAG=v1.0.1
 # 3. Push release tag and latest to Docker Hub
 make docker-push TAG=v1.0.1
 make docker-push TAG=latest
-```
-
-### 3. Create & Push Git Tag
-
-```bash
-git tag v1.0.1
-git push origin v1.0.1
 ```
 
 ### 4. Deploy to Kubernetes
