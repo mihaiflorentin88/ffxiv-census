@@ -51,25 +51,27 @@
 **Files:**
 - Modify: `domain/census/worker/worker.go`
 
-- [ ] **Step 1: Define the Dispatcher state** (in-flight counters for Primary, Updates, Retries, Secondary; and limits based on `concurrency`).
+- [ ] **Step 1: Define the Dispatcher state**:
+  - `jobChan := make(chan contract.QueueJob, concurrency)`
+  - In-flight counters: `primaryInFlight`, `updatesInFlight`, `retriesInFlight`, `secondaryInFlight`.
+  - Ceilings: `maxPrimary = concurrency`, `maxUpdates = max(1, floor(concurrency * 0.25))`, `maxRetries = max(1, floor(concurrency * 0.25))`, `maxSecondary = max(1, floor(concurrency * 0.25))`.
 - [ ] **Step 2: Implement Rate Limiting Support**: Ensure the dispatcher skips claiming for event types if `w.isEventTypeAvailable(et)` returns false (respecting `ProviderRateLimiter`).
-- [ ] **Step 3: Implement the Dispatch loop**: 
-  - Calculate free capacity: `C - totalInFlight`.
-  - Round-robin through: Retries (all event types, mode=RetriesOnly), Updates (`character-census`, mode=NewOnly), Secondary (`fc-census`, `achievement-census`, mode=NewOnly), Primary (`id-sweep`, mode=NewOnly).
-  - Claim up to `min(free, ceiling - inflight)` for each category and push to `jobChan`.
-- [ ] **Step 4: Implement the Worker Pool**: `C` goroutines read from `jobChan`, call the registered handler, update the DB (Complete/Retry/Fail), and signal completion to the dispatcher to decrement `inFlight` counters.
+- [ ] **Step 3: Implement the Dispatch loop** (Runs every `w.pollInterval`): 
+  - Calculate free capacity: `C - totalInFlight`. If `0`, continue.
+  - **Retries**: Claim up to `min(capacity, maxRetries - retriesInFlight)` across all available event types using `ClaimMultiple(..., ClaimModeRetriesOnly)`.
+  - **Updates**: Claim up to `min(capacity, maxUpdates - updatesInFlight)` for `"character-census"` using `Claim(..., ClaimModeNewOnly)`.
+  - **Secondary**: Claim up to `min(capacity, maxSecondary - secondaryInFlight)` for `["fc-census", "achievement-census"]` using `ClaimMultiple(..., ClaimModeNewOnly)`.
+  - **Primary**: Claim up to `min(capacity, maxPrimary - primaryInFlight)` for `"id-sweep"` using `Claim(..., ClaimModeNewOnly)`.
+  - Push claimed jobs to `jobChan` and increment respective in-flight counters.
+- [ ] **Step 4: Implement the Worker Pool**: `C` goroutines read from `jobChan`, call `h.Handle`, update the DB via `Complete/Retry/Fail`, and decrement the correct in-flight counter when finished (using a `doneChan` or atomic counters).
 - [ ] **Step 5: Replace `multiLoop` with the Dispatcher + Worker Pool in `RunEvents` command**.
 
-### Task 5: Kubernetes Configuration Updates (`k8s/values.yaml`)
 
-**Files:**
-- Modify: `k8s/values.yaml`
-
-- [ ] **Step 1: Set `QUEUE_MAX_ATTEMPTS: "50"`**
-- [ ] **Step 2: Update `backup` cronjob schedule**
-- [ ] **Step 3: Update `publish-character` cronjob schedule and command**
-- [ ] **Step 4: Update `publish-id-sweep` cronjob schedule and command**
-- [ ] **Step 5: Update consumer worker concurrency instance count to `20`**
+- [ ] **Step 1: Set `QUEUE_MAX_ATTEMPTS: "50"`** in `env` block for webserver, workers, and cronjobs.
+- [ ] **Step 2: Update `backup` cronjob schedule** to `"0 1 * * *"`.
+- [ ] **Step 3: Update `publish-character` cronjob schedule** to `"30 */3 * * *"` and its command args to `publish character-census --limit 1000`.
+- [ ] **Step 4: Update `publish-id-sweep` cronjob schedule** to `"0 * * * *"` and its command args to `publish id-sweep --auto --batch-size 3000 --chunk-size 100`.
+- [ ] **Step 5: Update consumer worker concurrency instance count** to add `"-c"` and `"20"` to the command args.
 
 ### Task 6: Verification
 
