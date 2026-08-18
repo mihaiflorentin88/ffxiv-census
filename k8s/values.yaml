@@ -39,7 +39,7 @@ postgresql:
     persistence:
       enabled: true
       size: 20Gi
-      storageClass: nfs-rwx
+      storageClass: local-path
 
 vault:
   enabled: true

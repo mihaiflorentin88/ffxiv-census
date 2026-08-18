@@ -73,8 +73,8 @@ spec:
         name: data
       spec:
         accessModes:
-          - ReadWriteMany
-        storageClassName: {{ .Values.postgresql.primary.persistence.storageClass | default "nfs-rwx" }}
+          - ReadWriteOnce
+        storageClassName: {{ .Values.postgresql.primary.persistence.storageClass | default "local-path" }}
         resources:
           requests:
             storage: {{ .Values.postgresql.primary.persistence.size | default "20Gi" }}
