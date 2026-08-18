@@ -25,6 +25,7 @@ persistence:
     - ReadWriteMany
   size: 10Gi
   storageClass: nfs-rwx
+
 vault:
   enabled: true
   mountPath: kubernetes
@@ -116,6 +117,8 @@ webserver:
   env:
     - name: SQLITE_PATH
       value: /data/ffxiv-census.db
+    - name: QUEUE_MAX_ATTEMPTS
+      value: "50"
   volumeMounts:
     - name: shared-storage
       mountPath: /data
@@ -163,6 +166,8 @@ workers:
     env:
       - name: SQLITE_PATH
         value: /data/ffxiv-census.db
+      - name: QUEUE_MAX_ATTEMPTS
+        value: "50"
     volumeMounts:
       - name: shared-storage
         mountPath: /data
@@ -177,6 +182,8 @@ workers:
         - /app/ffxiv-census
         - consume
         - all
+        - -c
+        - "20"
 
 cronjobs:
   defaults:
@@ -196,6 +203,8 @@ cronjobs:
     env:
       - name: SQLITE_PATH
         value: /data/ffxiv-census.db
+      - name: QUEUE_MAX_ATTEMPTS
+        value: "50"
     volumeMounts:
       - name: shared-storage
         mountPath: /data
@@ -205,21 +214,20 @@ cronjobs:
           claimName: ffxiv-census
   instances:
     - name: backup
-      schedule: "0 2 * * *"
+      schedule: "0 1 * * *"
       command:
         - /app/ffxiv-census
         - backup
         - --target
         - gdrive
     - name: publish-character
-      schedule: "0 4 * * 0"
+      schedule: "30 */3 * * *"
       command:
         - /app/ffxiv-census
         - publish
         - character-census
-        - --auto
-        - --count
-        - "100"
+        - --limit
+        - "1000"
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
@@ -228,7 +236,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --batch-size
-        - "1000"
+        - "3000"
         - --chunk-size
         - "100"
     - name: publish-fc-census

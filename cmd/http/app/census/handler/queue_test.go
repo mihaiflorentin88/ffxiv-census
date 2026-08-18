@@ -37,7 +37,7 @@ func TestQueueController_PurgeByStatus(t *testing.T) {
 				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":201,"to":300}`)},
 				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":301,"to":400}`)},
 			)
-			claimed, _ := q.Claim(ctx, "id-sweep", 3)
+			claimed, _ := q.Claim(ctx, "id-sweep", 3, contract.ClaimModeAny)
 			_ = q.Complete(ctx, claimed[1].ID)
 			_ = q.Fail(ctx, claimed[2].ID, "test failure")
 

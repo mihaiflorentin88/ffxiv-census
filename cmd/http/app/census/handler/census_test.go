@@ -454,10 +454,10 @@ func TestQueueController_Events(t *testing.T) {
 		contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":10}`)},
 		contract.QueueJob{Type: "fc-census", Payload: []byte(`{"id":"failed"}`)},
 	)
-	claimed, _ := rig.q.Claim(ctx, "character-census", 1)
+	claimed, _ := rig.q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	_ = rig.q.Complete(ctx, claimed[0].ID)
 
-	claimedFC, _ := rig.q.Claim(ctx, "fc-census", 1)
+	claimedFC, _ := rig.q.Claim(ctx, "fc-census", 1, contract.ClaimModeAny)
 	_ = rig.q.Fail(ctx, claimedFC[0].ID, "lodestone parse error")
 
 	events = nil
@@ -493,10 +493,10 @@ func TestQueueController_ListJobs_FiltersAndPagination(t *testing.T) {
 		contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":10}`)},
 		contract.QueueJob{Type: "achievement-census", Payload: []byte(`{"id":10}`)},
 	)
-	claimed, _ := rig.q.Claim(ctx, "character-census", 1)
+	claimed, _ := rig.q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	_ = rig.q.Complete(ctx, claimed[0].ID)
 
-	claimedAch, _ := rig.q.Claim(ctx, "achievement-census", 1)
+	claimedAch, _ := rig.q.Claim(ctx, "achievement-census", 1, contract.ClaimModeAny)
 	_ = rig.q.Fail(ctx, claimedAch[0].ID, "permanent error")
 	// List all jobs
 	var res response.PaginatedQueueJobs
@@ -619,7 +619,7 @@ func TestQueueController_RetryFailed(t *testing.T) {
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":2}`)},
 	)
-	claimed, _ := rig.q.Claim(ctx, "id-sweep", 2)
+	claimed, _ := rig.q.Claim(ctx, "id-sweep", 2, contract.ClaimModeAny)
 	_ = rig.q.Fail(ctx, claimed[0].ID, "error 1")
 	_ = rig.q.Fail(ctx, claimed[1].ID, "error 2")
 
@@ -645,7 +645,7 @@ func TestQueueController_Purge(t *testing.T) {
 	ctx := context.Background()
 
 	_, _ = rig.q.Publish(ctx, contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":1}`)})
-	claimed, _ := rig.q.Claim(ctx, "character-census", 1)
+	claimed, _ := rig.q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	_ = rig.q.Complete(ctx, claimed[0].ID)
 
 	// POST /api/v1/queue/purge

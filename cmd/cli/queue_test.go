@@ -73,7 +73,7 @@ func TestQueueStatsCmd_Run(t *testing.T) {
 		t.Fatalf("publish: %v", err)
 	}
 
-	claimed, err := q.Claim(ctx, "id-sweep", 1)
+	claimed, err := q.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestQueueRetryFailedCmd_Run(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	claimed, err := q.Claim(ctx, "character-census", 1)
+	claimed, err := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestQueuePurgeCmd_Run(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	claimed, err := q.Claim(ctx, "character-census", 1)
+	claimed, err := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestQueuePurgeCmd_ByStatus(t *testing.T) {
 				t.Fatalf("publish: %v", err)
 			}
 
-			claimed, _ := q.Claim(ctx, "id-sweep", 3)
+			claimed, _ := q.Claim(ctx, "id-sweep", 3, contract.ClaimModeAny)
 			_ = q.Complete(ctx, claimed[1].ID)
 			_ = q.Fail(ctx, claimed[2].ID, "test err")
 

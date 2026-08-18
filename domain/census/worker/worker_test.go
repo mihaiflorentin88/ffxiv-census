@@ -175,7 +175,7 @@ func TestWorker_ReclaimsClaimedOnStart(t *testing.T) {
 	if _, err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{}`)}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if _, err := q.Claim(context.Background(), "id-sweep", 1); err != nil {
+	if _, err := q.Claim(context.Background(), "id-sweep", 1, contract.ClaimModeAny); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	w := New(q, reg, nil)

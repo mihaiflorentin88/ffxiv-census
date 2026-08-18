@@ -76,11 +76,11 @@ func payloadHash(payload []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (f *Fake) Claim(ctx context.Context, jobType string, n int) ([]contract.QueueJob, error) {
-	return f.ClaimMultiple(ctx, []string{jobType}, n)
+func (f *Fake) Claim(ctx context.Context, jobType string, n int, mode contract.ClaimMode) ([]contract.QueueJob, error) {
+	return f.ClaimMultiple(ctx, []string{jobType}, n, mode)
 }
 
-func (f *Fake) ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]contract.QueueJob, error) {
+func (f *Fake) ClaimMultiple(ctx context.Context, jobTypes []string, n int, mode contract.ClaimMode) ([]contract.QueueJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now().UTC()
@@ -92,6 +92,18 @@ func (f *Fake) ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]c
 	var candidates []contract.QueueJob
 	for _, j := range f.jobs {
 		if typesMap[j.Type] && j.Status == contract.QueueJobPending && !j.RunAt.After(now) {
+			matchesMode := false
+			switch mode {
+			case contract.ClaimModeNewOnly:
+				matchesMode = j.Attempts == 0
+			case contract.ClaimModeRetriesOnly:
+				matchesMode = j.Attempts > 0
+			default:
+				matchesMode = true
+			}
+			if !matchesMode {
+				continue
+			}
 			candidates = append(candidates, j)
 		}
 	}

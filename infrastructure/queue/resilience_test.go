@@ -50,7 +50,7 @@ func TestQueue_ClaimMultiple(t *testing.T) {
 	}
 
 	// Claim only from id-sweep and fc-census
-	claimed, err := q.ClaimMultiple(ctx, []string{"id-sweep", "fc-census"}, 10)
+	claimed, err := q.ClaimMultiple(ctx, []string{"id-sweep", "fc-census"}, 10, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim multiple: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestQueue_InfiniteRetries(t *testing.T) {
 	}
 
 	for i := 1; i <= 10; i++ {
-		claimed, err := q.Claim(ctx, "id-sweep", 1)
+		claimed, err := q.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 		if err != nil {
 			t.Fatalf("claim %d: %v", i, err)
 		}

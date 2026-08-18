@@ -44,7 +44,7 @@ func TestFakePublishComputesPayloadHash(t *testing.T) {
 	if _, err := f.Publish(ctx, contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	claimed, err := f.Claim(ctx, "id-sweep", 1)
+	claimed, err := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestFakePublishDefaultsMaxAttempts(t *testing.T) {
 	if _, err := f.Publish(ctx, contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	claimed, err := f.Claim(ctx, "id-sweep", 1)
+	claimed, err := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestFake_ReclaimClaimed(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	claimed, err := f.Claim(ctx, "id-sweep", 1)
+	claimed, err := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("Claim: n=%d err=%v", len(claimed), err)
 	}
@@ -110,11 +110,11 @@ func TestFake_ReclaimClaimed(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("ReclaimClaimed: n=%d err=%v", n, err)
 	}
-	got, err := f.Claim(ctx, "id-sweep", 10)
+	got, err := f.Claim(ctx, "id-sweep", 10, contract.ClaimModeAny)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("Claim after reclaim: n=%d err=%v", len(got), err)
 	}
-	other, err := f.Claim(ctx, "other", 1)
+	other, err := f.Claim(ctx, "other", 1, contract.ClaimModeAny)
 	if err != nil || len(other) != 1 {
 		t.Fatalf("Claim other: n=%d err=%v", len(other), err)
 	}
@@ -132,7 +132,7 @@ func TestFake_ListJobs_FilterAndPagination(t *testing.T) {
 	)
 
 	// Claim and complete one character-census job
-	claimed, err := f.Claim(ctx, "character-census", 1)
+	claimed, err := f.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim character-census: %v (len=%d)", err, len(claimed))
 	}
@@ -141,7 +141,7 @@ func TestFake_ListJobs_FilterAndPagination(t *testing.T) {
 	}
 
 	// Claim and fail one achievement-census job
-	claimedAch, err := f.Claim(ctx, "achievement-census", 1)
+	claimedAch, err := f.Claim(ctx, "achievement-census", 1, contract.ClaimModeAny)
 	if err != nil || len(claimedAch) != 1 {
 		t.Fatalf("claim achievement-census: %v (len=%d)", err, len(claimedAch))
 	}
@@ -242,11 +242,11 @@ func TestFake_StatsByType(t *testing.T) {
 	)
 
 	// Complete character-census
-	claimed, _ := f.Claim(ctx, "character-census", 1)
+	claimed, _ := f.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	_ = f.Complete(ctx, claimed[0].ID)
 
 	// Fail achievement-census
-	claimedAch, _ := f.Claim(ctx, "achievement-census", 1)
+	claimedAch, _ := f.Claim(ctx, "achievement-census", 1, contract.ClaimModeAny)
 	_ = f.Fail(ctx, claimedAch[0].ID, "failed error")
 	stats, err := f.StatsByType(ctx)
 	if err != nil {
@@ -286,7 +286,7 @@ func TestFake_ReliabilityAndEventDetails(t *testing.T) {
 	)
 
 	// Claim one job and retry with error
-	claimed, err := f.Claim(ctx, "id-sweep", 1)
+	claimed, err := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestFake_ReliabilityAndEventDetails(t *testing.T) {
 	}
 
 	// Claim second job and fail
-	claimed2, err := f.Claim(ctx, "id-sweep", 1)
+	claimed2, err := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed2) != 1 {
 		t.Fatalf("Claim 2: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestFake_ReliabilityAndEventDetails(t *testing.T) {
 	}
 
 	// Test Complete sets CompletedAt
-	claimed3, _ := f.Claim(ctx, "id-sweep", 1)
+	claimed3, _ := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if len(claimed3) == 1 {
 		_ = f.Complete(ctx, claimed3[0].ID)
 		completed, _ := f.GetJob(ctx, claimed3[0].ID)
@@ -393,7 +393,7 @@ func TestFake_ClaimDeterministicOrderAndClaimedAt(t *testing.T) {
 	// Wait for both to be eligible
 	time.Sleep(2100 * time.Millisecond)
 	// Claim 1 job - should pick earlier RunAt (payload {"id":1})
-	claimed, err := f.Claim(ctx, "id-sweep", 1)
+	claimed, err := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("Claim: %v (len=%d)", err, len(claimed))
 	}
@@ -410,7 +410,7 @@ func TestFake_RetryAppliesBackoff(t *testing.T) {
 	ctx := context.Background()
 
 	_, _ = f.Publish(ctx, contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"id":1}`), MaxAttempts: 3})
-	claimed, _ := f.Claim(ctx, "id-sweep", 1)
+	claimed, _ := f.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	_ = f.Retry(ctx, claimed[0].ID, "transient error")
 
 	retried, _ := f.GetJob(ctx, claimed[0].ID)
@@ -442,7 +442,7 @@ func TestFake_PurgeByEachStatus(t *testing.T) {
 				contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":301,"to":400}`)},
 			)
 
-			claimed, _ := f.Claim(ctx, "id-sweep", 3)
+			claimed, _ := f.Claim(ctx, "id-sweep", 3, contract.ClaimModeAny)
 			_ = f.Complete(ctx, claimed[1].ID)
 			_ = f.Fail(ctx, claimed[2].ID, "err")
 

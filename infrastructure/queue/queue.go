@@ -77,11 +77,11 @@ func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) (int, er
 	return totalInserted, nil
 }
 
-func (q *Queue) Claim(ctx context.Context, jobType string, n int) ([]contract.QueueJob, error) {
-	return q.ClaimMultiple(ctx, []string{jobType}, n)
+func (q *Queue) Claim(ctx context.Context, jobType string, n int, mode contract.ClaimMode) ([]contract.QueueJob, error) {
+	return q.ClaimMultiple(ctx, []string{jobType}, n, mode)
 }
 
-func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]contract.QueueJob, error) {
+func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int, mode contract.ClaimMode) ([]contract.QueueJob, error) {
 	if len(jobTypes) == 0 {
 		return nil, nil
 	}
@@ -108,16 +108,24 @@ func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]
 	}
 	args = append(args, now, n) // for run_at <= ? and LIMIT ?
 
+	var modeFilter string
+	switch mode {
+	case contract.ClaimModeNewOnly:
+		modeFilter = " AND attempts = 0"
+	case contract.ClaimModeRetriesOnly:
+		modeFilter = " AND attempts > 0"
+	}
+
 	query := fmt.Sprintf(`UPDATE queue_jobs
 		 SET status = 'claimed', claimed_at = ?, attempts = attempts + 1
 		 WHERE id IN (
 		     SELECT id FROM queue_jobs
-		     WHERE type IN (%s) AND status = 'pending' AND run_at <= ?
+		     WHERE type IN (%s) AND status = 'pending' AND run_at <= ? %s
 		     ORDER BY run_at, id
 		     LIMIT ?
 		 )
 		 RETURNING id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at`,
-		strings.Join(placeholders, ", "))
+		strings.Join(placeholders, ", "), modeFilter)
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

@@ -48,7 +48,7 @@ func TestPublishAndClaimRoundtrip(t *testing.T) {
 	if n, err := q.Publish(ctx, job("character-census", `{"id":1}`)); err != nil || n != 1 {
 		t.Fatalf("publish: n=%d err=%v, want n=1", n, err)
 	}
-	claimed, err := q.Claim(ctx, "character-census", 10)
+	claimed, err := q.Claim(ctx, "character-census", 10, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestClaimSkipsFutureAndRespectsLimit(t *testing.T) {
 	if n, err := q.Publish(ctx, future, job("fc-census", `{"fc":"B"}`), job("fc-census", `{"fc":"C"}`)); err != nil || n != 3 {
 		t.Fatalf("publish: n=%d err=%v, want n=3", n, err)
 	}
-	claimed, err := q.Claim(ctx, "fc-census", 2)
+	claimed, err := q.Claim(ctx, "fc-census", 2, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestCompleteMarksDoneAndPublishesNext(t *testing.T) {
 	if _, err := q.Publish(ctx, job("character-census", `{"id":7}`)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	claimed, err := q.Claim(ctx, "character-census", 1)
+	claimed, err := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestCompleteMarksDoneAndPublishesNext(t *testing.T) {
 	if depth[contract.QueueJobDone] != 1 {
 		t.Errorf("done = %d, want 1", depth[contract.QueueJobDone])
 	}
-	claimedNext, err := q.Claim(ctx, "achievement-census", 1)
+	claimedNext, err := q.Claim(ctx, "achievement-census", 1, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim next: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRetryBackoffThenFail(t *testing.T) {
 	if _, err := q.Publish(ctx, job("character-census", `{"id":3}`)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	c1, _ := q.Claim(ctx, "character-census", 1)
+	c1, _ := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err := q.Retry(ctx, c1[0].ID, "temporary error"); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -154,12 +154,12 @@ func TestRetryBackoffThenFail(t *testing.T) {
 	if depth[contract.QueueJobPending] != 1 {
 		t.Fatalf("after retry: pending = %d, want 1", depth[contract.QueueJobPending])
 	}
-	if claimed, _ := q.Claim(ctx, "character-census", 1); len(claimed) != 0 {
+	if claimed, _ := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny); len(claimed) != 0 {
 		t.Fatal("job claimed before backoff elapsed")
 	}
 	inner := q.(*Queue)
 	inner.now = func() time.Time { return time.Now().Add(10 * time.Second) }
-	c2, err := q.Claim(ctx, "character-census", 1)
+	c2, err := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err != nil {
 		t.Fatalf("claim after backoff: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestConcurrentClaimNoDoubleDelivery(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claimed, err := q.Claim(ctx, "id-sweep", 10)
+			claimed, err := q.Claim(ctx, "id-sweep", 10, contract.ClaimModeAny)
 			if err != nil {
 				t.Errorf("claim: %v", err)
 				return
@@ -218,7 +218,7 @@ func TestQueue_ReclaimClaimed(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 	// Claim one id-sweep job -> now 'claimed'.
-	claimed, err := q.Claim(ctx, "id-sweep", 1)
+	claimed, err := q.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("Claim: n=%d err=%v", len(claimed), err)
 	}
@@ -228,11 +228,11 @@ func TestQueue_ReclaimClaimed(t *testing.T) {
 		t.Fatalf("ReclaimClaimed: n=%d err=%v", n, err)
 	}
 	// Both id-sweep jobs are now claimable again; the 'other' job is untouched.
-	got, err := q.Claim(ctx, "id-sweep", 10)
+	got, err := q.Claim(ctx, "id-sweep", 10, contract.ClaimModeAny)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("Claim after reclaim: n=%d err=%v", len(got), err)
 	}
-	other, err := q.Claim(ctx, "other", 1)
+	other, err := q.Claim(ctx, "other", 1, contract.ClaimModeAny)
 	if err != nil || len(other) != 1 {
 		t.Fatalf("Claim other: n=%d err=%v", len(other), err)
 	}
@@ -250,7 +250,7 @@ func TestQueue_ListJobs_FilterAndPagination(t *testing.T) {
 	)
 
 	// Claim and complete one character-census job
-	claimed, err := q.Claim(ctx, "character-census", 1)
+	claimed, err := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim character-census: %v (len=%d)", err, len(claimed))
 	}
@@ -259,7 +259,7 @@ func TestQueue_ListJobs_FilterAndPagination(t *testing.T) {
 	}
 
 	// Claim and fail one achievement-census job
-	claimedAch, err := q.Claim(ctx, "achievement-census", 1)
+	claimedAch, err := q.Claim(ctx, "achievement-census", 1, contract.ClaimModeAny)
 	if err != nil || len(claimedAch) != 1 {
 		t.Fatalf("claim achievement-census: %v (len=%d)", err, len(claimedAch))
 	}
@@ -360,11 +360,11 @@ func TestQueue_StatsByType(t *testing.T) {
 	)
 
 	// Complete character-census
-	claimed, _ := q.Claim(ctx, "character-census", 1)
+	claimed, _ := q.Claim(ctx, "character-census", 1, contract.ClaimModeAny)
 	_ = q.Complete(ctx, claimed[0].ID)
 
 	// Fail achievement-census
-	claimedAch, _ := q.Claim(ctx, "achievement-census", 1)
+	claimedAch, _ := q.Claim(ctx, "achievement-census", 1, contract.ClaimModeAny)
 	_ = q.Fail(ctx, claimedAch[0].ID, "failed")
 
 	stats, err := q.StatsByType(ctx)
@@ -404,7 +404,7 @@ func TestQueue_LastErrorAndEventDetails(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	claimed, err := q.Claim(ctx, "id-sweep", 1)
+	claimed, err := q.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestQueue_RetryFailedAndPurgeJobs(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	claimed, err := q.Claim(ctx, "character-census", 2)
+	claimed, err := q.Claim(ctx, "character-census", 2, contract.ClaimModeAny)
 	if err != nil || len(claimed) != 2 {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestQueue_PurgeByEachStatus(t *testing.T) {
 			}
 
 			// Claim 3 jobs (job 1 stays pending)
-			claimed, err := q.Claim(ctx, "id-sweep", 3)
+			claimed, err := q.Claim(ctx, "id-sweep", 3, contract.ClaimModeAny)
 			if err != nil || len(claimed) != 3 {
 				t.Fatalf("Claim: %v", err)
 			}
@@ -574,7 +574,7 @@ func TestQueue_PurgeByEachStatus(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Publish: %v", err)
 		}
-		claimed, err := q.Claim(ctx, "id-sweep", 1)
+		claimed, err := q.Claim(ctx, "id-sweep", 1, contract.ClaimModeAny)
 		if err != nil || len(claimed) != 1 {
 			t.Fatalf("Claim: %v", err)
 		}

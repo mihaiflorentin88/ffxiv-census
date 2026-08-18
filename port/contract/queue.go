@@ -5,6 +5,14 @@ import (
 	"time"
 )
 
+type ClaimMode string
+
+const (
+	ClaimModeAny         ClaimMode = "any"
+	ClaimModeNewOnly     ClaimMode = "new_only"
+	ClaimModeRetriesOnly ClaimMode = "retries_only"
+)
+
 // QueueJobStatus is the lifecycle state of a queue job.
 type QueueJobStatus string
 
@@ -73,10 +81,10 @@ type Queue interface {
 	// Claim atomically claims up to n pending jobs of the given type whose
 	// run_at has passed: marks them claimed, increments attempts. Safe for
 	// concurrent consumers.
-	Claim(ctx context.Context, jobType string, n int) ([]QueueJob, error)
+	Claim(ctx context.Context, jobType string, n int, mode ClaimMode) ([]QueueJob, error)
 	// ClaimMultiple atomically claims up to n pending jobs matching any of the given job types
 	// whose run_at has passed: marks them claimed, increments attempts.
-	ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]QueueJob, error)
+	ClaimMultiple(ctx context.Context, jobTypes []string, n int, mode ClaimMode) ([]QueueJob, error)
 	// Complete marks a claimed job done and publishes nextJobs in the same
 	// transaction (downstream chaining is atomic).
 	Complete(ctx context.Context, id int64, nextJobs ...QueueJob) error
