@@ -31,8 +31,8 @@ var httpCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		// Initialize SQLite driver (triggers runtime migrations)
-		if driver := container.Load.SQLite(); driver != nil {
+		// Initialize PostgreSQL driver (triggers runtime migrations)
+		if driver := container.Load.Database(); driver != nil {
 			defer driver.Close()
 		}
 

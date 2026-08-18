@@ -23,13 +23,13 @@ type Router struct {
 	HealthController  roothandler.Controller
 	MetricsController roothandler.MetricsController
 }
-type sqlitePinger struct {
-	driver contract.SQLiteDriver
+type databasePinger struct {
+	driver contract.DatabaseDriver
 }
 
-func (s *sqlitePinger) PingContext(ctx context.Context) error {
+func (s *databasePinger) PingContext(ctx context.Context) error {
 	if s.driver == nil {
-		return fmt.Errorf("sqlite driver uninitialized")
+		return fmt.Errorf("database driver uninitialized")
 	}
 	_, err := s.driver.FetchOne(ctx, "SELECT 1")
 	return err
@@ -37,11 +37,11 @@ func (s *sqlitePinger) PingContext(ctx context.Context) error {
 
 func NewRouter() Router {
 	reg := container.Load.PrometheusRegistry()
-	sqlite := container.Load.SQLite()
+	db := container.Load.Database()
 
 	var opts []roothandler.HealthOption
-	if sqlite != nil {
-		opts = append(opts, roothandler.WithDatabasePinger(&sqlitePinger{driver: sqlite}))
+	if db != nil {
+		opts = append(opts, roothandler.WithDatabasePinger(&databasePinger{driver: db}))
 	}
 
 	return Router{

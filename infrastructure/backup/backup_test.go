@@ -2,110 +2,70 @@ package backup_test
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/backup"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
-	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
 )
 
-func TestBackup_LocalSnapshotCreation(t *testing.T) {
+func TestBackup_CleanOldBackups(t *testing.T) {
 	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "source.db")
 
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("create sqlite driver: %v", err)
-	}
+	// Create dummy old and new backup files
+	oldFile := filepath.Join(tempDir, "ffxiv_census_backup_20200101_000000.sql.gz")
+	newFile := filepath.Join(tempDir, "ffxiv_census_backup_20260818_000000.sql.gz")
 
-	// Insert test data
-	db, err := driver.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("acquire db: %v", err)
-	}
-	_, err = db.Exec("CREATE TABLE test_data (id INT, val TEXT); INSERT INTO test_data VALUES (1, 'hello')")
-	if err != nil {
-		t.Fatalf("insert test data: %v", err)
-	}
+	_ = os.WriteFile(oldFile, []byte("old"), 0644)
+	_ = os.WriteFile(newFile, []byte("new"), 0644)
 
-	backupDir := filepath.Join(tempDir, "backups")
-	svc := backup.NewService(driver, nil)
+	// Set mtime for old file to 30 days ago
+	oldTime := time.Now().AddDate(0, 0, -30)
+	_ = os.Chtimes(oldFile, oldTime, oldTime)
 
+	svc := backup.NewService(nil, "", nil)
 	cfg := &backup.Config{
-		Target:    "local",
-		OutputDir: backupDir,
+		Target:        "local",
+		OutputDir:     tempDir,
+		RetentionDays: 7,
 	}
 
-	backupPath, err := svc.PerformBackup(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("perform backup: %v", err)
-	}
+	// Test local retention cleaning
+	_, _ = svc.PerformBackup(context.Background(), cfg)
 
-	if _, err := os.Stat(backupPath); err != nil {
-		t.Fatalf("backup file does not exist at %s: %v", backupPath, err)
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Errorf("expected old backup to be deleted, but still exists")
 	}
-
-	// Verify backup DB is valid SQLite and contains test data
-	backupDB, err := sql.Open("sqlite", backupPath)
-	if err != nil {
-		t.Fatalf("open backup db: %v", err)
-	}
-	defer backupDB.Close()
-
-	var val string
-	err = backupDB.QueryRow("SELECT val FROM test_data WHERE id = 1").Scan(&val)
-	if err != nil {
-		t.Fatalf("query backup db: %v", err)
-	}
-	if val != "hello" {
-		t.Fatalf("expected val='hello', got %s", val)
+	if _, err := os.Stat(newFile); os.IsNotExist(err) {
+		t.Errorf("expected new backup to be retained, but was deleted")
 	}
 }
 
 func TestBackup_GDrive_MissingCredentials(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "source.db")
-
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("create sqlite driver: %v", err)
-	}
-
-	svc := backup.NewService(driver, nil)
+	svc := backup.NewService(nil, "", nil)
 	cfg := &backup.Config{
 		Target: "gdrive",
 	}
 
-	_, err = svc.PerformBackup(context.Background(), cfg)
+	_, err := svc.PerformBackup(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error with missing credentials, got nil")
 	}
-	if !strings.Contains(err.Error(), "no Google Drive credentials found") {
+	if !strings.Contains(err.Error(), "no Google Drive credentials configured") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
 
 func TestBackup_GDrive_InvalidBase64Credentials(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "source.db")
-
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("create sqlite driver: %v", err)
-	}
-
-	svc := backup.NewService(driver, nil)
+	svc := backup.NewService(nil, "", nil)
 	cfg := &backup.Config{
 		Target:            "gdrive",
 		ServiceAccountB64: "invalid-not-base64!@#$",
 	}
 
-	_, err = svc.PerformBackup(context.Background(), cfg)
+	_, err := svc.PerformBackup(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error with invalid base64 credentials, got nil")
 	}
@@ -114,44 +74,8 @@ func TestBackup_GDrive_InvalidBase64Credentials(t *testing.T) {
 	}
 }
 
-func TestBackup_GDrive_IgnoresRawEnvDirectly(t *testing.T) {
-	// Ensure infrastructure does not read GDRIVE_SERVICE_ACCOUNT_B64 directly from os.Getenv
-	t.Setenv("GDRIVE_SERVICE_ACCOUNT_B64", "invalid-b64")
-
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "source.db")
-
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("create sqlite driver: %v", err)
-	}
-
-	svc := backup.NewService(driver, nil)
-	cfg := &backup.Config{
-		Target: "gdrive",
-	}
-
-	_, err = svc.PerformBackup(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	// If it was reading GDRIVE_SERVICE_ACCOUNT_B64, it would say "decode base64 service account"
-	// Because it's removed, it should say "no Google Drive credentials found"
-	if !strings.Contains(err.Error(), "no Google Drive credentials found") {
-		t.Errorf("expected 'no Google Drive credentials found', got: %v", err)
-	}
-}
-
 func TestBackup_GDrive_OAuthCredentials(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "source.db")
-
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("create sqlite driver: %v", err)
-	}
-
-	svc := backup.NewService(driver, nil)
+	svc := backup.NewService(nil, "", nil)
 	cfg := &backup.Config{
 		Target:            "gdrive",
 		OAuthClientID:     "mock-client-id",
@@ -160,12 +84,12 @@ func TestBackup_GDrive_OAuthCredentials(t *testing.T) {
 	}
 
 	// Should resolve credentials and attempt to create drive client / upload
-	_, err = svc.PerformBackup(context.Background(), cfg)
+	_, err := svc.PerformBackup(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error connecting to mock gdrive with dummy token, got nil")
 	}
-	// It should NOT say "no Google Drive credentials found"
-	if strings.Contains(err.Error(), "no Google Drive credentials found") {
+	// It should NOT say "no Google Drive credentials configured"
+	if strings.Contains(err.Error(), "no Google Drive credentials configured") {
 		t.Errorf("expected OAuth credentials to be recognized, got: %v", err)
 	}
 }

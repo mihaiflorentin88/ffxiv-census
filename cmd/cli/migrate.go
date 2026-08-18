@@ -14,9 +14,9 @@ func runMigrate(direction string) error {
 	if direction != "up" && direction != "down" {
 		return fmt.Errorf("invalid direction %q, use up or down", direction)
 	}
-	driver := container.Load.SQLite()
+	driver := container.Load.Database()
 	if driver == nil {
-		return fmt.Errorf("sqlite driver not initialised (check config/sqlite)")
+		return fmt.Errorf("database driver not initialised (check config/postgres)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -32,7 +32,7 @@ func runMigrate(direction string) error {
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
-	Short: "Runs SQLite schema migrations (up applies all pending; down rolls back all)",
+	Short: "Runs PostgreSQL schema migrations (up applies all pending; down rolls back all)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		direction, _ := cmd.Flags().GetString("direction")

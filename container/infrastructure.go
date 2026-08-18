@@ -8,11 +8,11 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/metrics"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres"
+	postgresmigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres/migration"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/provider"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
-	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -21,7 +21,7 @@ type InfrastructureContainer struct {
 	httpClient            contract.HTTPClient
 	statsd                contract.StatsdClient
 	prometheusRegistry    *metrics.Registry
-	sqliteDriver          contract.SQLiteDriver
+	databaseDriver        contract.DatabaseDriver
 	queue                 contract.Queue
 	lodestoneClient       contract.LodestoneClient
 	tomestoneClient       contract.TomestoneClient
@@ -101,27 +101,35 @@ func (s *ServiceContainer) providerRateLimiterUnlocked() contract.ProviderRateLi
 	return limiter
 }
 
-func (s *ServiceContainer) SQLite() contract.SQLiteDriver {
+func (s *ServiceContainer) Database() contract.DatabaseDriver {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sqliteUnlocked()
+	return s.databaseUnlocked()
 }
 
-func (s *ServiceContainer) sqliteUnlocked() contract.SQLiteDriver {
-	if s.infrastructure.sqliteDriver != nil {
-		return s.infrastructure.sqliteDriver
+func (s *ServiceContainer) Postgres() contract.DatabaseDriver {
+	return s.Database()
+}
+
+func (s *ServiceContainer) SQLite() contract.DatabaseDriver {
+	return s.Database()
+}
+
+func (s *ServiceContainer) databaseUnlocked() contract.DatabaseDriver {
+	if s.infrastructure.databaseDriver != nil {
+		return s.infrastructure.databaseDriver
 	}
-	cfg := s.configUnlocked().SQLite
+	cfg := s.configUnlocked().Postgres
 	if cfg == nil {
-		logging.Warn("container.sqlite", "sqlite config missing")
+		logging.Warn("container.postgres", "postgres config missing")
 		return nil
 	}
-	driver, err := sqlite.NewDriver(cfg, sqlitemigration.FS())
+	driver, err := postgres.NewDriver(cfg, postgresmigration.FS())
 	if err != nil {
-		logging.Error("container.sqlite", fmt.Sprintf("failed to create sqlite driver: %v", err))
+		logging.Error("container.postgres", fmt.Sprintf("failed to create postgres driver: %v", err))
 		return nil
 	}
-	s.infrastructure.sqliteDriver = driver
+	s.infrastructure.databaseDriver = driver
 	return driver
 }
 
@@ -131,9 +139,9 @@ func (s *ServiceContainer) Queue() contract.Queue {
 	if s.infrastructure.queue != nil {
 		return s.infrastructure.queue
 	}
-	driver := s.sqliteUnlocked()
+	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("container.queue", "sqlite driver unavailable, queue disabled")
+		logging.Warn("container.queue", "database driver unavailable, queue disabled")
 		return nil
 	}
 	cfg := s.configUnlocked().Queue
@@ -196,9 +204,9 @@ func (s *ServiceContainer) CharacterRepository() contract.CharacterRepository {
 	if s.infrastructure.characterRepository != nil {
 		return s.infrastructure.characterRepository
 	}
-	driver := s.sqliteUnlocked()
+	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("container.character_repository", "sqlite driver unavailable")
+		logging.Warn("container.character_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.characterRepository = repository.NewCharacterRepository(driver)
@@ -211,9 +219,9 @@ func (s *ServiceContainer) FreeCompanyRepository() contract.FreeCompanyRepositor
 	if s.infrastructure.freeCompanyRepository != nil {
 		return s.infrastructure.freeCompanyRepository
 	}
-	driver := s.sqliteUnlocked()
+	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("container.free_company_repository", "sqlite driver unavailable")
+		logging.Warn("container.free_company_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.freeCompanyRepository = repository.NewFreeCompanyRepository(driver)
@@ -226,9 +234,9 @@ func (s *ServiceContainer) AchievementRepository() contract.AchievementRepositor
 	if s.infrastructure.achievementRepository != nil {
 		return s.infrastructure.achievementRepository
 	}
-	driver := s.sqliteUnlocked()
+	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("container.achievement_repository", "sqlite driver unavailable")
+		logging.Warn("container.achievement_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.achievementRepository = repository.NewAchievementRepository(driver)
@@ -241,9 +249,9 @@ func (s *ServiceContainer) CensusRunRepository() contract.CensusRunRepository {
 	if s.infrastructure.censusRunRepository != nil {
 		return s.infrastructure.censusRunRepository
 	}
-	driver := s.sqliteUnlocked()
+	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("container.census_run_repository", "sqlite driver unavailable")
+		logging.Warn("container.census_run_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.censusRunRepository = repository.NewCensusRunRepository(driver)

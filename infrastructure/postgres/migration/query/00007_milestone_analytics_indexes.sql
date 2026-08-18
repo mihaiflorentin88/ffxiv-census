@@ -1,5 +1,4 @@
--- Indexes for milestone analytics (Chocobo achievement tracking and character milestone lookups).
-
+-- Indexes for milestone analytics
 -- +goose Up
 -- +goose StatementBegin
 CREATE INDEX IF NOT EXISTS idx_character_milestones_achievement_achieved ON character_milestones (achievement_id, achieved_at);

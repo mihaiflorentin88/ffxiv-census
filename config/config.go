@@ -20,7 +20,7 @@ type Config struct {
 	HTTP      HTTPConfig       `mapstructure:"http"`
 	Auth      *AuthConfig      `mapstructure:"auth"`
 	Metrics   *MetricsConfig   `mapstructure:"metrics"`
-	SQLite    *SQLiteConfig    `mapstructure:"sqlite"`
+	Postgres  *PostgresConfig  `mapstructure:"postgres"`
 	Queue     *QueueConfig     `mapstructure:"queue"`
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
 	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
@@ -57,13 +57,45 @@ type MetricsConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 	Prefix   string `mapstructure:"prefix"`
 }
-type SQLiteConfig struct {
-	Path         string `mapstructure:"path"`
+type PostgresConfig struct {
+	DSN          string `mapstructure:"dsn"`
+	Host         string `mapstructure:"host"`
+	Port         int    `mapstructure:"port"`
+	User         string `mapstructure:"user"`
+	Password     string `mapstructure:"password"`
+	Database     string `mapstructure:"database"`
+	SSLMode      string `mapstructure:"sslmode"`
 	MaxOpenConns int    `mapstructure:"max_open_conns"`
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
-	BusyTimeout  string `mapstructure:"busy_timeout"`
-	JournalMode  string `mapstructure:"journal_mode"`
 }
+
+func (p *PostgresConfig) GetDSN() string {
+	if p.DSN != "" {
+		return p.DSN
+	}
+	sslmode := p.SSLMode
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+	host := p.Host
+	if host == "" {
+		host = "localhost"
+	}
+	port := p.Port
+	if port == 0 {
+		port = 5432
+	}
+	user := p.User
+	if user == "" {
+		user = "census"
+	}
+	dbname := p.Database
+	if dbname == "" {
+		dbname = "ffxiv_census"
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s", user, p.Password, host, port, dbname, sslmode)
+}
+
 type QueueConfig struct {
 	ClaimBatchSize     int `mapstructure:"claim_batch_size"`
 	MaxAttempts        int `mapstructure:"max_attempts"`

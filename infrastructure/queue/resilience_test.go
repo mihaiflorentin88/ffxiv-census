@@ -3,30 +3,43 @@ package queue_test
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres"
+	postgresmigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
-	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 func newTestQueue(t *testing.T) contract.Queue {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "queue_test.db")
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("sqlite driver: %v", err)
+	cfg := &config.PostgresConfig{
+		Host:         "localhost",
+		Port:         5432,
+		User:         "census",
+		Password:     "secret",
+		Database:     "ffxiv_census",
+		SSLMode:      "disable",
+		MaxOpenConns: 5,
+		MaxIdleConns: 2,
 	}
-	cfg := &config.QueueConfig{
+	driver, err := postgres.NewDriver(cfg, postgresmigration.FS())
+	if err != nil {
+		t.Skipf("postgres not available: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = driver.Execute(context.Background(), "TRUNCATE queue_jobs RESTART IDENTITY CASCADE")
+		_ = driver.Close()
+	})
+	_, _ = driver.Execute(context.Background(), "TRUNCATE queue_jobs RESTART IDENTITY CASCADE")
+	qCfg := &config.QueueConfig{
 		ClaimBatchSize:     5,
 		BackoffBaseSeconds: 1,
 	}
-	q, err := queue.NewQueue(driver, cfg, logging.Logger)
+	q, err := queue.NewQueue(driver, qCfg, logging.Logger)
 	if err != nil {
 		t.Fatalf("new queue: %v", err)
 	}

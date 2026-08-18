@@ -1,6 +1,6 @@
 FROM alpine:latest
 
-RUN apk add --no-cache bash ca-certificates tzdata
+RUN apk add --no-cache bash ca-certificates tzdata postgresql-client
 
 WORKDIR /app
 

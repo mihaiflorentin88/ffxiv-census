@@ -5,8 +5,8 @@ import (
 	"database/sql"
 )
 
-// SQLiteDriver defines access to the SQLite database, including runtime migrations.
-type SQLiteDriver interface {
+// DatabaseDriver defines access to the relational database, including runtime migrations.
+type DatabaseDriver interface {
 	Acquire(ctx context.Context) (*sql.DB, error)
 	Close() error
 	Execute(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -15,3 +15,6 @@ type SQLiteDriver interface {
 	MigrateUp(ctx context.Context) error
 	MigrateDown(ctx context.Context) error
 }
+
+type SQLiteDriver = DatabaseDriver
+type PostgresDriver = DatabaseDriver

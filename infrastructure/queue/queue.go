@@ -5,38 +5,45 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"github.com/mihaiflorentin88/ffxiv-census/config"
-	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"io"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
 	"time"
+
+	"github.com/mihaiflorentin88/ffxiv-census/config"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-const timeLayout = "2006-01-02T15:04:05.000Z"
-
-// Queue is a SQLite-backed work queue implementing contract.Queue.
+// Queue is a PostgreSQL-backed work queue implementing contract.Queue.
 type Queue struct {
-	driver contract.SQLiteDriver
+	driver contract.DatabaseDriver
 	cfg    *config.QueueConfig
 	logger contract.Logger
-	now    func() time.Time // injectable clock for deterministic backoff tests
+	now    func() time.Time
 }
 
-func NewQueue(driver contract.SQLiteDriver, cfg *config.QueueConfig, logger contract.Logger) (contract.Queue, error) {
+func NewQueue(driver contract.DatabaseDriver, cfg *config.QueueConfig, logger contract.Logger) (contract.Queue, error) {
 	if driver == nil {
-		return nil, errors.New("queue driver is nil")
+		return nil, fmt.Errorf("queue: database driver is required")
 	}
 	if cfg == nil {
-		return nil, errors.New("queue config is nil")
+		cfg = &config.QueueConfig{
+			ClaimBatchSize:     4,
+			MaxAttempts:        5,
+			BackoffBaseSeconds: 5,
+		}
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Queue{driver: driver, cfg: cfg, logger: logger, now: time.Now}, nil
+	return &Queue{
+		driver: driver,
+		cfg:    cfg,
+		logger: logger,
+		now:    time.Now,
+	}, nil
 }
 
 // SetNowFunc overrides the queue's internal clock (useful in tests).
@@ -48,7 +55,7 @@ func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) (int, er
 	if len(jobs) > 0 {
 		q.logger.DebugContext(ctx, "queue.publish", slog.Int("jobs", len(jobs)))
 	}
-	now := q.now().UTC().Format(timeLayout)
+	now := q.now().UTC()
 	var totalInserted int
 	for _, j := range jobs {
 		if j.MaxAttempts == 0 {
@@ -58,12 +65,13 @@ func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) (int, er
 		}
 		runAt := now
 		if !j.RunAt.IsZero() {
-			runAt = j.RunAt.UTC().Format(timeLayout)
+			runAt = j.RunAt.UTC()
 		}
 		h := payloadHash(j.Payload)
 		res, err := q.driver.Execute(ctx,
-			`INSERT OR IGNORE INTO queue_jobs (type, payload, payload_hash, status, run_at, max_attempts, created_at)
-			 VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+			`INSERT INTO queue_jobs (type, payload, payload_hash, status, run_at, max_attempts, created_at)
+			 VALUES ($1, $2, $3, 'pending', $4, $5, $6)
+			 ON CONFLICT (type, payload_hash) DO NOTHING`,
 			j.Type, string(j.Payload), h, runAt, j.MaxAttempts, now)
 		if err != nil {
 			return totalInserted, fmt.Errorf("publish %s: %w", j.Type, err)
@@ -88,7 +96,7 @@ func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int, mod
 	if n <= 0 {
 		n = q.cfg.ClaimBatchSize
 	}
-	now := q.now().UTC().Format(timeLayout)
+	now := q.now().UTC()
 	db, err := q.driver.Acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -97,16 +105,19 @@ func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int, mod
 	if err != nil {
 		return nil, fmt.Errorf("claim begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }() // no-op after commit
+	defer func() { _ = tx.Rollback() }()
 
 	placeholders := make([]string, len(jobTypes))
 	args := make([]any, 0, len(jobTypes)+3)
-	args = append(args, now) // for claimed_at = ?
+	args = append(args, now) // $1 = claimed_at
 	for i, jt := range jobTypes {
-		placeholders[i] = "?"
 		args = append(args, jt)
+		placeholders[i] = fmt.Sprintf("$%d", len(args))
 	}
-	args = append(args, now, n) // for run_at <= ? and LIMIT ?
+	args = append(args, now) // run_at <= $N
+	runAtPos := len(args)
+	args = append(args, n) // LIMIT $M
+	limitPos := len(args)
 
 	var modeFilter string
 	switch mode {
@@ -117,15 +128,15 @@ func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int, mod
 	}
 
 	query := fmt.Sprintf(`UPDATE queue_jobs
-		 SET status = 'claimed', claimed_at = ?, attempts = attempts + 1
+		 SET status = 'claimed', claimed_at = $1, attempts = attempts + 1
 		 WHERE id IN (
 		     SELECT id FROM queue_jobs
-		     WHERE type IN (%s) AND status = 'pending' AND run_at <= ? %s
+		     WHERE type IN (%s) AND status = 'pending' AND run_at <= $%d %s
 		     ORDER BY run_at, id
-		     LIMIT ?
+		     LIMIT $%d
 		 )
 		 RETURNING id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at`,
-		strings.Join(placeholders, ", "), modeFilter)
+		strings.Join(placeholders, ", "), runAtPos, modeFilter, limitPos)
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -157,9 +168,9 @@ func (q *Queue) Complete(ctx context.Context, id int64, nextJobs ...contract.Que
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := q.now().UTC().Format(timeLayout)
+	now := q.now().UTC()
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE queue_jobs SET status = 'done', completed_at = ? WHERE id = ? AND status = 'claimed'`, now, id); err != nil {
+		`UPDATE queue_jobs SET status = 'done', completed_at = $1 WHERE id = $2 AND status = 'claimed'`, now, id); err != nil {
 		return fmt.Errorf("complete: %w", err)
 	}
 	if err := q.publishTx(ctx, tx, nextJobs...); err != nil {
@@ -175,10 +186,9 @@ func (q *Queue) Retry(ctx context.Context, id int64, lastErr string) error {
 		return err
 	}
 	now := q.now().UTC()
-	nowStr := now.Format(timeLayout)
 	var attempts, maxAttempts int
 	if err := db.QueryRowContext(ctx,
-		`SELECT attempts, max_attempts FROM queue_jobs WHERE id = ?`, id).Scan(&attempts, &maxAttempts); err != nil {
+		`SELECT attempts, max_attempts FROM queue_jobs WHERE id = $1`, id).Scan(&attempts, &maxAttempts); err != nil {
 		return fmt.Errorf("retry read: %w", err)
 	}
 
@@ -190,25 +200,23 @@ func (q *Queue) Retry(ctx context.Context, id int64, lastErr string) error {
 	if attempts >= 2 {
 		shift := uint(attempts - 1)
 		if shift > 10 {
-			shift = 10 // clamp exponential growth to 2^10 (~5120s max base)
+			shift = 10
 		}
 		backoff *= time.Duration(1 << shift)
 	}
-	// Add 10-20% jitter: [0.9, 1.2] * backoff
 	jitterFactor := 0.9 + 0.3*rand.Float64()
 	backoff = time.Duration(float64(backoff) * jitterFactor)
-	runAt := now.Add(backoff).UTC().Format(timeLayout)
+	runAt := now.Add(backoff).UTC()
 
-	// If max_attempts > 0 and attempts >= max_attempts, fail the job. If max_attempts == 0 (or < 0), infinite retry.
 	if maxAttempts > 0 && attempts >= maxAttempts {
 		q.logger.ErrorContext(ctx, "queue.failed", slog.Int64("job_id", id), slog.Int("attempts", attempts), slog.Int("max_attempts", maxAttempts), slog.String("last_error", lastErr))
 		_, err = db.ExecContext(ctx,
-			`UPDATE queue_jobs SET status = 'failed', last_error = ?, failed_at = ? WHERE id = ? AND status = 'claimed'`, lastErr, nowStr, id)
+			`UPDATE queue_jobs SET status = 'failed', last_error = $1, failed_at = $2 WHERE id = $3 AND status = 'claimed'`, lastErr, now, id)
 	} else {
 		q.logger.WarnContext(ctx, "queue.retry", slog.Int64("job_id", id), slog.Int("attempts", attempts), slog.Int("max_attempts", maxAttempts), slog.Duration("backoff", backoff), slog.String("last_error", lastErr))
 		_, err = db.ExecContext(ctx,
-			`UPDATE queue_jobs SET status = 'pending', run_at = ?, claimed_at = NULL, last_error = ?
-			 WHERE id = ? AND status = 'claimed'`, runAt, lastErr, id)
+			`UPDATE queue_jobs SET status = 'pending', run_at = $1, claimed_at = NULL, last_error = $2
+			 WHERE id = $3 AND status = 'claimed'`, runAt, lastErr, id)
 	}
 	if err != nil {
 		return fmt.Errorf("retry: %w", err)
@@ -217,9 +225,9 @@ func (q *Queue) Retry(ctx context.Context, id int64, lastErr string) error {
 }
 
 func (q *Queue) Fail(ctx context.Context, id int64, lastErr string) error {
-	nowStr := q.now().UTC().Format(timeLayout)
+	now := q.now().UTC()
 	_, err := q.driver.Execute(ctx,
-		`UPDATE queue_jobs SET status = 'failed', last_error = ?, failed_at = ? WHERE id = ? AND status = 'claimed'`, lastErr, nowStr, id)
+		`UPDATE queue_jobs SET status = 'failed', last_error = $1, failed_at = $2 WHERE id = $3 AND status = 'claimed'`, lastErr, now, id)
 	if err != nil {
 		return fmt.Errorf("fail: %w", err)
 	}
@@ -231,29 +239,29 @@ func (q *Queue) RetryFailed(ctx context.Context, jobType string, limit int) (int
 	if limit <= 0 {
 		limit = 100
 	}
-	nowStr := q.now().UTC().Format(timeLayout)
+	now := q.now().UTC()
 	var query string
 	var args []any
 	if jobType != "" {
 		query = `UPDATE queue_jobs
-		         SET status = 'pending', run_at = ?, failed_at = NULL, attempts = 0
+		         SET status = 'pending', run_at = $1, failed_at = NULL, attempts = 0
 		         WHERE id IN (
 		             SELECT id FROM queue_jobs
-		             WHERE status = 'failed' AND type = ?
+		             WHERE status = 'failed' AND type = $2
 		             ORDER BY id ASC
-		             LIMIT ?
+		             LIMIT $3
 		         )`
-		args = []any{nowStr, jobType, limit}
+		args = []any{now, jobType, limit}
 	} else {
 		query = `UPDATE queue_jobs
-		         SET status = 'pending', run_at = ?, failed_at = NULL, attempts = 0
+		         SET status = 'pending', run_at = $1, failed_at = NULL, attempts = 0
 		         WHERE id IN (
 		             SELECT id FROM queue_jobs
 		             WHERE status = 'failed'
 		             ORDER BY id ASC
-		             LIMIT ?
+		             LIMIT $2
 		         )`
-		args = []any{nowStr, limit}
+		args = []any{now, limit}
 	}
 	res, err := q.driver.Execute(ctx, query, args...)
 	if err != nil {
@@ -265,16 +273,33 @@ func (q *Queue) RetryFailed(ctx context.Context, jobType string, limit int) (int
 }
 
 func (q *Queue) PurgeJobs(ctx context.Context, eventType string, status contract.QueueJobStatus, olderThan time.Duration) (int64, error) {
-	cutoff := q.now().UTC().Add(-olderThan).Format(timeLayout)
-	query := `DELETE FROM queue_jobs
-	          WHERE (? = '' OR ? = 'all' OR type = ?)
-	            AND (? = '' OR ? = 'all' OR status = ?)
-	            AND (
-	              (status = 'done' AND COALESCE(completed_at, created_at) <= ?)
-	              OR (status = 'failed' AND COALESCE(failed_at, created_at) <= ?)
-	              OR (status NOT IN ('done', 'failed') AND created_at <= ?)
-	            )`
-	res, err := q.driver.Execute(ctx, query, eventType, eventType, eventType, string(status), string(status), string(status), cutoff, cutoff, cutoff)
+	cutoff := q.now().UTC().Add(-olderThan)
+	var where []string
+	var args []any
+
+	addParam := func(clauseTpl string, val any) {
+		args = append(args, val)
+		where = append(where, fmt.Sprintf(clauseTpl, len(args)))
+	}
+
+	if eventType != "" && eventType != "all" {
+		addParam("type = $%d", eventType)
+	}
+	if status != "" && status != "all" {
+		addParam("status = $%d", string(status))
+	}
+
+	cutoffParam := len(args) + 1
+	args = append(args, cutoff)
+
+	where = append(where, fmt.Sprintf(`(
+		(status = 'done' AND COALESCE(completed_at, created_at) <= $%d)
+		OR (status = 'failed' AND COALESCE(failed_at, created_at) <= $%d)
+		OR (status NOT IN ('done', 'failed') AND created_at <= $%d)
+	)`, cutoffParam, cutoffParam, cutoffParam))
+
+	query := "DELETE FROM queue_jobs WHERE " + strings.Join(where, " AND ")
+	res, err := q.driver.Execute(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("purge jobs: %w", err)
 	}
@@ -304,14 +329,13 @@ func (q *Queue) GetEventDetails(ctx context.Context, sampleLimit int) ([]contrac
 			NextJobs:   []contract.QueueJob{},
 			FailedJobs: []contract.QueueJob{},
 		}
-		// Active (claimed) jobs
 		if s.Claimed > 0 {
 			rows, err := q.driver.FetchMany(ctx,
 				`SELECT id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at
 				 FROM queue_jobs
-				 WHERE type = ? AND status = 'claimed'
+				 WHERE type = $1 AND status = 'claimed'
 				 ORDER BY claimed_at DESC, id ASC
-				 LIMIT ?`, s.Type, sampleLimit)
+				 LIMIT $2`, s.Type, sampleLimit)
 			if err == nil {
 				jobs, scanErr := scanJobs(rows)
 				rows.Close()
@@ -320,14 +344,13 @@ func (q *Queue) GetEventDetails(ctx context.Context, sampleLimit int) ([]contrac
 				}
 			}
 		}
-		// Next (pending) jobs
 		if s.Pending > 0 {
 			rows, err := q.driver.FetchMany(ctx,
 				`SELECT id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at
 				 FROM queue_jobs
-				 WHERE type = ? AND status = 'pending'
+				 WHERE type = $1 AND status = 'pending'
 				 ORDER BY run_at ASC, id ASC
-				 LIMIT ?`, s.Type, sampleLimit)
+				 LIMIT $2`, s.Type, sampleLimit)
 			if err == nil {
 				jobs, scanErr := scanJobs(rows)
 				rows.Close()
@@ -336,14 +359,13 @@ func (q *Queue) GetEventDetails(ctx context.Context, sampleLimit int) ([]contrac
 				}
 			}
 		}
-		// Failed jobs
 		if s.Failed > 0 {
 			rows, err := q.driver.FetchMany(ctx,
 				`SELECT id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at
 				 FROM queue_jobs
-				 WHERE type = ? AND status = 'failed'
+				 WHERE type = $1 AND status = 'failed'
 				 ORDER BY COALESCE(failed_at, created_at) DESC, id DESC
-				 LIMIT ?`, s.Type, sampleLimit)
+				 LIMIT $2`, s.Type, sampleLimit)
 			if err == nil {
 				jobs, scanErr := scanJobs(rows)
 				rows.Close()
@@ -378,9 +400,9 @@ func (q *Queue) Depth(ctx context.Context) (map[contract.QueueJobStatus]int, err
 
 func (q *Queue) ReclaimClaimed(ctx context.Context, jobType string) (int, error) {
 	res, err := q.driver.Execute(ctx,
-		`UPDATE queue_jobs SET status = 'pending', run_at = ?, claimed_at = NULL
-		  WHERE type = ? AND status = 'claimed'`,
-		q.now().UTC().Format(timeLayout), jobType)
+		`UPDATE queue_jobs SET status = 'pending', run_at = $1, claimed_at = NULL
+		  WHERE type = $2 AND status = 'claimed'`,
+		q.now().UTC(), jobType)
 	if err != nil {
 		return 0, fmt.Errorf("reclaim claimed: %w", err)
 	}
@@ -389,17 +411,20 @@ func (q *Queue) ReclaimClaimed(ctx context.Context, jobType string) (int, error)
 	return int(n), nil
 }
 
-// ListJobs returns non-deleted queue jobs matching filter, ordered by id desc (newest first).
 func (q *Queue) ListJobs(ctx context.Context, filter contract.QueueJobFilter, limit, offset int) ([]contract.QueueJob, error) {
 	var where []string
 	var args []any
+
+	addParam := func(clauseTpl string, val any) {
+		args = append(args, val)
+		where = append(where, fmt.Sprintf(clauseTpl, len(args)))
+	}
+
 	if filter.Type != "" {
-		where = append(where, "type = ?")
-		args = append(args, filter.Type)
+		addParam("type = $%d", filter.Type)
 	}
 	if filter.Status != "" {
-		where = append(where, "status = ?")
-		args = append(args, string(filter.Status))
+		addParam("status = $%d", string(filter.Status))
 	}
 	query := "SELECT id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at FROM queue_jobs"
 	if len(where) > 0 {
@@ -407,15 +432,15 @@ func (q *Queue) ListJobs(ctx context.Context, filter contract.QueueJobFilter, li
 	}
 	query += " ORDER BY id DESC"
 	if limit > 0 {
-		query += " LIMIT ?"
 		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
 		if offset > 0 {
-			query += " OFFSET ?"
 			args = append(args, offset)
+			query += fmt.Sprintf(" OFFSET $%d", len(args))
 		}
 	} else if offset > 0 {
-		query += " LIMIT -1 OFFSET ?"
 		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
 	}
 
 	rows, err := q.driver.FetchMany(ctx, query, args...)
@@ -434,17 +459,20 @@ func (q *Queue) ListJobs(ctx context.Context, filter contract.QueueJobFilter, li
 	return jobs, nil
 }
 
-// CountJobs returns the number of queue jobs matching filter.
 func (q *Queue) CountJobs(ctx context.Context, filter contract.QueueJobFilter) (int64, error) {
 	var where []string
 	var args []any
+
+	addParam := func(clauseTpl string, val any) {
+		args = append(args, val)
+		where = append(where, fmt.Sprintf(clauseTpl, len(args)))
+	}
+
 	if filter.Type != "" {
-		where = append(where, "type = ?")
-		args = append(args, filter.Type)
+		addParam("type = $%d", filter.Type)
 	}
 	if filter.Status != "" {
-		where = append(where, "status = ?")
-		args = append(args, string(filter.Status))
+		addParam("status = $%d", string(filter.Status))
 	}
 	query := "SELECT COUNT(*) FROM queue_jobs"
 	if len(where) > 0 {
@@ -461,9 +489,8 @@ func (q *Queue) CountJobs(ctx context.Context, filter contract.QueueJobFilter) (
 	return count, nil
 }
 
-// GetJob returns one queue job by id, or nil if not found.
 func (q *Queue) GetJob(ctx context.Context, id int64) (*contract.QueueJob, error) {
-	query := "SELECT id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at FROM queue_jobs WHERE id = ?"
+	query := "SELECT id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at FROM queue_jobs WHERE id = $1"
 	rows, err := q.driver.FetchMany(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("get queue job %d: %w", id, err)
@@ -480,7 +507,6 @@ func (q *Queue) GetJob(ctx context.Context, id int64) (*contract.QueueJob, error
 	return &jobs[0], nil
 }
 
-// StatsByType returns aggregated job counts (pending, claimed, done, failed, total) grouped by event type.
 func (q *Queue) StatsByType(ctx context.Context) ([]contract.QueueTypeStats, error) {
 	query := `
 SELECT type,
@@ -516,9 +542,8 @@ ORDER BY type ASC
 	return stats, nil
 }
 
-// publishTx inserts jobs inside the caller's transaction (atomic chaining).
 func (q *Queue) publishTx(ctx context.Context, tx *sql.Tx, jobs ...contract.QueueJob) error {
-	now := q.now().UTC().Format(timeLayout)
+	now := q.now().UTC()
 	for _, j := range jobs {
 		if j.MaxAttempts == 0 {
 			j.MaxAttempts = q.cfg.MaxAttempts
@@ -527,12 +552,13 @@ func (q *Queue) publishTx(ctx context.Context, tx *sql.Tx, jobs ...contract.Queu
 		}
 		runAt := now
 		if !j.RunAt.IsZero() {
-			runAt = j.RunAt.UTC().Format(timeLayout)
+			runAt = j.RunAt.UTC()
 		}
 		h := payloadHash(j.Payload)
 		res, err := tx.ExecContext(ctx,
-			`INSERT OR IGNORE INTO queue_jobs (type, payload, payload_hash, status, run_at, max_attempts, created_at)
-			 VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+			`INSERT INTO queue_jobs (type, payload, payload_hash, status, run_at, max_attempts, created_at)
+			 VALUES ($1, $2, $3, 'pending', $4, $5, $6)
+			 ON CONFLICT (type, payload_hash) DO NOTHING`,
 			j.Type, string(j.Payload), h, runAt, j.MaxAttempts, now)
 		if err != nil {
 			return fmt.Errorf("publish next: %w", err)
@@ -548,46 +574,41 @@ func payloadHash(payload []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// scanJobs scans RETURNING rows in column order:
-// id, type, payload, payload_hash, status, run_at, attempts, max_attempts,
-// last_error, claimed_at, created_at, failed_at, completed_at.
 func scanJobs(rows *sql.Rows) ([]contract.QueueJob, error) {
 	var jobs []contract.QueueJob
 	for rows.Next() {
 		var j contract.QueueJob
-		var payload, payloadHash, status, runAt, createdAt string
-		var lastError, claimedAt, failedAt, completedAt sql.NullString
+		var payload, payloadHash, status string
+		var runAt, createdAt time.Time
+		var attempts, maxAttempts int
+		var lastError sql.NullString
+		var claimedAt, failedAt, completedAt sql.NullTime
 		if err := rows.Scan(&j.ID, &j.Type, &payload, &payloadHash, &status, &runAt,
-			&j.Attempts, &j.MaxAttempts, &lastError, &claimedAt, &createdAt, &failedAt, &completedAt); err != nil {
+			&attempts, &maxAttempts, &lastError, &claimedAt, &createdAt, &failedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		j.Payload = []byte(payload)
 		j.PayloadHash = payloadHash
 		j.Status = contract.QueueJobStatus(status)
-		if t, err := time.Parse(timeLayout, runAt); err == nil {
-			j.RunAt = t
-		}
+		j.RunAt = runAt
+		j.Attempts = attempts
+		j.MaxAttempts = maxAttempts
 		if lastError.Valid && lastError.String != "" {
 			val := lastError.String
 			j.LastError = &val
 		}
-		if claimedAt.Valid && claimedAt.String != "" {
-			if t, err := time.Parse(timeLayout, claimedAt.String); err == nil {
-				j.ClaimedAt = &t
-			}
+		if claimedAt.Valid {
+			t := claimedAt.Time
+			j.ClaimedAt = &t
 		}
-		if t, err := time.Parse(timeLayout, createdAt); err == nil {
-			j.CreatedAt = t
+		j.CreatedAt = createdAt
+		if failedAt.Valid {
+			t := failedAt.Time
+			j.FailedAt = &t
 		}
-		if failedAt.Valid && failedAt.String != "" {
-			if t, err := time.Parse(timeLayout, failedAt.String); err == nil {
-				j.FailedAt = &t
-			}
-		}
-		if completedAt.Valid && completedAt.String != "" {
-			if t, err := time.Parse(timeLayout, completedAt.String); err == nil {
-				j.CompletedAt = &t
-			}
+		if completedAt.Valid {
+			t := completedAt.Time
+			j.CompletedAt = &t
 		}
 		jobs = append(jobs, j)
 	}

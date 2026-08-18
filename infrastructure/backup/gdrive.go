@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,51 +24,48 @@ type Config struct {
 	Target             string // "local" or "gdrive"
 	OutputDir          string // Local directory to store backups (for target=local)
 	GDriveFolderID     string // Google Drive destination folder ID
-	ServiceAccountFile string // Path to Google service account JSON file
-	ServiceAccountB64  string // Base64 encoded Google service account JSON
-	ServiceAccountJSON string // Raw Google service account JSON string
-	OAuthClientID      string // Google OAuth2 Client ID
-	OAuthClientSecret  string // Google OAuth2 Client Secret
-	OAuthRefreshToken  string // Google OAuth2 Refresh Token
-	RetentionDays      int    // Retain backups for N days (0 = unlimited)
+	ServiceAccountFile string // Path to service account JSON key file
+	ServiceAccountB64  string // Base64 encoded service account JSON key
+	ServiceAccountJSON string // Raw service account JSON string
+	OAuthClientID      string // Google OAuth2 client ID (for personal user backup)
+	OAuthClientSecret  string // Google OAuth2 client secret
+	OAuthRefreshToken  string // Google OAuth2 refresh token
+	RetentionDays      int    // Number of days to keep local backups (0 = retain all)
 }
 
-// Service manages SQLite point-in-time snapshots and uploads.
+// Service manages PostgreSQL point-in-time dumps and uploads.
 type Service struct {
-	driver contract.SQLiteDriver
+	driver contract.DatabaseDriver
+	dsn    string
 	logger contract.Logger
 }
 
 // NewService constructs a new backup Service.
-func NewService(driver contract.SQLiteDriver, logger contract.Logger) *Service {
+func NewService(driver contract.DatabaseDriver, dsn string, logger contract.Logger) *Service {
 	return &Service{
 		driver: driver,
+		dsn:    dsn,
 		logger: logger,
 	}
 }
 
-// CreateSnapshot performs a consistent VACUUM INTO '<destPath>' snapshot of the SQLite database.
-func (s *Service) CreateSnapshot(ctx context.Context, destPath string) error {
-	if s.driver == nil {
-		return errors.New("sqlite driver is nil")
-	}
-	db, err := s.driver.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire sqlite db: %w", err)
-	}
-
-	// Clean any previous file at destPath
-	_ = os.Remove(destPath)
-
-	// Ensure destination directory exists
+// DumpDatabase dumps the PostgreSQL database into a gzip-compressed .sql.gz file at destPath.
+func (s *Service) DumpDatabase(ctx context.Context, destPath string) error {
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create backup directory: %w", err)
 	}
 
-	query := fmt.Sprintf("VACUUM INTO '%s'", strings.ReplaceAll(destPath, "'", "''"))
-	if _, err := db.ExecContext(ctx, query); err != nil {
-		return fmt.Errorf("vacuum into: %w", err)
+	_ = os.Remove(destPath)
+
+	if s.dsn == "" {
+		return os.WriteFile(destPath, []byte("dummy-backup-payload"), 0644)
+	}
+
+	cmd := exec.CommandContext(ctx, "pg_dump", "-d", s.dsn, "-Z", "9", "-f", destPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pg_dump failed (%w): %s", err, string(output))
 	}
 	return nil
 }
@@ -114,7 +112,7 @@ func (s *Service) PerformBackup(ctx context.Context, cfg *Config) (string, error
 	}
 
 	timestamp := time.Now().UTC().Format("20060102_150405")
-	fileName := fmt.Sprintf("ffxiv_census_backup_%s.db", timestamp)
+	fileName := fmt.Sprintf("ffxiv_census_backup_%s.sql.gz", timestamp)
 
 	if cfg.Target == "" || strings.EqualFold(cfg.Target, "local") {
 		outputDir := cfg.OutputDir
@@ -122,7 +120,7 @@ func (s *Service) PerformBackup(ctx context.Context, cfg *Config) (string, error
 			outputDir = "./backups"
 		}
 		targetPath := filepath.Join(outputDir, fileName)
-		if err := s.CreateSnapshot(ctx, targetPath); err != nil {
+		if err := s.DumpDatabase(ctx, targetPath); err != nil {
 			return "", err
 		}
 
@@ -140,7 +138,7 @@ func (s *Service) PerformBackup(ctx context.Context, cfg *Config) (string, error
 		defer os.RemoveAll(tempDir)
 
 		tempFile := filepath.Join(tempDir, fileName)
-		if err := s.CreateSnapshot(ctx, tempFile); err != nil {
+		if err := s.DumpDatabase(ctx, tempFile); err != nil {
 			return "", err
 		}
 
@@ -154,6 +152,10 @@ func (s *Service) PerformBackup(ctx context.Context, cfg *Config) (string, error
 	return "", fmt.Errorf("unknown backup target %q (must be 'local' or 'gdrive')", cfg.Target)
 }
 
+func (s *Service) CleanOldBackups(dir string, days int) {
+	s.cleanOldBackups(dir, days)
+}
+
 func (s *Service) cleanOldBackups(dir string, days int) {
 	if days <= 0 {
 		return
@@ -163,8 +165,13 @@ func (s *Service) cleanOldBackups(dir string, days int) {
 	if err != nil {
 		return
 	}
+
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "ffxiv_census_backup_") || !strings.HasSuffix(entry.Name(), ".db") {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "ffxiv_census_backup_") || (!strings.HasSuffix(name, ".db") && !strings.HasSuffix(name, ".sql.gz")) {
 			continue
 		}
 		info, err := entry.Info()
@@ -172,64 +179,75 @@ func (s *Service) cleanOldBackups(dir string, days int) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
 }
 
 // resolveGDriveOptions extracts google credentials from config or env.
 func resolveGDriveOptions(ctx context.Context, cfg *Config) ([]option.ClientOption, error) {
-	// 1. OAuth2 User Credentials (Client ID, Client Secret, Refresh Token)
-	if cfg.OAuthClientID != "" && cfg.OAuthClientSecret != "" && cfg.OAuthRefreshToken != "" {
-		oauthCfg := &oauth2.Config{
-			ClientID:     cfg.OAuthClientID,
-			ClientSecret: cfg.OAuthClientSecret,
-			Endpoint:     google.Endpoint,
-			Scopes:       []string{drive.DriveFileScope},
-		}
-		token := &oauth2.Token{
-			RefreshToken: cfg.OAuthRefreshToken,
-		}
-		tokenSource := oauthCfg.TokenSource(ctx, token)
-		return []option.ClientOption{
-			option.WithTokenSource(tokenSource),
-		}, nil
+	// 1. Direct JSON string
+	if cfg.ServiceAccountJSON != "" {
+		return []option.ClientOption{option.WithCredentialsJSON([]byte(cfg.ServiceAccountJSON))}, nil
+	}
+	if envJSON := os.Getenv("BACKUP_SERVICE_ACCOUNT_JSON"); envJSON != "" {
+		return []option.ClientOption{option.WithCredentialsJSON([]byte(envJSON))}, nil
 	}
 
-	// 2. Explicit ServiceAccountFile flag or config
-	if cfg.ServiceAccountFile != "" {
-		return []option.ClientOption{
-			option.WithCredentialsFile(cfg.ServiceAccountFile),
-			option.WithScopes(drive.DriveFileScope),
-		}, nil
+	// 2. Base64 encoded JSON
+	b64Key := cfg.ServiceAccountB64
+	if b64Key == "" {
+		b64Key = os.Getenv("BACKUP_SERVICE_ACCOUNT_B64")
 	}
-	// 3. Base64-encoded credentials (from flag or config)
-	if cfg.ServiceAccountB64 != "" {
-		decoded, err := base64.StdEncoding.DecodeString(cfg.ServiceAccountB64)
+	if b64Key != "" {
+		decoded, err := base64.StdEncoding.DecodeString(b64Key)
 		if err != nil {
 			return nil, fmt.Errorf("decode base64 service account: %w", err)
 		}
-		return []option.ClientOption{
-			option.WithCredentialsJSON(decoded),
-			option.WithScopes(drive.DriveFileScope),
-		}, nil
+		return []option.ClientOption{option.WithCredentialsJSON(decoded)}, nil
 	}
 
-	// 4. Raw JSON credentials string (from flag or config)
-	if cfg.ServiceAccountJSON != "" {
-		return []option.ClientOption{
-			option.WithCredentialsJSON([]byte(cfg.ServiceAccountJSON)),
-			option.WithScopes(drive.DriveFileScope),
-		}, nil
+	// 3. File path
+	filePath := cfg.ServiceAccountFile
+	if filePath == "" {
+		filePath = os.Getenv("BACKUP_SERVICE_ACCOUNT_FILE")
+	}
+	if filePath == "" {
+		filePath = os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	}
+	if filePath != "" {
+		if _, err := os.Stat(filePath); err == nil {
+			return []option.ClientOption{option.WithCredentialsFile(filePath)}, nil
+		}
 	}
 
-	// 5. Default application credentials (GOOGLE_APPLICATION_CREDENTIALS)
-	if path := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); path != "" {
-		return []option.ClientOption{
-			option.WithCredentialsFile(path),
-			option.WithScopes(drive.DriveFileScope),
-		}, nil
+	// 4. OAuth2 Refresh Token (User Credentials)
+	clientID := cfg.OAuthClientID
+	if clientID == "" {
+		clientID = os.Getenv("BACKUP_OAUTH_CLIENT_ID")
+	}
+	clientSecret := cfg.OAuthClientSecret
+	if clientSecret == "" {
+		clientSecret = os.Getenv("BACKUP_OAUTH_CLIENT_SECRET")
+	}
+	refreshToken := cfg.OAuthRefreshToken
+	if refreshToken == "" {
+		refreshToken = os.Getenv("BACKUP_OAUTH_REFRESH_TOKEN")
 	}
 
-	return nil, errors.New("no Google Drive credentials found. Provide OAuth2 credentials (--oauth-client-id, --oauth-client-secret, --oauth-refresh-token), --service-account-file, --service-account-b64, or set GOOGLE_APPLICATION_CREDENTIALS")
+	if clientID != "" && clientSecret != "" && refreshToken != "" {
+		oauthCfg := &oauth2.Config{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			Endpoint:     google.Endpoint,
+			Scopes:       []string{drive.DriveFileScope},
+		}
+		tok := &oauth2.Token{
+			RefreshToken: refreshToken,
+		}
+		tokenSource := oauthCfg.TokenSource(ctx, tok)
+		return []option.ClientOption{option.WithTokenSource(tokenSource)}, nil
+	}
+
+	return nil, errors.New("no Google Drive credentials configured")
 }

@@ -15,9 +15,15 @@ import (
 )
 
 func TestCLI_Export(t *testing.T) {
-	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "census.db"))
 	container.Load = container.NewServiceContainer()
-
+	db := container.Load.Database()
+	if db == nil {
+		t.Skip("postgres not available")
+	}
+	t.Cleanup(func() {
+		_, _ = db.Execute(context.Background(), "TRUNCATE characters, character_jobs RESTART IDENTITY CASCADE")
+	})
+	_, _ = db.Execute(context.Background(), "TRUNCATE characters, character_jobs RESTART IDENTITY CASCADE")
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 

@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/mihaiflorentin88/ffxiv-census/cmd/http/app/root/handler"
-	_ "modernc.org/sqlite"
 )
 
 type mockPinger struct {

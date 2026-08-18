@@ -14,3 +14,5 @@ client_secret_*.json
 .vscode/
 Dockerfile.*
 data/
+charts/*.tgz
+k8s/charts/*.tgz

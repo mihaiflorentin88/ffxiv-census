@@ -1,13 +1,14 @@
 package container
 
 import (
-	"path/filepath"
 	"testing"
 )
 
 func TestServiceContainer_CensusRepositories(t *testing.T) {
-	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "census.db"))
 	Load = NewServiceContainer()
+	if Load.Database() == nil {
+		t.Skip("postgres not available")
+	}
 
 	if Load.CharacterRepository() == nil {
 		t.Fatal("CharacterRepository nil")

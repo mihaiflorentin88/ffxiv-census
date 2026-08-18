@@ -24,13 +24,16 @@ idle_timeout  = "120s"
 endpoint = "graphite.monitoring.svc.cluster.local:8125"
 prefix   = "ffxiv-census"
 
-[sqlite]
-path = "data/ffxiv-census.db"
-max_open_conns = 4
-max_idle_conns = 4
-busy_timeout = "5s"
-journal_mode = "WAL"
-
+[postgres]
+dsn            = "postgres://census:secret@localhost:5432/ffxiv_census?sslmode=disable"
+host           = "localhost"
+port           = 5432
+user           = "census"
+password       = "secret"
+database       = "ffxiv_census"
+sslmode        = "disable"
+max_open_conns = 10
+max_idle_conns = 5
 [queue]
 claim_batch_size = 4
 max_attempts = 5

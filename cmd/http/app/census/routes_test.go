@@ -3,7 +3,6 @@ package census_test
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	census "github.com/mihaiflorentin88/ffxiv-census/cmd/http/app/census"
@@ -11,10 +10,8 @@ import (
 )
 
 func TestRegister_DevelopmentBypass(t *testing.T) {
-	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "census_routes_dev.db"))
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("AUTH_TOKEN", "test-token")
-
 	container.Load = container.NewServiceContainer()
 
 	mux := http.NewServeMux()
@@ -36,7 +33,6 @@ func TestRegister_DevelopmentBypass(t *testing.T) {
 
 func TestRegister_ProductionEnforcement(t *testing.T) {
 	const validToken = "prod-secret-token"
-	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "census_routes_prod.db"))
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("AUTH_TOKEN", validToken)
 

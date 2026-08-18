@@ -19,12 +19,24 @@ serviceAccount:
   name: ffxiv-census-sa
 
 persistence:
-  enabled: true
+  enabled: false
   name: ffxiv-census
   accessModes:
     - ReadWriteMany
   size: 10Gi
   storageClass: nfs-rwx
+
+postgresql:
+  enabled: true
+  auth:
+    username: census
+    password: secretpassword
+    database: ffxiv_census
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: nfs-rwx
 
 vault:
   enabled: true
@@ -115,8 +127,8 @@ webserver:
   podAnnotations: {}
   podLabels: {}
   env:
-    - name: SQLITE_PATH
-      value: /data/ffxiv-census.db
+    - name: POSTGRES_DSN
+      value: postgres://census:secretpassword@ffxiv-census-postgresql:5432/ffxiv_census?sslmode=disable
     - name: QUEUE_MAX_ATTEMPTS
       value: "50"
   volumeMounts:
@@ -164,8 +176,8 @@ workers:
       fsGroup: 65532
       runAsNonRoot: true
     env:
-      - name: SQLITE_PATH
-        value: /data/ffxiv-census.db
+      - name: POSTGRES_DSN
+        value: postgres://census:secretpassword@ffxiv-census-postgresql:5432/ffxiv_census?sslmode=disable
       - name: QUEUE_MAX_ATTEMPTS
         value: "50"
     volumeMounts:
@@ -201,8 +213,8 @@ cronjobs:
       fsGroup: 65532
       runAsNonRoot: true
     env:
-      - name: SQLITE_PATH
-        value: /data/ffxiv-census.db
+      - name: POSTGRES_DSN
+        value: postgres://census:secretpassword@ffxiv-census-postgresql:5432/ffxiv_census?sslmode=disable
       - name: QUEUE_MAX_ATTEMPTS
         value: "50"
     volumeMounts:

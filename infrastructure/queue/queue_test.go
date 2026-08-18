@@ -3,30 +3,37 @@ package queue
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
-	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres"
+	postgresmigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 func testQueue(t *testing.T) contract.Queue {
 	t.Helper()
-	driver, err := sqlite.NewDriver(&config.SQLiteConfig{
-		Path:         filepath.Join(t.TempDir(), "queue.db"),
-		MaxOpenConns: 2,
+	cfg := &config.PostgresConfig{
+		Host:         "localhost",
+		Port:         5432,
+		User:         "census",
+		Password:     "secret",
+		Database:     "ffxiv_census",
+		SSLMode:      "disable",
+		MaxOpenConns: 5,
 		MaxIdleConns: 2,
-		BusyTimeout:  "2s",
-		JournalMode:  "WAL",
-	}, sqlitemigration.FS())
-	if err != nil {
-		t.Fatalf("driver: %v", err)
 	}
-	t.Cleanup(func() { driver.Close() })
+	driver, err := postgres.NewDriver(cfg, postgresmigration.FS())
+	if err != nil {
+		t.Skipf("postgres not available: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = driver.Execute(context.Background(), "TRUNCATE queue_jobs RESTART IDENTITY CASCADE")
+		_ = driver.Close()
+	})
+	_, _ = driver.Execute(context.Background(), "TRUNCATE queue_jobs RESTART IDENTITY CASCADE")
 	q, err := NewQueue(driver, &config.QueueConfig{
 		ClaimBatchSize:     4,
 		MaxAttempts:        2,

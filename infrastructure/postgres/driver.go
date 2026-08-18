@@ -1,4 +1,4 @@
-package sqlite
+package postgres
 
 import (
 	"context"
@@ -6,14 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 
@@ -21,10 +17,12 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// Driver wraps a pooled *sql.DB and satisfies the SQLiteDriver contract.
+var migrateGlobalMu sync.Mutex
+
+// Driver wraps a pooled *sql.DB and satisfies the DatabaseDriver contract.
 // Migrations run automatically (goose Up) the first time the pool is opened.
 type Driver struct {
-	cfg   *config.SQLiteConfig
+	cfg   *config.PostgresConfig
 	migFS fs.FS
 
 	once sync.Once
@@ -32,13 +30,13 @@ type Driver struct {
 	err  error
 }
 
-// NewDriver builds a lazy SQLite driver. migrationsFS holds goose .sql files.
-func NewDriver(cfg *config.SQLiteConfig, migrationsFS fs.FS) (contract.SQLiteDriver, error) {
+// NewDriver builds a lazy PostgreSQL driver. migrationsFS holds goose .sql files.
+func NewDriver(cfg *config.PostgresConfig, migrationsFS fs.FS) (contract.DatabaseDriver, error) {
 	if cfg == nil {
-		return nil, errors.New("sqlite config is nil")
+		return nil, errors.New("postgres config is nil")
 	}
 	if migrationsFS == nil {
-		return nil, errors.New("sqlite migrations fs is nil")
+		return nil, errors.New("postgres migrations fs is nil")
 	}
 	d := &Driver{cfg: cfg, migFS: migrationsFS}
 	if err := d.initialise(context.Background()); err != nil {
@@ -55,7 +53,6 @@ func (d *Driver) Acquire(ctx context.Context) (*sql.DB, error) {
 }
 
 func (d *Driver) Close() error {
-	d.once.Do(func() {}) // ensure initialization is complete
 	if d.db == nil {
 		return nil
 	}
@@ -92,9 +89,12 @@ func (d *Driver) MigrateUp(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	provider, err := goose.NewProvider(database.DialectSQLite3, db, d.migFS)
+	migrateGlobalMu.Lock()
+	defer migrateGlobalMu.Unlock()
+
+	provider, err := goose.NewProvider(database.DialectPostgres, db, d.migFS)
 	if err != nil {
-		return fmt.Errorf("goose provider: %w", err)
+		return fmt.Errorf("create goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		return fmt.Errorf("goose up: %w", err)
@@ -102,15 +102,18 @@ func (d *Driver) MigrateUp(ctx context.Context) error {
 	return nil
 }
 
-// MigrateDown rolls back all migrations (manual ops only).
+// MigrateDown rolls back all migrations.
 func (d *Driver) MigrateDown(ctx context.Context) error {
 	db, err := d.Acquire(ctx)
 	if err != nil {
 		return err
 	}
-	provider, err := goose.NewProvider(database.DialectSQLite3, db, d.migFS)
+	migrateGlobalMu.Lock()
+	defer migrateGlobalMu.Unlock()
+
+	provider, err := goose.NewProvider(database.DialectPostgres, db, d.migFS)
 	if err != nil {
-		return fmt.Errorf("goose provider: %w", err)
+		return fmt.Errorf("create goose provider: %w", err)
 	}
 	if _, err := provider.DownTo(ctx, 0); err != nil {
 		return fmt.Errorf("goose down: %w", err)
@@ -126,49 +129,39 @@ func (d *Driver) initialise(ctx context.Context) error {
 }
 
 func (d *Driver) migrateUp(ctx context.Context) error {
-	if dir := filepath.Dir(d.cfg.Path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create data dir: %w", err)
-		}
-	}
-	dsn := d.makeDSN()
-	db, err := sql.Open("sqlite", dsn)
+	dsn := d.cfg.GetDSN()
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return fmt.Errorf("open sqlite: %w", err)
+		return fmt.Errorf("open postgres: %w", err)
 	}
 	d.db = db
-	provider, err := goose.NewProvider(database.DialectSQLite3, db, d.migFS)
+	d.applyPoolSettings()
+
+	migrateGlobalMu.Lock()
+	defer migrateGlobalMu.Unlock()
+
+	provider, err := goose.NewProvider(database.DialectPostgres, db, d.migFS)
 	if err != nil {
-		db.Close()
-		return fmt.Errorf("goose provider: %w", err)
+		return fmt.Errorf("create goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
-		db.Close()
 		return fmt.Errorf("goose up: %w", err)
 	}
-	d.applyPoolSettings()
 	return nil
 }
 
-func (d *Driver) makeDSN() string {
-	busyMs := 5000
-	if dur, err := time.ParseDuration(d.cfg.BusyTimeout); err == nil && dur > 0 {
-		busyMs = int(dur.Milliseconds())
-	}
-	dsn := "file:" + d.cfg.Path +
-		"?_pragma=busy_timeout(" + strconv.Itoa(busyMs) + ")" +
-		"&_pragma=foreign_keys(1)"
-	if d.cfg.JournalMode != "" {
-		dsn += "&_pragma=journal_mode(" + d.cfg.JournalMode + ")"
-	}
-	return dsn
-}
-
 func (d *Driver) applyPoolSettings() {
-	if d.cfg.MaxOpenConns > 0 {
-		d.db.SetMaxOpenConns(d.cfg.MaxOpenConns)
+	maxOpen := d.cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 10
 	}
-	if d.cfg.MaxIdleConns > 0 {
-		d.db.SetMaxIdleConns(d.cfg.MaxIdleConns)
+	d.db.SetMaxOpenConns(maxOpen)
+
+	maxIdle := d.cfg.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = 5
 	}
+	d.db.SetMaxIdleConns(maxIdle)
+	d.db.SetConnMaxLifetime(30 * time.Minute)
+	d.db.SetConnMaxIdleTime(5 * time.Minute)
 }

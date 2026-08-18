@@ -10,7 +10,7 @@ GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/
 	build-darwin-amd64 build-darwin-arm64 \
 	build-windows-amd64 build-windows-arm64 \
 	docker-build docker-tag docker-push k8s-release \
-	docker-image test tidy fmt lint
+	docker-image test tidy fmt lint postgres postgres-stop
 
 build:
 	@echo "==> building $(APP_NAME)"
@@ -98,9 +98,16 @@ docker-image:
 	@echo "==> building runtime Docker image"
 	@docker build -t $(APP_NAME):latest .
 
-test:
-	@go test ./...
+postgres:
+	@echo "==> starting local PostgreSQL container"
+	@docker run --rm -d --name ffxiv-postgres -e POSTGRES_USER=census -e POSTGRES_PASSWORD=secret -e POSTGRES_DB=ffxiv_census -p 5432:5432 postgres:16-alpine
 
+postgres-stop:
+	@echo "==> stopping local PostgreSQL container"
+	@docker stop ffxiv-postgres || true
+
+test:
+	@go test -p 1 ./...
 tidy:
 	@go mod tidy
 

@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
 func nullableString(s *string) any {
 	if s == nil {
 		return nil
@@ -23,7 +27,7 @@ func nullableTime(t *time.Time) any {
 	if t == nil {
 		return nil
 	}
-	return formatTime(*t)
+	return *t
 }
 
 func boolInt(b bool) int {
@@ -48,13 +52,10 @@ func sqlUint32Ptr(ni sql.NullInt64) *uint32 {
 	return &v
 }
 
-func sqlTimePtr(ns sql.NullString) *time.Time {
-	if !ns.Valid {
+func sqlTimePtr(nt sql.NullTime) *time.Time {
+	if !nt.Valid {
 		return nil
 	}
-	t, err := parseTime(ns.String)
-	if err != nil {
-		return nil
-	}
+	t := nt.Time
 	return &t
 }

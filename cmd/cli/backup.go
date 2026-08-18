@@ -28,9 +28,8 @@ var backupCmd = newBackupCmd()
 func newBackupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup",
-		Short: "Create a consistent SQLite snapshot and store locally or upload to Google Drive",
-		Long: `Performs a consistent point-in-time snapshot of the SQLite database using VACUUM INTO.
-
+		Short: "Create a consistent PostgreSQL dump and store locally or upload to Google Drive",
+		Long: `Performs a consistent point-in-time dump of the PostgreSQL database using pg_dump.
 Can store the backup in a local directory or upload directly to Google Drive
 using service account credentials (suitable for automated cronjobs).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -43,17 +42,21 @@ using service account credentials (suitable for automated cronjobs).`,
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			driver := container.Load.SQLite()
+			driver := container.Load.Database()
 			if driver == nil {
-				return fmt.Errorf("sqlite driver not available")
+				return fmt.Errorf("database driver not available")
 			}
 
-			svc := backup.NewService(driver, container.Load.Logger())
+			var dsn string
+			if sysCfg != nil && sysCfg.Postgres != nil {
+				dsn = sysCfg.Postgres.GetDSN()
+			}
+
+			svc := backup.NewService(driver, dsn, container.Load.Logger())
 			loc, err := svc.PerformBackup(ctx, cfg)
 			if err != nil {
 				return fmt.Errorf("backup failed: %w", err)
 			}
-
 			fmt.Printf("Backup completed successfully: %s\n", loc)
 			return nil
 		},

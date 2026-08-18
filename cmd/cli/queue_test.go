@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/container"
@@ -13,15 +12,19 @@ import (
 
 func setupTestQueue(t *testing.T) contract.Queue {
 	t.Helper()
-	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "queue_cli.db"))
 	container.Load = container.NewServiceContainer()
+	db := container.Load.Database()
+	if db == nil {
+		t.Skip("postgres not available")
+	}
+	t.Cleanup(func() {
+		_, _ = db.Execute(context.Background(), "TRUNCATE queue_jobs RESTART IDENTITY CASCADE")
+	})
+	_, _ = db.Execute(context.Background(), "TRUNCATE queue_jobs RESTART IDENTITY CASCADE")
 	q := container.Load.Queue()
 	if q == nil {
 		t.Fatal("expected non-nil queue from container")
 	}
-	t.Cleanup(func() {
-		_ = container.Load.SQLite().Close()
-	})
 	return q
 }
 

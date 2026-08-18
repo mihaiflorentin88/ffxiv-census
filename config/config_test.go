@@ -17,8 +17,11 @@ func TestNewConfig_Defaults(t *testing.T) {
 	if cfg.HTTP.Port != 8080 {
 		t.Errorf("expected HTTP.Port 8080, got %d", cfg.HTTP.Port)
 	}
-	if cfg.SQLite.Path != "data/ffxiv-census.db" {
-		t.Errorf("expected SQLite.Path 'data/ffxiv-census.db', got %q", cfg.SQLite.Path)
+	if cfg.Postgres.User != "census" {
+		t.Errorf("expected Postgres.User 'census', got %q", cfg.Postgres.User)
+	}
+	if cfg.Postgres.Database != "ffxiv_census" {
+		t.Errorf("expected Postgres.Database 'ffxiv_census', got %q", cfg.Postgres.Database)
 	}
 	if cfg.Lodestone.RateLimit != 1.0 {
 		t.Errorf("expected Lodestone.RateLimit 1.0, got %f", cfg.Lodestone.RateLimit)
@@ -54,12 +57,12 @@ func TestNewConfig_EnvOverrides(t *testing.T) {
 		validate func(t *testing.T, cfg *Config)
 	}{
 		{
-			name:   "sqlite path override",
-			envKey: "SQLITE_PATH",
-			envVal: "/tmp/custom.db",
+			name:   "postgres dsn override",
+			envKey: "POSTGRES_DSN",
+			envVal: "postgres://custom:pass@localhost:5432/custom_db",
 			validate: func(t *testing.T, cfg *Config) {
-				if cfg.SQLite.Path != "/tmp/custom.db" {
-					t.Errorf("expected SQLite.Path '/tmp/custom.db', got %q", cfg.SQLite.Path)
+				if cfg.Postgres.DSN != "postgres://custom:pass@localhost:5432/custom_db" {
+					t.Errorf("expected Postgres.DSN 'postgres://custom:pass@localhost:5432/custom_db', got %q", cfg.Postgres.DSN)
 				}
 			},
 		},
