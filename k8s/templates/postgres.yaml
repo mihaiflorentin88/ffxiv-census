@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/component: postgresql
 spec:
   serviceName: {{ $fullName }}-postgresql
-  replicas: 1
+  replicas: {{ .Values.postgresql.replicaCount | default 1 }}
   selector:
     matchLabels:
 {{ include "manifest.selectorLabels" . | nindent 6 }}
@@ -21,10 +21,28 @@ spec:
 {{ include "manifest.labels" . | nindent 8 }}
         app.kubernetes.io/component: postgresql
     spec:
+      securityContext:
+        fsGroup: 70
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values:
+                        - postgresql
+                topologyKey: "kubernetes.io/hostname"
       containers:
         - name: postgresql
           image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
           imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
           ports:
             - name: postgresql
               containerPort: 5432
