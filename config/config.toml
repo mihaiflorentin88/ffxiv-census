@@ -48,3 +48,52 @@ timeout = "10s"
 
 [census]
 activity_window_days = 30
+max_level = 100
+
+[[census.expansions]]
+name = "A Realm Reborn"
+version = "Patch 2.55"
+final_quest = "Before the Dawn"
+icon = "🌱"
+level_cap = 50
+achievement_id = 1129
+
+[[census.expansions]]
+name = "Heavensward"
+version = "Patch 3.0"
+final_quest = "Looking Up"
+icon = "❄️"
+level_cap = 60
+achievement_id = 1139
+
+[[census.expansions]]
+name = "Stormblood"
+version = "Patch 4.0"
+final_quest = "The Measure of His Reach"
+icon = "⚔️"
+level_cap = 70
+achievement_id = 1794
+
+[[census.expansions]]
+name = "Shadowbringers"
+version = "Patch 5.0"
+final_quest = "Shadowbringers"
+icon = "🌑"
+level_cap = 80
+achievement_id = 2298
+
+[[census.expansions]]
+name = "Endwalker"
+version = "Patch 6.0"
+final_quest = "That Its Chorus Might Ring for All"
+icon = "🌕"
+level_cap = 90
+achievement_id = 2958
+
+[[census.expansions]]
+name = "Dawntrail"
+version = "Patch 7.0"
+final_quest = "In the Glow of a New Dawn"
+icon = "☀️"
+level_cap = 100
+achievement_id = 3496

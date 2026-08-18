@@ -114,10 +114,18 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 		msqMap[row.Expansion] = row.Count
 	}
 
+	var expansionList []census.ExpansionConfig
+	if c.svc != nil {
+		expansionList = c.svc.Expansions()
+	}
+	if len(expansionList) == 0 {
+		expansionList = census.DefaultExpansions
+	}
+
 	var msqRows []MSQRow
 	var msqLabels []string
 	var msqData []int64
-	for _, exp := range canonicalExpansions {
+	for _, exp := range expansionList {
 		count := msqMap[exp.Name]
 		pct := "0.0%"
 		if stats.TotalCharacters > 0 {

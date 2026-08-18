@@ -78,13 +78,14 @@ Liveness probe.
 
 ### GET /api/v1/census/latest
 
-Total and active character counts plus the active ratio (`active / total`; `0` when `total` is `0`).
+Total, active, and max-level character counts plus the active ratio (`active / total`; `0` when `total` is `0`).
 
 ```json
 {
   "total_characters": 1234,
   "active_characters": 900,
-  "active_ratio": 0.7293
+  "active_ratio": 0.7293,
+  "max_level_characters": 450
 }
 ```
 

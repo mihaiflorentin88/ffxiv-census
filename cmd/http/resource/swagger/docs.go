@@ -578,7 +578,8 @@ const docTemplate = `{
       "required": [
         "total_characters",
         "active_characters",
-        "active_ratio"
+        "active_ratio",
+        "max_level_characters"
       ],
       "properties": {
         "total_characters": {
@@ -592,6 +593,10 @@ const docTemplate = `{
         "active_ratio": {
           "type": "number",
           "format": "double"
+        },
+        "max_level_characters": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

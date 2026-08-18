@@ -19,3 +19,27 @@ func TestCensusConfig_EnvOverride(t *testing.T) {
 		t.Fatalf("CENSUS_ACTIVITY_WINDOW_DAYS override: got %v, want 45", cfg.Census.ActivityWindowDays)
 	}
 }
+
+func TestCensusConfig_MaxLevelAndExpansions(t *testing.T) {
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	if cfg.Census == nil {
+		t.Fatal("cfg.Census is nil")
+	}
+	if cfg.Census.MaxLevel != 100 {
+		t.Errorf("max_level = %d, want 100", cfg.Census.MaxLevel)
+	}
+	if len(cfg.Census.Expansions) != 6 {
+		t.Fatalf("len(expansions) = %d, want 6", len(cfg.Census.Expansions))
+	}
+	arr := cfg.Census.Expansions[0]
+	if arr.Name != "A Realm Reborn" || arr.Version != "Patch 2.55" || arr.FinalQuest != "Before the Dawn" || arr.Icon != "🌱" || arr.LevelCap != 50 || arr.AchievementID != 1129 {
+		t.Errorf("unexpected ARR config: %+v", arr)
+	}
+	dt := cfg.Census.Expansions[5]
+	if dt.Name != "Dawntrail" || dt.Version != "Patch 7.0" || dt.FinalQuest != "In the Glow of a New Dawn" || dt.Icon != "☀️" || dt.LevelCap != 100 || dt.AchievementID != 3496 {
+		t.Errorf("unexpected Dawntrail config: %+v", dt)
+	}
+}

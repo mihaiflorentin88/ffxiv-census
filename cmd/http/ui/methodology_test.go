@@ -34,4 +34,10 @@ func TestMethodologyHandler(t *testing.T) {
 	if !strings.Contains(body, "Main Scenario Quest (MSQ) Progression") {
 		t.Errorf("expected body to contain 'Main Scenario Quest (MSQ) Progression', got:\n%s", body)
 	}
+	if !strings.Contains(body, "Dawntrail") || !strings.Contains(body, "Lv. 100") {
+		t.Errorf("expected body to contain Dawntrail and Lv. 100, got:\n%s", body)
+	}
+	if !strings.Contains(body, "A Realm Reborn") || !strings.Contains(body, "Lv. 50") {
+		t.Errorf("expected body to contain A Realm Reborn and Lv. 50, got:\n%s", body)
+	}
 }

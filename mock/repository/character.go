@@ -234,7 +234,7 @@ func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 	return stale, nil
 }
 
-func matchesFilter(rec contract.CharacterRecord, f contract.CharacterFilter) bool {
+func matchesFilter(rec contract.CharacterRecord, jobs []contract.ClassJobRecord, f contract.CharacterFilter) bool {
 	if f.World != "" && rec.World != f.World {
 		return false
 	}
@@ -259,6 +259,18 @@ func matchesFilter(rec contract.CharacterRecord, f contract.CharacterFilter) boo
 	if f.ActiveOnly && rec.LatestAchievementAt == nil {
 		return false
 	}
+	if f.MinLevel > 0 {
+		hasLevel := false
+		for _, j := range jobs {
+			if uint32(j.Level) >= f.MinLevel {
+				hasLevel = true
+				break
+			}
+		}
+		if !hasLevel {
+			return false
+		}
+	}
 	return true
 }
 
@@ -277,7 +289,7 @@ func (f *CharacterRepository) List(ctx context.Context, filter contract.Characte
 	}
 	var out []contract.CharacterRecord
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
+		if rec.DeletedAt != nil || !matchesFilter(rec, f.jobs[rec.ID], filter) {
 			continue
 		}
 		out = append(out, cloneCharacter(rec))
@@ -366,7 +378,7 @@ func (f *CharacterRepository) Stream(ctx context.Context, filter contract.Charac
 	}
 	var out []contract.CharacterRecord
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
+		if rec.DeletedAt != nil || !matchesFilter(rec, f.jobs[rec.ID], filter) {
 			continue
 		}
 		out = append(out, cloneCharacter(rec))
@@ -392,7 +404,7 @@ func (f *CharacterRepository) Count(ctx context.Context, filter contract.Charact
 	}
 	var n int64
 	for _, rec := range f.characters {
-		if rec.DeletedAt == nil && matchesFilter(rec, filter) {
+		if rec.DeletedAt == nil && matchesFilter(rec, f.jobs[rec.ID], filter) {
 			n++
 		}
 	}
@@ -434,7 +446,7 @@ func (f *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 	}
 	counts := map[string]*contract.GroupCount{}
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
+		if rec.DeletedAt != nil || !matchesFilter(rec, f.jobs[rec.ID], filter) {
 			continue
 		}
 		var key string
@@ -481,7 +493,7 @@ func (f *CharacterRepository) NewPerDay(ctx context.Context, since, until time.T
 	}
 	counts := map[string]int64{}
 	for _, rec := range f.characters {
-		if rec.DeletedAt != nil || !matchesFilter(rec, filter) {
+		if rec.DeletedAt != nil || !matchesFilter(rec, f.jobs[rec.ID], filter) {
 			continue
 		}
 		if rec.FirstSeenAt.Before(since) || !rec.FirstSeenAt.Before(until) {

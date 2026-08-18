@@ -109,36 +109,13 @@
                         </tr>
                     </thead>
                     <tbody>
+                        {{range .Data.Expansions}}
                         <tr>
-                            <td><strong>A Realm Reborn</strong></td>
-                            <td><em>The Ultimate Weapon</em> / <em>In Pursuit of the Past</em></td>
-                            <td class="text-right"><span class="badge badge-region">Lv. 50</span></td>
+                            <td><strong>{{.Name}}</strong></td>
+                            <td><em>{{.FinalQuest}}</em> ({{.Version}} Finale)</td>
+                            <td class="text-right"><span class="badge {{if ge .LevelCap 100}}badge-gold{{else}}badge-region{{end}}">Lv. {{.LevelCap}}</span></td>
                         </tr>
-                        <tr>
-                            <td><strong>Heavensward</strong></td>
-                            <td><em>Heavensward</em> (MSQ 3.0 Finale)</td>
-                            <td class="text-right"><span class="badge badge-region">Lv. 60</span></td>
-                        </tr>
-                        <tr>
-                            <td><strong>Stormblood</strong></td>
-                            <td><em>Stormblood</em> (MSQ 4.0 Finale)</td>
-                            <td class="text-right"><span class="badge badge-region">Lv. 70</span></td>
-                        </tr>
-                        <tr>
-                            <td><strong>Shadowbringers</strong></td>
-                            <td><em>Shadowbringers</em> (MSQ 5.0 Finale)</td>
-                            <td class="text-right"><span class="badge badge-region">Lv. 80</span></td>
-                        </tr>
-                        <tr>
-                            <td><strong>Endwalker</strong></td>
-                            <td><em>Endwalker</em> (MSQ 6.0 Finale)</td>
-                            <td class="text-right"><span class="badge badge-region">Lv. 90</span></td>
-                        </tr>
-                        <tr>
-                            <td><strong>Dawntrail</strong></td>
-                            <td><em>Dawntrail</em> (MSQ 7.0 Finale)</td>
-                            <td class="text-right"><span class="badge badge-gold">Lv. 100</span></td>
-                        </tr>
+                        {{end}}
                     </tbody>
                 </table>
             </div>

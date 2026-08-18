@@ -75,10 +75,26 @@ func (c *UIController) renderPartial(w http.ResponseWriter, partialTemplate stri
 	}
 }
 
+// MethodologyViewData holds metadata for /ui/methodology.
+type MethodologyViewData struct {
+	Expansions []census.ExpansionConfig
+}
+
 // Methodology handles GET /ui/methodology.
 func (c *UIController) Methodology(w http.ResponseWriter, r *http.Request) {
+	var expansions []census.ExpansionConfig
+	if c.svc != nil {
+		expansions = c.svc.Expansions()
+	}
+	if len(expansions) == 0 {
+		expansions = census.DefaultExpansions
+	}
+
 	c.render(w, "templates/methodology.html", PageData{
 		Title:     "Methodology",
 		ActiveNav: "methodology",
+		Data: MethodologyViewData{
+			Expansions: expansions,
+		},
 	})
 }

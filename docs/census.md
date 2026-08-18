@@ -53,21 +53,19 @@ Operational tracking of census sweeps: `started_at`, `finished_at`, `characters_
 
 Achievement IDs are the **game** achievement IDs (small sequential integers), verified against the XIVAPI Achievement sheet (`/api/sheet/Achievement/{id}`) and ffxivcollect's achievement data — NOT the hex slugs used in Lodestone `playguide/db/achievement/...` URLs. godestone's `AchievementInfo.ID` is populated from the character achievement-list HTML and is this same game ID.
 
-The canonical registry lives in `domain/census/milestone.go` (`MilestoneSet`) and is synced to the `milestone_achievements` table via `CensusService.SyncMilestones` (idempotent `INSERT OR IGNORE`). The registry is additive — append new achievements to `MilestoneSet` and re-sync; no migration is needed.
+The milestone registry is driven dynamically by `config.toml` (`[census.expansions]`) alongside the foundational Chocobo milestone and is synced to the `milestone_achievements` table via `CensusService.SyncMilestones` (idempotent `INSERT OR IGNORE`).
 
-Verified entries:
+Default entries:
 
 | Kind | ID | Expansion | Detail |
 |---|---|---|---|
 | chocobo | 590 | — | My Little Chocobo |
+| expansion_msq | 1129 | A Realm Reborn | My Left Arm |
 | expansion_msq | 1139 | Heavensward | Looking Up |
 | expansion_msq | 1794 | Stormblood | The Measure of His Reach |
 | expansion_msq | 2298 | Shadowbringers | Shadowbringers |
 | expansion_msq | 2958 | Endwalker | That Its Chorus Might Ring for All |
 | expansion_msq | 3496 | Dawntrail | In the Glow of a New Dawn |
-
-A Realm Reborn's MSQ-completion ID and job level-cap achievements are pending verification and will be appended later.
-
 ## Repositories
 
 Four contracts in `port/contract`, each with a SQLite implementation in `infrastructure/sqlite/repository/` and an in-memory fake in `mock/repository/`:
@@ -83,14 +81,14 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 
 `domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the four repositories; the ingest handlers call it.
 
-- `SyncMilestones(ctx)` — seeds `MilestoneSet` into the DB (idempotent).
+- `SyncMilestones(ctx)` — seeds configured expansion milestones and chocobo achievement into the DB (idempotent).
 - `UpsertCharacter(ctx, *godestone.Character)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
 - `UpsertTomestoneCharacter(ctx, *contract.TomestoneCharacter)` — converts a Tomestone character + jobs into records and persists them atomically.
 - `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones).
 - `MaxCharacterID(ctx)` — returns the highest known character ID in the repository (excluding deleted characters), used for auto-discovery sweeps.
 - `IsActive(latestAt)` — true when the latest achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`).
 - `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
-- `Summary(ctx)` — total and active character counts (`total, active, err`), where active means the latest achievement is within the activity window.
+- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the latest achievement is within the activity window and max-level means having at least one job at or above `max_level`.
 - `ListCharacters(ctx, filter, limit, offset)` — one page of characters matching `filter` plus the matching count (the HTTP pagination/filtering source).
 - `CharacterDetail(ctx, id)` — character plus jobs and milestones, with the free company when the character is in one; `nil` when the id is unknown.
 - `Breakdown(ctx, by)` — per-`race`/`world`/`datacenter`/`region` totals and active counts; any other dimension returns `ErrInvalidDimension`.

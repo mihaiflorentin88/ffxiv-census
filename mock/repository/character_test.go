@@ -117,3 +117,43 @@ func TestMockCharacterRepository_GearAndGaps(t *testing.T) {
 		}
 	}
 }
+
+func TestMockCharacterRepository_MinLevelFilter(t *testing.T) {
+	repo := NewCharacterFake()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 1, Name: "Char 1", FirstSeenAt: now}, []contract.ClassJobRecord{
+		{CharacterID: 1, Level: 100},
+	})
+	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 2, Name: "Char 2", FirstSeenAt: now}, []contract.ClassJobRecord{
+		{CharacterID: 2, Level: 90},
+	})
+	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 3, Name: "Char 3", FirstSeenAt: now}, []contract.ClassJobRecord{
+		{CharacterID: 3, Level: 50},
+	})
+
+	count100, err := repo.Count(ctx, contract.CharacterFilter{MinLevel: 100})
+	if err != nil {
+		t.Fatalf("Count(MinLevel: 100): %v", err)
+	}
+	if count100 != 1 {
+		t.Errorf("Count(MinLevel: 100) = %d, want 1", count100)
+	}
+
+	count90, err := repo.Count(ctx, contract.CharacterFilter{MinLevel: 90})
+	if err != nil {
+		t.Fatalf("Count(MinLevel: 90): %v", err)
+	}
+	if count90 != 2 {
+		t.Errorf("Count(MinLevel: 90) = %d, want 2", count90)
+	}
+
+	list100, err := repo.List(ctx, contract.CharacterFilter{MinLevel: 100}, 10, 0)
+	if err != nil {
+		t.Fatalf("List(MinLevel: 100): %v", err)
+	}
+	if len(list100) != 1 || list100[0].ID != 1 {
+		t.Errorf("List(MinLevel: 100) = %v, want [ID: 1]", list100)
+	}
+}

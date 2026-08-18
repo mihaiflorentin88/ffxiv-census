@@ -15,6 +15,11 @@
         <div class="stat-subtext">Discovered Characters</div>
     </div>
     <div class="stat-card">
+        <div class="stat-label">Max Level (Lv. {{.Data.MaxLevel}})</div>
+        <div class="stat-value" style="color: var(--gold);">{{formatNumber .Data.MaxLevelCharacters}}</div>
+        <div class="stat-subtext">Characters at Cap</div>
+    </div>
+    <div class="stat-card">
         <div class="stat-label">Active Players (30d)</div>
         <div class="stat-value" style="color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
         <div class="stat-subtext highlight">{{.Data.ActivePercent}} Active Ratio</div>

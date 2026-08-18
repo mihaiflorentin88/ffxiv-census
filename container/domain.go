@@ -30,9 +30,23 @@ func (s *ServiceContainer) CensusService() *census.Service {
 		achievements,
 		s.CensusRunRepository(),
 	)
-	// Honor the configured activity window ([census] activity_window_days).
-	if c := s.Config().Census; c != nil && c.ActivityWindowDays > 0 {
-		svc.SetActivityWindow(time.Duration(c.ActivityWindowDays) * 24 * time.Hour)
+	// Honor the configured activity window and expansions ([census] in config.toml).
+	if c := s.Config().Census; c != nil {
+		if c.ActivityWindowDays > 0 {
+			svc.SetActivityWindow(time.Duration(c.ActivityWindowDays) * 24 * time.Hour)
+		}
+		var expansions []census.ExpansionConfig
+		for _, exp := range c.Expansions {
+			expansions = append(expansions, census.ExpansionConfig{
+				Name:          exp.Name,
+				Version:       exp.Version,
+				FinalQuest:    exp.FinalQuest,
+				Icon:          exp.Icon,
+				LevelCap:      exp.LevelCap,
+				AchievementID: exp.AchievementID,
+			})
+		}
+		svc.SetConfig(c.MaxLevel, expansions)
 	}
 	// Seed the milestone registry (idempotent) so achievement processing never
 	// runs against an empty registry.

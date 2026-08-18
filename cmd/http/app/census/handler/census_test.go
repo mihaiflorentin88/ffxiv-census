@@ -88,8 +88,18 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, w
 
 func TestCensusController_Latest(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &godestone.Character{ID: 1, Name: "Tataru", World: "Ultros", DC: "Primal", Gender: gender.Female})
-	rig.seed(t, &godestone.Character{ID: 2, Name: "Moen", World: "Ultros", DC: "Primal"})
+	rig.seed(t, &godestone.Character{
+		ID: 1, Name: "Tataru", World: "Ultros", DC: "Primal", Gender: gender.Female,
+		ClassJobs: []*godestone.ClassJob{
+			{JobID: 1, Name: "Gladiator", Level: 100},
+		},
+	})
+	rig.seed(t, &godestone.Character{
+		ID: 2, Name: "Moen", World: "Ultros", DC: "Primal",
+		ClassJobs: []*godestone.ClassJob{
+			{JobID: 1, Name: "Gladiator", Level: 90},
+		},
+	})
 
 	var body response.CensusSummary
 	decodeJSON(t, doGET(t, rig.c.Latest, "/api/v1/census/latest"), &body)
@@ -101,6 +111,9 @@ func TestCensusController_Latest(t *testing.T) {
 	}
 	if body.ActiveRatio != 0 {
 		t.Errorf("active_ratio = %v, want 0", body.ActiveRatio)
+	}
+	if body.MaxLevelCharacters != 1 {
+		t.Errorf("max_level_characters = %d, want 1", body.MaxLevelCharacters)
 	}
 }
 

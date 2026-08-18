@@ -13,16 +13,18 @@ import (
 
 // DashboardViewData holds the aggregate metrics and time-series for the dashboard.
 type DashboardViewData struct {
-	TotalCharacters  int64
-	ActiveCharacters int64
-	ActivePercent    string
-	QueuePending     int
-	QueueClaimed     int
-	QueueDone        int
-	QueueFailed      int
-	ChartLabels      []string
-	ChartData        []int64
-	Regions          []RegionSummary
+	TotalCharacters    int64
+	ActiveCharacters   int64
+	ActivePercent      string
+	MaxLevelCharacters int64
+	MaxLevel           uint32
+	QueuePending       int
+	QueueClaimed       int
+	QueueDone          int
+	QueueFailed        int
+	ChartLabels        []string
+	ChartData          []int64
+	Regions            []RegionSummary
 }
 
 // RegionSummary holds aggregated stats for a region in the dashboard.
@@ -52,13 +54,17 @@ type WorldRow struct {
 // Dashboard handles GET /ui/dashboard.
 func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var total, active int64
+	var total, active, maxLevelCount int64
+	var maxLevel uint32 = 100
 	var err error
 
 	if c.svc != nil {
-		total, active, err = c.svc.Summary(ctx)
+		total, active, maxLevelCount, err = c.svc.Summary(ctx)
 		if err != nil {
 			logging.Error("ui.dashboard.summary", err.Error())
+		}
+		if lvl := c.svc.MaxLevel(); lvl > 0 {
+			maxLevel = lvl
 		}
 	}
 
@@ -118,16 +124,18 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	viewData := DashboardViewData{
-		TotalCharacters:  total,
-		ActiveCharacters: active,
-		ActivePercent:    formatPercent(active, total),
-		QueuePending:     qPending,
-		QueueClaimed:     qClaimed,
-		QueueDone:        qDone,
-		QueueFailed:      qFailed,
-		ChartLabels:      chartLabels,
-		ChartData:        chartData,
-		Regions:          regions,
+		TotalCharacters:    total,
+		ActiveCharacters:   active,
+		ActivePercent:      formatPercent(active, total),
+		MaxLevelCharacters: maxLevelCount,
+		MaxLevel:           maxLevel,
+		QueuePending:       qPending,
+		QueueClaimed:       qClaimed,
+		QueueDone:          qDone,
+		QueueFailed:        qFailed,
+		ChartLabels:        chartLabels,
+		ChartData:          chartData,
+		Regions:            regions,
 	}
 
 	c.render(w, "templates/dashboard.html", PageData{

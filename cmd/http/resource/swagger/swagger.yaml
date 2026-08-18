@@ -593,6 +593,7 @@ definitions:
       - total_characters
       - active_characters
       - active_ratio
+      - max_level_characters
     properties:
       total_characters:
         type: integer
@@ -603,6 +604,9 @@ definitions:
       active_ratio:
         type: number
         format: double
+      max_level_characters:
+        type: integer
+        format: int64
   CharacterListItem:
     type: object
     required:

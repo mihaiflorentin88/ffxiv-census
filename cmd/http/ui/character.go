@@ -21,6 +21,7 @@ type CharacterProfileViewData struct {
 	FreeCompany *contract.FreeCompanyRecord
 	JobGroups   []JobGroup
 	Milestones  []MilestoneDisplay
+	MaxLevel    uint32
 }
 
 // JobGroup groups jobs by combat/crafting/gathering role.
@@ -133,15 +134,27 @@ func (c *UIController) CharacterDetail(w http.ResponseWriter, r *http.Request) {
 		isActive = c.svc.IsActive(*detail.Character.LatestAchievementAt)
 	}
 
-	// Group jobs into 7 buckets
-	jobGroups := buildJobGroups(detail.Jobs)
-
-	// Map milestones
-	milestoneMap := make(map[uint32]contract.MilestoneAchievement)
-	for _, m := range census.MilestoneSet {
-		milestoneMap[m.AchievementID] = m
+	var maxLevel uint32 = 100
+	if c.svc != nil && c.svc.MaxLevel() > 0 {
+		maxLevel = c.svc.MaxLevel()
 	}
 
+	// Group jobs into 7 buckets
+	jobGroups := buildJobGroups(detail.Jobs, maxLevel)
+
+	// Map milestones
+	var allMilestones []contract.MilestoneAchievement
+	if c.svc != nil {
+		allMilestones = c.svc.Milestones()
+	}
+	if len(allMilestones) == 0 {
+		allMilestones = census.DefaultMilestones()
+	}
+
+	milestoneMap := make(map[uint32]contract.MilestoneAchievement)
+	for _, m := range allMilestones {
+		milestoneMap[m.AchievementID] = m
+	}
 	var milestones []MilestoneDisplay
 	for _, cm := range detail.Milestones {
 		meta, ok := milestoneMap[cm.AchievementID]
@@ -176,6 +189,7 @@ func (c *UIController) CharacterDetail(w http.ResponseWriter, r *http.Request) {
 		FreeCompany: detail.FreeCompany,
 		JobGroups:   jobGroups,
 		Milestones:  milestones,
+		MaxLevel:    maxLevel,
 	}
 
 	c.render(w, "templates/character.html", PageData{
@@ -307,7 +321,7 @@ func (c *UIController) CharacterList(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildJobGroups classifies and sorts character jobs into 7 standard categories.
-func buildJobGroups(jobs []contract.ClassJobRecord) []JobGroup {
+func buildJobGroups(jobs []contract.ClassJobRecord, maxLevel uint32) []JobGroup {
 	jobMap := make(map[string]contract.ClassJobRecord)
 	for _, j := range jobs {
 		jobMap[strings.TrimSpace(j.Name)] = j
@@ -370,7 +384,7 @@ func buildJobGroups(jobs []contract.ClassJobRecord) []JobGroup {
 				Name:     name,
 				Level:    lvl,
 				ExpLevel: exp,
-				MaxLevel: lvl >= 100,
+				MaxLevel: uint32(lvl) >= maxLevel && lvl > 0,
 				RoleKey:  cat.RoleKey,
 			})
 		}

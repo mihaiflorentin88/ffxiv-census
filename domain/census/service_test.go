@@ -428,19 +428,25 @@ func TestService_Summary(t *testing.T) {
 	active := now.Add(-time.Hour)
 	inactive := now.Add(-60 * 24 * time.Hour)
 
-	seed := func(id uint32, lat *time.Time) {
-		_ = chars.Upsert(ctx, contract.CharacterRecord{ID: id, Name: fmt.Sprintf("c%d", id), World: "Ultros", FirstSeenAt: now}, nil)
+	seed := func(id uint32, lat *time.Time, lvl uint8) {
+		var jobs []contract.ClassJobRecord
+		if lvl > 0 {
+			jobs = []contract.ClassJobRecord{
+				{CharacterID: id, Name: "Paladin", Level: lvl},
+			}
+		}
+		_ = chars.Upsert(ctx, contract.CharacterRecord{ID: id, Name: fmt.Sprintf("c%d", id), World: "Ultros", FirstSeenAt: now}, jobs)
 		if lat != nil {
 			_ = chars.UpdateAchievementSummary(ctx, id, false, nil, lat)
 		}
 	}
-	seed(1, &active)   // active within window
-	seed(2, &inactive) // outside window
-	seed(3, nil)       // never achievement-censused
-	seed(4, &active)   // active, but deleted below
+	seed(1, &active, 100)  // active within window, level 100
+	seed(2, &inactive, 90) // outside window, level 90
+	seed(3, nil, 0)        // never achievement-censused, no jobs
+	seed(4, &active, 100)  // active and level 100, but deleted below
 	_ = chars.MarkDeleted(ctx, 4, now)
 
-	total, gotActive, err := svc.Summary(ctx)
+	total, gotActive, maxLvl, err := svc.Summary(ctx)
 	if err != nil {
 		t.Fatalf("Summary: %v", err)
 	}
@@ -450,8 +456,37 @@ func TestService_Summary(t *testing.T) {
 	if gotActive != 1 {
 		t.Errorf("active = %d, want 1", gotActive)
 	}
+	if maxLvl != 1 {
+		t.Errorf("maxLvl = %d, want 1", maxLvl)
+	}
 }
 
+func TestService_Config(t *testing.T) {
+	svc, _ := newTestService(t)
+	if svc.MaxLevel() != 100 {
+		t.Errorf("default MaxLevel = %d, want 100", svc.MaxLevel())
+	}
+	if len(svc.Expansions()) != 6 {
+		t.Errorf("default len(Expansions) = %d, want 6", len(svc.Expansions()))
+	}
+	customExp := []ExpansionConfig{
+		{Name: "Custom Exp", Version: "Patch 8.0", FinalQuest: "The End", Icon: "🌟", LevelCap: 110, AchievementID: 9999},
+	}
+	svc.SetConfig(110, customExp)
+	if svc.MaxLevel() != 110 {
+		t.Errorf("custom MaxLevel = %d, want 110", svc.MaxLevel())
+	}
+	if len(svc.Expansions()) != 1 || svc.Expansions()[0].Name != "Custom Exp" {
+		t.Errorf("custom Expansions = %+v", svc.Expansions())
+	}
+	milestones := svc.Milestones()
+	if len(milestones) != 2 {
+		t.Fatalf("len(Milestones) = %d, want 2 (chocobo + custom)", len(milestones))
+	}
+	if milestones[0].AchievementID != 590 || milestones[1].AchievementID != 9999 {
+		t.Errorf("milestones = %+v", milestones)
+	}
+}
 func TestService_ListCharacters_Pagination(t *testing.T) {
 	svc, chars := newTestService(t)
 	ctx := context.Background()

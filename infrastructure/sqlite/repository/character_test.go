@@ -384,7 +384,17 @@ func TestCharacterRepository_Counts(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, id := range []uint32{11, 12, 13} {
 		rec := contract.CharacterRecord{ID: id, Name: fmt.Sprintf("C%d", id), FirstSeenAt: now}
-		if err := repo.Upsert(context.Background(), rec, nil); err != nil {
+		var jobs []contract.ClassJobRecord
+		if id == 11 {
+			jobs = []contract.ClassJobRecord{
+				{CharacterID: id, ClassJobID: 1, Name: "Paladin", Level: 100},
+			}
+		} else if id == 12 {
+			jobs = []contract.ClassJobRecord{
+				{CharacterID: id, ClassJobID: 1, Name: "Paladin", Level: 90},
+			}
+		}
+		if err := repo.Upsert(context.Background(), rec, jobs); err != nil {
 			t.Fatalf("Upsert %d: %v", id, err)
 		}
 	}
@@ -418,6 +428,22 @@ func TestCharacterRepository_Counts(t *testing.T) {
 	}
 	if active != 1 {
 		t.Errorf("CountActive = %d, want 1 (only id 11 in window)", active)
+	}
+
+	maxLvlCount, err := repo.Count(context.Background(), contract.CharacterFilter{MinLevel: 100})
+	if err != nil {
+		t.Fatalf("Count(MinLevel: 100): %v", err)
+	}
+	if maxLvlCount != 1 {
+		t.Errorf("Count(MinLevel: 100) = %d, want 1 (only id 11 has level 100)", maxLvlCount)
+	}
+
+	lvl90Count, err := repo.Count(context.Background(), contract.CharacterFilter{MinLevel: 90})
+	if err != nil {
+		t.Fatalf("Count(MinLevel: 90): %v", err)
+	}
+	if lvl90Count != 2 {
+		t.Errorf("Count(MinLevel: 90) = %d, want 2 (id 11 and 12 have level >= 90)", lvl90Count)
 	}
 }
 

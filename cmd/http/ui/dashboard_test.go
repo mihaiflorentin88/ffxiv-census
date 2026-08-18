@@ -58,7 +58,9 @@ func TestDashboardHandler(t *testing.T) {
 		Tribe:               "Plainsfolk",
 		FirstSeenAt:         recent,
 		LatestAchievementAt: &recent,
-	}, nil)
+	}, []contract.ClassJobRecord{
+		{CharacterID: 1001, Level: 100, Name: "Paladin"},
+	})
 
 	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
 		ID:          1002,
@@ -85,6 +87,12 @@ func TestDashboardHandler(t *testing.T) {
 	}
 	if !strings.Contains(body, "Active Players") {
 		t.Errorf("expected body to contain 'Active Players', got:\n%s", body)
+	}
+	if !strings.Contains(body, "Max Level (Lv. 100)") {
+		t.Errorf("expected body to contain 'Max Level (Lv. 100)', got:\n%s", body)
+	}
+	if !strings.Contains(body, "Characters at Cap") {
+		t.Errorf("expected body to contain 'Characters at Cap', got:\n%s", body)
 	}
 	if !strings.Contains(body, "Crystal") && !strings.Contains(body, "NA") {
 		t.Errorf("expected body to contain region stats, got:\n%s", body)

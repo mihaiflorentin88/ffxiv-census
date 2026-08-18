@@ -22,6 +22,8 @@ type Service struct {
 	censusRuns     contract.CensusRunRepository
 	mu             sync.RWMutex
 	activityWindow time.Duration
+	maxLevel       uint32
+	expansions     []ExpansionConfig
 }
 
 func NewService(
@@ -36,12 +38,48 @@ func NewService(
 		achievements:   achievements,
 		censusRuns:     censusRuns,
 		activityWindow: defaultActivityWindow,
+		maxLevel:       100,
+		expansions:     DefaultExpansions,
 	}
+}
+
+// SetConfig configures max level and expansion milestones.
+func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if maxLevel > 0 {
+		s.maxLevel = maxLevel
+	}
+	if len(expansions) > 0 {
+		s.expansions = make([]ExpansionConfig, len(expansions))
+		copy(s.expansions, expansions)
+	}
+}
+
+// MaxLevel returns the configured max level cap.
+func (s *Service) MaxLevel() uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxLevel
+}
+
+// Expansions returns a copy of the configured expansions.
+func (s *Service) Expansions() []ExpansionConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]ExpansionConfig, len(s.expansions))
+	copy(out, s.expansions)
+	return out
+}
+
+// Milestones returns the full milestone achievement registry based on configured expansions.
+func (s *Service) Milestones() []contract.MilestoneAchievement {
+	return BuildMilestones(s.Expansions())
 }
 
 // SyncMilestones seeds the milestone registry into the DB (idempotent).
 func (s *Service) SyncMilestones(ctx context.Context) error {
-	return s.achievements.SyncMilestones(ctx, MilestoneSet)
+	return s.achievements.SyncMilestones(ctx, s.Milestones())
 }
 
 // UpsertCharacter converts a Lodestone character into a CharacterRecord and
@@ -364,16 +402,20 @@ type CharacterDetail struct {
 
 // Summary returns the total number of non-deleted characters and how many of
 // them are active (latest achievement within the activity window).
-func (s *Service) Summary(ctx context.Context) (total, active int64, err error) {
+func (s *Service) Summary(ctx context.Context) (total, active, maxLevelCount int64, err error) {
 	total, err = s.characters.Count(ctx, contract.CharacterFilter{})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	active, err = s.characters.CountActive(ctx, s.activitySince())
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return total, active, nil
+	maxLevelCount, err = s.characters.Count(ctx, contract.CharacterFilter{MinLevel: s.MaxLevel()})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return total, active, maxLevelCount, nil
 }
 
 // ListCharacters returns one page of non-deleted characters matching filter

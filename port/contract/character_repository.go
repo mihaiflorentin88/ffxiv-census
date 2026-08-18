@@ -17,6 +17,7 @@ type CharacterFilter struct {
 	GrandCompany  string
 	FreeCompanyID string
 	ActiveOnly    bool
+	MinLevel      uint32
 	SortBy        string // "id", "name", "world", "created_at", "updated_at", "achievement_points"
 	SortOrder     string // "asc", "desc"
 }

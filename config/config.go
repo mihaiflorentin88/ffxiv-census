@@ -78,8 +78,19 @@ type TomestoneConfig struct {
 	RateLimit float64 `mapstructure:"rate_limit"`
 	Timeout   string  `mapstructure:"timeout"`
 }
+type ExpansionConfig struct {
+	Name          string `mapstructure:"name"`
+	Version       string `mapstructure:"version"`
+	FinalQuest    string `mapstructure:"final_quest"`
+	Icon          string `mapstructure:"icon"`
+	LevelCap      uint32 `mapstructure:"level_cap"`
+	AchievementID uint32 `mapstructure:"achievement_id"`
+}
+
 type CensusConfig struct {
-	ActivityWindowDays int `mapstructure:"activity_window_days"`
+	ActivityWindowDays int               `mapstructure:"activity_window_days"`
+	MaxLevel           uint32            `mapstructure:"max_level"`
+	Expansions         []ExpansionConfig `mapstructure:"expansions"`
 }
 
 func loadDotEnv() {

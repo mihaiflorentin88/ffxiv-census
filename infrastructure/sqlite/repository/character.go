@@ -367,6 +367,10 @@ func characterFilterWhere(f contract.CharacterFilter) (string, []any) {
 	if f.ActiveOnly {
 		conds = append(conds, "latest_achievement_at IS NOT NULL AND latest_achievement_at != ''")
 	}
+	if f.MinLevel > 0 {
+		conds = append(conds, "EXISTS (SELECT 1 FROM character_jobs cj WHERE cj.character_id = characters.id AND cj.level >= ?)")
+		args = append(args, f.MinLevel)
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}

@@ -28,7 +28,7 @@ func (c *CensusController) Latest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "census service unavailable")
 		return
 	}
-	total, active, err := c.svc.Summary(r.Context())
+	total, active, maxLevelCount, err := c.svc.Summary(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -38,9 +38,10 @@ func (c *CensusController) Latest(w http.ResponseWriter, r *http.Request) {
 		ratio = float64(active) / float64(total)
 	}
 	writeJSON(w, http.StatusOK, response.CensusSummary{
-		TotalCharacters:  total,
-		ActiveCharacters: active,
-		ActiveRatio:      ratio,
+		TotalCharacters:    total,
+		ActiveCharacters:   active,
+		ActiveRatio:        ratio,
+		MaxLevelCharacters: maxLevelCount,
 	})
 }
 

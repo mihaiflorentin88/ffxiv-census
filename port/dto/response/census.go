@@ -3,9 +3,10 @@ package response
 import "time"
 
 type CensusSummary struct {
-	TotalCharacters  int64   `json:"total_characters"`
-	ActiveCharacters int64   `json:"active_characters"`
-	ActiveRatio      float64 `json:"active_ratio"`
+	TotalCharacters    int64   `json:"total_characters"`
+	ActiveCharacters   int64   `json:"active_characters"`
+	ActiveRatio        float64 `json:"active_ratio"`
+	MaxLevelCharacters int64   `json:"max_level_characters"`
 }
 
 type CharacterListItem struct {
