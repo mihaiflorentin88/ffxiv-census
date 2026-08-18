@@ -276,3 +276,47 @@ make lint
 # Compile production binary
 make build
 ```
+
+---
+
+## Release Workflow
+
+The application release process involves building cross-compiled Linux/ARM64 artifacts, containerizing, tagging, pushing to Docker Hub, and deploying via Helm to Kubernetes.
+
+### 1. Build & Push Docker Image
+
+```bash
+# 1. Build ARM64 binary and Docker image (tagged as latest)
+make docker-build
+
+# 2. Tag image with release version
+make docker-tag TAG=v1.0.0
+
+# 3. Push image to registry
+make docker-push TAG=v1.0.0
+```
+
+### 2. Deploy to Kubernetes
+
+Deploy the release to the Kubernetes cluster using Helm:
+
+```bash
+# Deploy via root Makefile
+make k8s-release TAG=v1.0.0
+
+# Or directly via Helm Makefile in k8s/
+make -C k8s deploy TAG=v1.0.0
+
+# Verify rollout status
+make -C k8s post-deploy-check
+```
+
+### 3. Internal Cluster Services & Monitoring Endpoints
+
+The Kubernetes cluster provides internal monitoring and metrics services accessible to components within the cluster network:
+
+| Service | Internal Cluster Host / Endpoint | Type | Description |
+|---|---|---|---|
+| **Prometheus** | `monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090` | Core / Metrics Scraper | Cluster-wide Prometheus server |
+| **StatsD** | `graphite.monitoring.svc.cluster.local:8125` | Graphite / StatsD Exporter | UDP StatsD metrics collector |
+| **Grafana** | `http://grafana.local` | Ingress / Web UI | Dashboards & visualization interface |

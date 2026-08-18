@@ -144,7 +144,12 @@ spec:
           type: Value
           averageValue: {{ $web.autoscaling.targetMemoryUtilizationValue }}
     {{- end }}
-
+    {{- with $web.autoscaling.customMetrics }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $web.autoscaling.extraMetrics }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}
 
 ---

@@ -9,7 +9,7 @@ help: ## Display this help message
 	@awk 'BEGIN {FS = ":.*##"; printf "\033[36m%-30s\033[0m %s\n", "Target", "Description"} /^[a-zA-Z_-]+:.*?##/ { printf "\033[36m%-30s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 .PHONY: deploy
-deploy:
+deploy: ## Deploy the Helm chart to Kubernetes (requires TAG=<version>)
 	@if [ -z "$(TAG)" ]; then \
 		echo "Error: TAG variable should not be empty"; \
 		exit 1; \
@@ -25,18 +25,8 @@ deploy:
 		--atomic \
 		-f values.yaml
 
-
-.PHONY: deploy-stage
-deploy-stage:
-	$(HELM) -n default upgrade --force -i $(RELEASE_NAME) . \
-		--set image.tag=${TAG} \
-		--wait \
-		--timeout 3m0s \
-		--atomic \
-		-f values-stage.yaml
-
 .PHONY: post-deploy-check
-post-deploy-check:
+post-deploy-check: ## Check deployment status
 	@echo "Checking if the deployment was successful"
 	@sleep 1
 	kubectl -n default rollout status deployment
