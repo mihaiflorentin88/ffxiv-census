@@ -28,20 +28,13 @@ persistence:
 
 postgresql:
   enabled: true
-  global:
-    postgresql:
-      auth:
-        existingSecret: ffxiv-census-eso-secret
-        secretKeys:
-          adminPasswordKey: POSTGRES_PASSWORD
-          userPasswordKey: POSTGRES_PASSWORD
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
   auth:
     username: census
     database: ffxiv_census
-    existingSecret: ffxiv-census-eso-secret
-    secretKeys:
-      adminPasswordKey: POSTGRES_PASSWORD
-      userPasswordKey: POSTGRES_PASSWORD
   primary:
     persistence:
       enabled: true
