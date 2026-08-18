@@ -24,7 +24,7 @@ persistence:
   accessModes:
     - ReadWriteMany
   size: 10Gi
-
+  storageClass: nfs-rwx
 vault:
   enabled: true
   mountPath: kubernetes
