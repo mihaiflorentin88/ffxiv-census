@@ -132,13 +132,8 @@ webserver:
   env:
     - name: QUEUE_MAX_ATTEMPTS
       value: "50"
-  volumeMounts:
-    - name: shared-storage
-      mountPath: /data
-  volumes:
-    - name: shared-storage
-      persistentVolumeClaim:
-        claimName: ffxiv-census
+  volumeMounts: []
+  volumes: []
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -179,13 +174,8 @@ workers:
     env:
       - name: QUEUE_MAX_ATTEMPTS
         value: "50"
-    volumeMounts:
-      - name: shared-storage
-        mountPath: /data
-    volumes:
-      - name: shared-storage
-        persistentVolumeClaim:
-          claimName: ffxiv-census
+    volumeMounts: []
+    volumes: []
   instances:
     - name: consumer
       replicaCount: 1
@@ -214,13 +204,8 @@ cronjobs:
     env:
       - name: QUEUE_MAX_ATTEMPTS
         value: "50"
-    volumeMounts:
-      - name: shared-storage
-        mountPath: /data
-    volumes:
-      - name: shared-storage
-        persistentVolumeClaim:
-          claimName: ffxiv-census
+    volumeMounts: []
+    volumes: []
   instances:
     - name: backup
       schedule: "0 1 * * *"
