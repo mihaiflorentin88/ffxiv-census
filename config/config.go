@@ -97,6 +97,9 @@ type CensusConfig struct {
 type BackupConfig struct {
 	ServiceAccountB64 string `mapstructure:"service_account_b64"`
 	GDriveFolderID    string `mapstructure:"gdrive_folder_id"`
+	OAuthClientID     string `mapstructure:"oauth_client_id"`
+	OAuthClientSecret string `mapstructure:"oauth_client_secret"`
+	OAuthRefreshToken string `mapstructure:"oauth_refresh_token"`
 }
 
 func loadDotEnv() {

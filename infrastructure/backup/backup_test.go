@@ -141,3 +141,31 @@ func TestBackup_GDrive_IgnoresRawEnvDirectly(t *testing.T) {
 		t.Errorf("expected 'no Google Drive credentials found', got: %v", err)
 	}
 }
+
+func TestBackup_GDrive_OAuthCredentials(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "source.db")
+
+	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
+	if err != nil {
+		t.Fatalf("create sqlite driver: %v", err)
+	}
+
+	svc := backup.NewService(driver, nil)
+	cfg := &backup.Config{
+		Target:            "gdrive",
+		OAuthClientID:     "mock-client-id",
+		OAuthClientSecret: "mock-client-secret",
+		OAuthRefreshToken: "mock-refresh-token",
+	}
+
+	// Should resolve credentials and attempt to create drive client / upload
+	_, err = svc.PerformBackup(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error connecting to mock gdrive with dummy token, got nil")
+	}
+	// It should NOT say "no Google Drive credentials found"
+	if strings.Contains(err.Error(), "no Google Drive credentials found") {
+		t.Errorf("expected OAuth credentials to be recognized, got: %v", err)
+	}
+}

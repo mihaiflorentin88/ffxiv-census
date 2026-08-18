@@ -24,6 +24,29 @@
 
 ### Google Drive Backups
 
+Google Drive backups support two authentication methods:
+
+1. **OAuth 2.0 (Recommended for Personal `@gmail.com` accounts)**:
+   Personal Google accounts require OAuth 2.0 with a persistent Refresh Token.
+2. **Service Accounts (Google Workspace / Shared Drives)**:
+   Enterprise/Workspace domains can use Service Account keys.
+
+#### OAuth 2.0 Setup (Personal Accounts)
+
+1. Download your OAuth 2.0 Desktop Client JSON file from Google Cloud Console (e.g. `client_secret_*.json`).
+2. Run the one-time interactive authorization command:
+   ```bash
+   ./bin/ffxiv-census backup auth --client-secret-file client_secret_*.json
+   ```
+3. Open the provided URL in your browser, authorize the app, and allow Google to redirect to `http://localhost:8085`.
+4. The command will automatically exchange the code for a `refresh_token` and save `BACKUP_OAUTH_CLIENT_ID`, `BACKUP_OAUTH_CLIENT_SECRET`, and `BACKUP_OAUTH_REFRESH_TOKEN` to your `.env` file.
+5. Run automated backups headless:
+   ```bash
+   ./bin/ffxiv-census backup --target gdrive
+   ```
+
+#### Service Account Setup (Workspace Accounts)
+
 ```bash
 # Using a service account file
 ./bin/ffxiv-census backup \
@@ -31,7 +54,7 @@
   --gdrive-folder-id "1abc123XYZ..." \
   --service-account-file "/secrets/gdrive-service-account.json"
 
-# Using a Base64-encoded service account key (useful in CI/CD or env files)
+# Using a Base64-encoded service account key
 ./bin/ffxiv-census backup \
   --target gdrive \
   --gdrive-folder-id "1abc123XYZ..." \
@@ -49,8 +72,11 @@ Backup parameters can be defined in `config.toml`, overridden by environment var
 path = "data/ffxiv-census.db"
 
 [backup]
-service_account_b64 = ""
 gdrive_folder_id = ""
+oauth_client_id = ""
+oauth_client_secret = ""
+oauth_refresh_token = ""
+service_account_b64 = ""
 ```
 
 #### 2. Environment Variables (Viper Mapping)
@@ -60,22 +86,18 @@ Viper automatically maps uppercase environment variables with underscores to con
 | Variable | Config Mapping | Description |
 |---|---|---|
 | `SQLITE_PATH` | `[sqlite] path` | Source SQLite database file to snapshot |
-| `BACKUP_GDRIVE_FOLDER_ID` | `[backup] gdrive_folder_id` | Default Google Drive destination folder ID |
+| `BACKUP_GDRIVE_FOLDER_ID` | `[backup] gdrive_folder_id` | Destination Google Drive folder ID |
+| `BACKUP_OAUTH_CLIENT_ID` | `[backup] oauth_client_id` | Google OAuth2 Client ID |
+| `BACKUP_OAUTH_CLIENT_SECRET` | `[backup] oauth_client_secret` | Google OAuth2 Client Secret |
+| `BACKUP_OAUTH_REFRESH_TOKEN` | `[backup] oauth_refresh_token` | Google OAuth2 persistent Refresh Token |
 | `BACKUP_SERVICE_ACCOUNT_B64` | `[backup] service_account_b64` | Base64-encoded Service Account JSON key |
 | `GOOGLE_APPLICATION_CREDENTIALS` | External Google SDK | Path to Google Service Account credentials file |
 
 #### 3. Precedence Order
 
-1. **CLI Flags** (`--gdrive-folder-id`, `--service-account-b64`, `--service-account-file`, `--service-account-json`) — Highest precedence.
-2. **Environment Variables** (`BACKUP_GDRIVE_FOLDER_ID`, `BACKUP_SERVICE_ACCOUNT_B64`, `SQLITE_PATH`, `GOOGLE_APPLICATION_CREDENTIALS`).
+1. **CLI Flags** (`--oauth-client-id`, `--oauth-client-secret`, `--oauth-refresh-token`, `--service-account-file`, etc.) — Highest precedence.
+2. **Environment Variables** (`BACKUP_OAUTH_REFRESH_TOKEN`, `BACKUP_GDRIVE_FOLDER_ID`, etc.).
 3. **Configuration File** (`config.toml` `[backup]` and `[sqlite]` blocks).
-
-When `BACKUP_GDRIVE_FOLDER_ID` and `BACKUP_SERVICE_ACCOUNT_B64` (or their `config.toml` entries) are set, you can run a Google Drive backup without passing credentials on the CLI:
-
-```bash
-./bin/ffxiv-census backup --target gdrive
-```
-
 ## Automated Cronjob Setup
 
 To configure daily backups with automatic rotation, add the following to your crontab (`crontab -e`):

@@ -182,26 +182,17 @@ Exports census data for characters, free companies, or achievements directly to 
 
 ### 6. `backup` — SQLite Snapshot & Google Drive Backup
 
-Performs a point-in-time `VACUUM INTO` snapshot of the SQLite database and saves locally or uploads to Google Drive. The source database path defaults to `config.toml` (`[sqlite] path` or `SQLITE_PATH`), and Google Drive credentials/folder IDs default to `[backup]` configuration or `BACKUP_` environment variables.
+Performs a point-in-time `VACUUM INTO` snapshot of the SQLite database and saves locally or uploads to Google Drive. Supports both OAuth 2.0 (for personal Google accounts) and Service Accounts (for Workspace / Shared Drives).
 
 ```bash
-# Create local backup in ./backups with 14-day retention rotation
-./bin/ffxiv-census backup --target local --output /var/backups/census --retention-days 14
+# One-time OAuth authorization (personal Google accounts):
+./bin/ffxiv-census backup auth --client-secret-file client_secret_*.json
 
-# Upload snapshot to Google Drive using config/environment variables (BACKUP_GDRIVE_FOLDER_ID & BACKUP_SERVICE_ACCOUNT_B64)
+# Upload snapshot to Google Drive using credentials in .env:
 ./bin/ffxiv-census backup --target gdrive
 
-# Upload snapshot to Google Drive overriding credentials via CLI flags
-./bin/ffxiv-census backup \
-  --target gdrive \
-  --gdrive-folder-id "1abc123XYZ..." \
-  --service-account-file "/secrets/gdrive-service-account.json"
-
-# Upload using Base64-encoded Service Account string
-./bin/ffxiv-census backup \
-  --target gdrive \
-  --gdrive-folder-id "1abc123XYZ..." \
-  --service-account-b64 "$BACKUP_SERVICE_ACCOUNT_B64"
+# Create local backup in ./backups with 14-day retention rotation:
+./bin/ffxiv-census backup --target local --output /var/backups/census --retention-days 14
 ```
 ### 7. `migrate` — Manual Schema Migrations
 
@@ -243,6 +234,9 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 | `QUEUE_MAX_ATTEMPTS` | Default retry attempts before dead-lettering (0 = infinite) | `5` |
 | `QUEUE_BACKOFF_BASE_SECONDS` | Initial backoff delay for retried jobs | `5` |
 | `BACKUP_GDRIVE_FOLDER_ID` | Default Google Drive destination folder ID (`[backup] gdrive_folder_id`) | `""` |
+| `BACKUP_OAUTH_CLIENT_ID` | Google OAuth2 Client ID (`[backup] oauth_client_id`) | `""` |
+| `BACKUP_OAUTH_CLIENT_SECRET` | Google OAuth2 Client Secret (`[backup] oauth_client_secret`) | `""` |
+| `BACKUP_OAUTH_REFRESH_TOKEN` | Google OAuth2 Refresh Token (`[backup] oauth_refresh_token`) | `""` |
 | `BACKUP_SERVICE_ACCOUNT_B64` | Base64-encoded Google service account JSON (`[backup] service_account_b64`) | `""` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google service account credentials file | `""` |
 

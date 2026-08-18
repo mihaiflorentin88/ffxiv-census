@@ -8,6 +8,8 @@ coverage/
 *.key
 *service-account*.json
 gdrive-*.json
+client_secret*.json
+client_secret_*.json
 .idea/
 .vscode/
 Dockerfile.*

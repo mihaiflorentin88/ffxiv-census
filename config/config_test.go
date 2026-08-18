@@ -35,6 +35,15 @@ func TestNewConfig_Defaults(t *testing.T) {
 	if cfg.Backup.GDriveFolderID != "" {
 		t.Errorf("expected Backup.GDriveFolderID '', got %q", cfg.Backup.GDriveFolderID)
 	}
+	if cfg.Backup.OAuthClientID != "" {
+		t.Errorf("expected Backup.OAuthClientID '', got %q", cfg.Backup.OAuthClientID)
+	}
+	if cfg.Backup.OAuthClientSecret != "" {
+		t.Errorf("expected Backup.OAuthClientSecret '', got %q", cfg.Backup.OAuthClientSecret)
+	}
+	if cfg.Backup.OAuthRefreshToken != "" {
+		t.Errorf("expected Backup.OAuthRefreshToken '', got %q", cfg.Backup.OAuthRefreshToken)
+	}
 }
 
 func TestNewConfig_EnvOverrides(t *testing.T) {
@@ -111,6 +120,36 @@ func TestNewConfig_EnvOverrides(t *testing.T) {
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Backup == nil || cfg.Backup.GDriveFolderID != "folder123" {
 					t.Errorf("expected Backup.GDriveFolderID 'folder123', got %+v", cfg.Backup)
+				}
+			},
+		},
+		{
+			name:   "backup oauth client id override",
+			envKey: "BACKUP_OAUTH_CLIENT_ID",
+			envVal: "my-client-id",
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Backup == nil || cfg.Backup.OAuthClientID != "my-client-id" {
+					t.Errorf("expected Backup.OAuthClientID 'my-client-id', got %+v", cfg.Backup)
+				}
+			},
+		},
+		{
+			name:   "backup oauth client secret override",
+			envKey: "BACKUP_OAUTH_CLIENT_SECRET",
+			envVal: "my-client-secret",
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Backup == nil || cfg.Backup.OAuthClientSecret != "my-client-secret" {
+					t.Errorf("expected Backup.OAuthClientSecret 'my-client-secret', got %+v", cfg.Backup)
+				}
+			},
+		},
+		{
+			name:   "backup oauth refresh token override",
+			envKey: "BACKUP_OAUTH_REFRESH_TOKEN",
+			envVal: "my-refresh-token",
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Backup == nil || cfg.Backup.OAuthRefreshToken != "my-refresh-token" {
+					t.Errorf("expected Backup.OAuthRefreshToken 'my-refresh-token', got %+v", cfg.Backup)
 				}
 			},
 		},

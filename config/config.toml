@@ -101,3 +101,6 @@ achievement_id = 3496
 [backup]
 service_account_b64 = ""
 gdrive_folder_id = ""
+oauth_client_id = ""
+oauth_client_secret = ""
+oauth_refresh_token = ""

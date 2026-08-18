@@ -37,6 +37,21 @@ func TestBackupCmd_Flags(t *testing.T) {
 	if saB64Flag == nil {
 		t.Fatal("expected --service-account-b64 flag")
 	}
+
+	clientIDFlag := cmd.Flags().Lookup("oauth-client-id")
+	if clientIDFlag == nil {
+		t.Fatal("expected --oauth-client-id flag")
+	}
+
+	clientSecretFlag := cmd.Flags().Lookup("oauth-client-secret")
+	if clientSecretFlag == nil {
+		t.Fatal("expected --oauth-client-secret flag")
+	}
+
+	refreshTokenFlag := cmd.Flags().Lookup("oauth-refresh-token")
+	if refreshTokenFlag == nil {
+		t.Fatal("expected --oauth-refresh-token flag")
+	}
 }
 
 func TestBuildBackupConfig_DefaultsFromConfig(t *testing.T) {
@@ -55,6 +70,9 @@ func TestBuildBackupConfig_DefaultsFromConfig(t *testing.T) {
 	}
 	if cfg.ServiceAccountB64 != "config-sa-b64" {
 		t.Errorf("expected ServiceAccountB64 %q, got %q", "config-sa-b64", cfg.ServiceAccountB64)
+	}
+	if cfg.OAuthClientID != "" {
+		t.Errorf("expected OAuthClientID empty, got %q", cfg.OAuthClientID)
 	}
 }
 
@@ -77,6 +95,56 @@ func TestBuildBackupConfig_FlagOverridesConfig(t *testing.T) {
 	}
 	if cfg.ServiceAccountB64 != "flag-sa-b64" {
 		t.Errorf("expected ServiceAccountB64 %q, got %q", "flag-sa-b64", cfg.ServiceAccountB64)
+	}
+}
+
+func TestBuildBackupConfig_OAuthFallback(t *testing.T) {
+	cmd := newBackupCmd()
+	sysCfg := &config.Config{
+		Backup: &config.BackupConfig{
+			OAuthClientID:     "cfg-client-id",
+			OAuthClientSecret: "cfg-client-secret",
+			OAuthRefreshToken: "cfg-refresh-token",
+		},
+	}
+
+	cfg := buildBackupConfig(cmd, sysCfg)
+
+	if cfg.OAuthClientID != "cfg-client-id" {
+		t.Errorf("expected OAuthClientID %q, got %q", "cfg-client-id", cfg.OAuthClientID)
+	}
+	if cfg.OAuthClientSecret != "cfg-client-secret" {
+		t.Errorf("expected OAuthClientSecret %q, got %q", "cfg-client-secret", cfg.OAuthClientSecret)
+	}
+	if cfg.OAuthRefreshToken != "cfg-refresh-token" {
+		t.Errorf("expected OAuthRefreshToken %q, got %q", "cfg-refresh-token", cfg.OAuthRefreshToken)
+	}
+}
+
+func TestBuildBackupConfig_OAuthFlagOverrides(t *testing.T) {
+	cmd := newBackupCmd()
+	_ = cmd.Flags().Set("oauth-client-id", "flag-client-id")
+	_ = cmd.Flags().Set("oauth-client-secret", "flag-client-secret")
+	_ = cmd.Flags().Set("oauth-refresh-token", "flag-refresh-token")
+
+	sysCfg := &config.Config{
+		Backup: &config.BackupConfig{
+			OAuthClientID:     "cfg-client-id",
+			OAuthClientSecret: "cfg-client-secret",
+			OAuthRefreshToken: "cfg-refresh-token",
+		},
+	}
+
+	cfg := buildBackupConfig(cmd, sysCfg)
+
+	if cfg.OAuthClientID != "flag-client-id" {
+		t.Errorf("expected OAuthClientID %q, got %q", "flag-client-id", cfg.OAuthClientID)
+	}
+	if cfg.OAuthClientSecret != "flag-client-secret" {
+		t.Errorf("expected OAuthClientSecret %q, got %q", "flag-client-secret", cfg.OAuthClientSecret)
+	}
+	if cfg.OAuthRefreshToken != "flag-refresh-token" {
+		t.Errorf("expected OAuthRefreshToken %q, got %q", "flag-refresh-token", cfg.OAuthRefreshToken)
 	}
 }
 

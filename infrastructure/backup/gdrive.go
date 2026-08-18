@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
 
@@ -24,6 +26,9 @@ type Config struct {
 	ServiceAccountFile string // Path to Google service account JSON file
 	ServiceAccountB64  string // Base64 encoded Google service account JSON
 	ServiceAccountJSON string // Raw Google service account JSON string
+	OAuthClientID      string // Google OAuth2 Client ID
+	OAuthClientSecret  string // Google OAuth2 Client Secret
+	OAuthRefreshToken  string // Google OAuth2 Refresh Token
 	RetentionDays      int    // Retain backups for N days (0 = unlimited)
 }
 
@@ -69,7 +74,7 @@ func (s *Service) CreateSnapshot(ctx context.Context, destPath string) error {
 
 // UploadToGDrive uploads a backup file to Google Drive using provided credentials.
 func (s *Service) UploadToGDrive(ctx context.Context, filePath string, cfg *Config) (*drive.File, error) {
-	opts, err := resolveGDriveOptions(cfg)
+	opts, err := resolveGDriveOptions(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("resolve gdrive credentials: %w", err)
 	}
@@ -173,15 +178,32 @@ func (s *Service) cleanOldBackups(dir string, days int) {
 }
 
 // resolveGDriveOptions extracts google credentials from config or env.
-func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
-	// 1. Explicit ServiceAccountFile flag or config
+func resolveGDriveOptions(ctx context.Context, cfg *Config) ([]option.ClientOption, error) {
+	// 1. OAuth2 User Credentials (Client ID, Client Secret, Refresh Token)
+	if cfg.OAuthClientID != "" && cfg.OAuthClientSecret != "" && cfg.OAuthRefreshToken != "" {
+		oauthCfg := &oauth2.Config{
+			ClientID:     cfg.OAuthClientID,
+			ClientSecret: cfg.OAuthClientSecret,
+			Endpoint:     google.Endpoint,
+			Scopes:       []string{drive.DriveFileScope},
+		}
+		token := &oauth2.Token{
+			RefreshToken: cfg.OAuthRefreshToken,
+		}
+		tokenSource := oauthCfg.TokenSource(ctx, token)
+		return []option.ClientOption{
+			option.WithTokenSource(tokenSource),
+		}, nil
+	}
+
+	// 2. Explicit ServiceAccountFile flag or config
 	if cfg.ServiceAccountFile != "" {
 		return []option.ClientOption{
 			option.WithCredentialsFile(cfg.ServiceAccountFile),
 			option.WithScopes(drive.DriveFileScope),
 		}, nil
 	}
-	// 2. Base64-encoded credentials (from flag or config)
+	// 3. Base64-encoded credentials (from flag or config)
 	if cfg.ServiceAccountB64 != "" {
 		decoded, err := base64.StdEncoding.DecodeString(cfg.ServiceAccountB64)
 		if err != nil {
@@ -193,7 +215,7 @@ func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
 		}, nil
 	}
 
-	// 3. Raw JSON credentials string (from flag or config)
+	// 4. Raw JSON credentials string (from flag or config)
 	if cfg.ServiceAccountJSON != "" {
 		return []option.ClientOption{
 			option.WithCredentialsJSON([]byte(cfg.ServiceAccountJSON)),
@@ -201,7 +223,7 @@ func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
 		}, nil
 	}
 
-	// 4. Default application credentials (GOOGLE_APPLICATION_CREDENTIALS)
+	// 5. Default application credentials (GOOGLE_APPLICATION_CREDENTIALS)
 	if path := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); path != "" {
 		return []option.ClientOption{
 			option.WithCredentialsFile(path),
@@ -209,5 +231,5 @@ func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
 		}, nil
 	}
 
-	return nil, errors.New("no Google Drive credentials found. Provide --service-account-file, --service-account-b64, or set GOOGLE_APPLICATION_CREDENTIALS")
+	return nil, errors.New("no Google Drive credentials found. Provide OAuth2 credentials (--oauth-client-id, --oauth-client-secret, --oauth-refresh-token), --service-account-file, --service-account-b64, or set GOOGLE_APPLICATION_CREDENTIALS")
 }
