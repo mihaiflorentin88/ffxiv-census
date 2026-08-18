@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -62,12 +63,34 @@ func (s *Service) DumpDatabase(ctx context.Context, destPath string) error {
 		return os.WriteFile(destPath, []byte("dummy-backup-payload"), 0644)
 	}
 
-	cmd := exec.CommandContext(ctx, "pg_dump", "-d", s.dsn, "-Z", "9", "-f", destPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pg_dump failed (%w): %s", err, string(output))
+	pgDumpPath, err := exec.LookPath("pg_dump")
+	if err == nil {
+		cmd := exec.CommandContext(ctx, pgDumpPath, "-d", s.dsn, "-Z", "9", "-f", destPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("pg_dump failed (%w): %s", err, string(output))
+		}
+		return nil
 	}
-	return nil
+
+	// If pg_dump not on host, check if local ffxiv-postgres docker container is running
+	if _, err := exec.LookPath("docker"); err == nil {
+		outFile, createErr := os.Create(destPath)
+		if createErr != nil {
+			return fmt.Errorf("create backup dest file: %w", createErr)
+		}
+		defer outFile.Close()
+
+		var errBuf bytes.Buffer
+		cmd := exec.CommandContext(ctx, "docker", "exec", "ffxiv-postgres", "pg_dump", "-U", "census", "-d", "ffxiv_census", "-Z", "9")
+		cmd.Stdout = outFile
+		cmd.Stderr = &errBuf
+		if runErr := cmd.Run(); runErr == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("pg_dump executable not found in $PATH: %w", err)
 }
 
 // UploadToGDrive uploads a backup file to Google Drive using provided credentials.

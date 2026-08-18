@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,9 @@ func runExport(ctx context.Context, output, format string, useGzip bool, filter 
 
 	var dest io.Writer = os.Stdout
 	if output != "" && output != "-" {
+		if err := os.MkdirAll(filepath.Dir(output), 0755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
 		f, err := os.Create(output)
 		if err != nil {
 			return fmt.Errorf("create output file %q: %w", output, err)
