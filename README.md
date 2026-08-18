@@ -97,37 +97,6 @@ Probes character ID ranges across Lodestone or Tomestone. Designed for both sing
 ./bin/ffxiv-census publish id-sweep --auto --source tomestone
 ```
 
-##### Kubernetes CronJob Manifest
-The publisher runs as a lightweight periodic CronJob that spins up, queries `MaxID`, enqueues chunked work, and exits immediately:
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: ffxiv-census-publisher
-spec:
-  schedule: "0 * * * *" # Hourly
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: publisher
-              image: ffxiv-census:latest
-              args: ["publish", "id-sweep", "--auto", "--batch-size", "1000", "--chunk-size", "100"]
-              env:
-                - name: SQLITE_PATH
-                  value: /data/ffxiv-census.db
-              volumeMounts:
-                - name: data
-                  mountPath: /data
-          volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: census-pvc
-```
 #### `publish character-census`
 Enqueues known characters that have not been updated within a specified duration.
 ```bash
