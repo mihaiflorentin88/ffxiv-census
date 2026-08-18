@@ -30,8 +30,10 @@ postgresql:
   enabled: true
   auth:
     username: census
-    password: secretpassword
     database: ffxiv_census
+    secretKeys:
+      adminPasswordKey: POSTGRES_PASSWORD
+      userPasswordKey: POSTGRES_PASSWORD
   primary:
     persistence:
       enabled: true
@@ -127,8 +129,6 @@ webserver:
   podAnnotations: {}
   podLabels: {}
   env:
-    - name: POSTGRES_DSN
-      value: postgres://census:secretpassword@ffxiv-census-postgresql:5432/ffxiv_census?sslmode=disable
     - name: QUEUE_MAX_ATTEMPTS
       value: "50"
   volumeMounts:
@@ -176,8 +176,6 @@ workers:
       fsGroup: 65532
       runAsNonRoot: true
     env:
-      - name: POSTGRES_DSN
-        value: postgres://census:secretpassword@ffxiv-census-postgresql:5432/ffxiv_census?sslmode=disable
       - name: QUEUE_MAX_ATTEMPTS
         value: "50"
     volumeMounts:
@@ -213,8 +211,6 @@ cronjobs:
       fsGroup: 65532
       runAsNonRoot: true
     env:
-      - name: POSTGRES_DSN
-        value: postgres://census:secretpassword@ffxiv-census-postgresql:5432/ffxiv_census?sslmode=disable
       - name: QUEUE_MAX_ATTEMPTS
         value: "50"
     volumeMounts:
