@@ -1,6 +1,6 @@
 [app]
 name = "ffxiv-census"
-env  = "development"
+env  = "production"
 
 [logging]
 default        = "color"

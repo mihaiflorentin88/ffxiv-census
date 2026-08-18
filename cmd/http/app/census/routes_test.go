@@ -79,4 +79,16 @@ func TestRegister_ProductionEnforcement(t *testing.T) {
 			t.Fatalf("expected status 200 OK with valid token, got %d", rec.Code)
 		}
 	})
+
+	t.Run("valid raw token returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/census/latest", nil)
+		req.Header.Set("Authorization", validToken)
+		rec := httptest.NewRecorder()
+
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 OK with valid raw token, got %d", rec.Code)
+		}
+	})
 }

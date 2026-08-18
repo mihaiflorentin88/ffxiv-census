@@ -1652,7 +1652,7 @@ const docTemplate = `{
       "type": "apiKey",
       "name": "Authorization",
       "in": "header",
-      "description": "Enter 'Bearer <token>'"
+      "description": "Enter your token (e.g. '09136457...' or 'Bearer 09136457...')"
     }
   }
 }`
