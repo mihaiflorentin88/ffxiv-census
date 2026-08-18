@@ -219,7 +219,16 @@ document.addEventListener("DOMContentLoaded", function() {
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
                 scales: {
-                    x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+                    x: {
+                        ticks: {
+                            color: '#94a3b8',
+                            maxRotation: 0,
+                            minRotation: 0,
+                            autoSkip: false,
+                            font: { size: 11 }
+                        },
+                        grid: { display: false }
+                    },
                     y: { ticks: { color: '#94a3b8' }, grid: { color: '#263248' } }
                 }
             }
@@ -251,7 +260,15 @@ document.addEventListener("DOMContentLoaded", function() {
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
                 scales: {
-                    x: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+                    x: {
+                        ticks: {
+                            color: '#94a3b8',
+                            maxRotation: 0,
+                            minRotation: 0,
+                            font: { size: 11 }
+                        },
+                        grid: { display: false }
+                    },
                     y: { ticks: { color: '#94a3b8' }, grid: { color: '#263248' } }
                 }
             }

@@ -7,6 +7,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/metrics"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/provider"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite"
 	sqlitemigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/sqlite/migration"
@@ -27,6 +28,7 @@ type InfrastructureContainer struct {
 	freeCompanyRepository contract.FreeCompanyRepository
 	achievementRepository contract.AchievementRepository
 	censusRunRepository   contract.CensusRunRepository
+	providerRateLimiter   contract.ProviderRateLimiter
 }
 
 // Logger returns the process-wide structured logger (infrastructure/logging.Logger)
@@ -70,11 +72,32 @@ func (s *ServiceContainer) PrometheusRegistry() *metrics.Registry {
 	return reg
 }
 
+func (s *ServiceContainer) ProviderRateLimiter() contract.ProviderRateLimiter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.providerRateLimiterUnlocked()
+}
+
+func (s *ServiceContainer) providerRateLimiterUnlocked() contract.ProviderRateLimiter {
+	if s.infrastructure.providerRateLimiter != nil {
+		return s.infrastructure.providerRateLimiter
+	}
+	limiter := provider.NewRateLimiter()
+	s.infrastructure.providerRateLimiter = limiter
+	return limiter
+}
+
 func (s *ServiceContainer) SQLite() contract.SQLiteDriver {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sqliteUnlocked()
+}
+
+func (s *ServiceContainer) sqliteUnlocked() contract.SQLiteDriver {
 	if s.infrastructure.sqliteDriver != nil {
 		return s.infrastructure.sqliteDriver
 	}
-	cfg := s.Config().SQLite
+	cfg := s.configUnlocked().SQLite
 	if cfg == nil {
 		logging.Warn("container.sqlite", "sqlite config missing")
 		return nil
@@ -89,15 +112,17 @@ func (s *ServiceContainer) SQLite() contract.SQLiteDriver {
 }
 
 func (s *ServiceContainer) Queue() contract.Queue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.queue != nil {
 		return s.infrastructure.queue
 	}
-	driver := s.SQLite()
+	driver := s.sqliteUnlocked()
 	if driver == nil {
 		logging.Warn("container.queue", "sqlite driver unavailable, queue disabled")
 		return nil
 	}
-	cfg := s.Config().Queue
+	cfg := s.configUnlocked().Queue
 	if cfg == nil {
 		logging.Warn("container.queue", "queue config missing")
 		return nil
@@ -122,7 +147,7 @@ func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
 		logging.Warn("container.lodestone", "lodestone config missing")
 		return nil
 	}
-	client, err := lodestone.NewClient(cfg, s.Logger())
+	client, err := lodestone.NewClient(cfg, s.Logger(), s.providerRateLimiterUnlocked())
 	if err != nil {
 		logging.Error("container.lodestone", fmt.Sprintf("failed to create lodestone client: %v", err))
 		return nil
@@ -130,6 +155,7 @@ func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
 	s.infrastructure.lodestoneClient = client
 	return client
 }
+
 func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -141,7 +167,7 @@ func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
 		logging.Warn("container.tomestone", "tomestone config missing")
 		return nil
 	}
-	client, err := tomestone.NewClient(cfg, s.Logger())
+	client, err := tomestone.NewClient(cfg, s.Logger(), s.providerRateLimiterUnlocked())
 	if err != nil {
 		logging.Error("container.tomestone", fmt.Sprintf("failed to create tomestone client: %v", err))
 		return nil
@@ -151,10 +177,12 @@ func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
 }
 
 func (s *ServiceContainer) CharacterRepository() contract.CharacterRepository {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.characterRepository != nil {
 		return s.infrastructure.characterRepository
 	}
-	driver := s.SQLite()
+	driver := s.sqliteUnlocked()
 	if driver == nil {
 		logging.Warn("container.character_repository", "sqlite driver unavailable")
 		return nil
@@ -164,10 +192,12 @@ func (s *ServiceContainer) CharacterRepository() contract.CharacterRepository {
 }
 
 func (s *ServiceContainer) FreeCompanyRepository() contract.FreeCompanyRepository {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.freeCompanyRepository != nil {
 		return s.infrastructure.freeCompanyRepository
 	}
-	driver := s.SQLite()
+	driver := s.sqliteUnlocked()
 	if driver == nil {
 		logging.Warn("container.free_company_repository", "sqlite driver unavailable")
 		return nil
@@ -177,10 +207,12 @@ func (s *ServiceContainer) FreeCompanyRepository() contract.FreeCompanyRepositor
 }
 
 func (s *ServiceContainer) AchievementRepository() contract.AchievementRepository {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.achievementRepository != nil {
 		return s.infrastructure.achievementRepository
 	}
-	driver := s.SQLite()
+	driver := s.sqliteUnlocked()
 	if driver == nil {
 		logging.Warn("container.achievement_repository", "sqlite driver unavailable")
 		return nil
@@ -190,10 +222,12 @@ func (s *ServiceContainer) AchievementRepository() contract.AchievementRepositor
 }
 
 func (s *ServiceContainer) CensusRunRepository() contract.CensusRunRepository {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.censusRunRepository != nil {
 		return s.infrastructure.censusRunRepository
 	}
-	driver := s.SQLite()
+	driver := s.sqliteUnlocked()
 	if driver == nil {
 		logging.Warn("container.census_run_repository", "sqlite driver unavailable")
 		return nil

@@ -1,8 +1,10 @@
 # ffxiv-census
 
-Welcome to **ffxiv-census**, a Go service scaffold generated on 2026-08-16T01:14:18+03:00. The codebase embraces a hexagonal (ports & adapters) architecture so business rules stay decoupled from transport and infrastructure concerns. Clone the repository at https://github.com/mihaiflorentin88/ffxiv-census.git.
+**ffxiv-census** is a high-performance, single-binary FFXIV census engine and data crawler built with Go and pure-Go SQLite (`modernc.org/sqlite`). It follows a hexagonal (ports & adapters) architecture, featuring an embedded HTMX Web UI, REST APIs, OpenAPI/Swagger specifications, Prometheus metrics, and a durable, multi-queue consumer with jittered exponential backoff and provider rate-limiting pause controls.
 
-## Quick start
+---
+
+## Quick Start
 
 ```bash
 go mod tidy
@@ -10,125 +12,229 @@ make build
 ./bin/ffxiv-census server --start --port 8080
 ```
 
-Key documentation lives under `docs/`:
+Access the dashboard at `http://localhost:8080` or API documentation at `http://localhost:8080/swagger/index.html`.
 
-- `docs/getting-started.md` — setup, commands, and environment notes.
-- `docs/architecture.md` — high-level system design and conventions.
-- `docs/container.md` — explains the service locator and wiring patterns.
-- `docs/sqlite.md` — SQLite storage, runtime migrations, and configuration.
-- `docs/queue.md` — the SQLite-backed durable work queue.
-- `docs/lodestone.md` — the Lodestone scraper adapter (rate limiting, retries).
-- `docs/census.md` — the census domain model, tables, and repositories.
-- `docs/events.md` — the event model and ingest pipeline.
-- `docs/data-contracts.md` — DTO guidance for ports and adapters.
-- `docs/logging-and-middleware.md` — describes the HTTP pipeline and logging modes.
-- `docs/ui.md` — notes on the embedded HTMX sample and how to extend it.
+---
 
-## Make targets
+## Documentation Index
 
-- `make build` — compile the CLI into `bin/`.
-- `make build-all` — cross-compile for Linux, macOS, and Windows.
-- `make docker-build` — build inside Docker and persist artifacts to `dist/`.
-- `make fmt` — run `gofmt` on all Go files.
-- `make test` — execute the unit test suite.
+Detailed architectural and subsystem documentation lives under `docs/`:
 
-## CLI Commands
+- `docs/getting-started.md` — Setup, building, dependencies, and environment notes.
+- `docs/architecture.md` — High-level system design, ports & adapters layout, and conventions.
+- `docs/container.md` — Explains the Service Locator pattern and dependency wiring.
+- `docs/sqlite.md` — SQLite storage, WAL mode, pure-Go driver, and automatic Goose migrations.
+- `docs/queue.md` — SQLite-backed durable multi-queue, atomic claims, jittered backoff, and infinite retries.
+- `docs/backup.md` — Point-in-time SQLite `VACUUM INTO` snapshots, retention, and Google Drive backups.
+- `docs/lodestone.md` — The Lodestone scraper adapter (rate limiting, Cloudflare protection, retries).
+- `docs/tomestone.md` — Tomestone.gg integration for fast character lookups and dual-source census.
+- `docs/census.md` — Domain models, milestones, active character metrics, and repositories.
+- `docs/events.md` — Ingest event pipeline, message payloads, and downstream chaining.
+- `docs/http-api.md` — REST API endpoints, query filters, search, and data aggregation.
+- `docs/metrics.md` — Prometheus metrics, health checks, and scrape endpoints.
+- `docs/logging-and-middleware.md` — Structured slog logging, correlation IDs, and HTTP middleware.
+- `docs/ui.md` — Embedded HTMX dashboard, server-side Go templates, and Chart.js visualizations.
 
-All commands accept `--help`; the binary reports its build with `--version`. Most commands
-need a SQLite database: by default `data/ffxiv-census.db`, override with `SQLITE_PATH`.
-Migrations run automatically on first database access — no separate step is required.
+---
 
-### `server` — start the web server
+## CLI Reference
 
-```bash
-./bin/ffxiv-census server --start --port 8080            # HTTP on :8080 (default pool: 5 workers)
-./bin/ffxiv-census server --start --port 8443 --cert-file cert.pem --key-file key.pem  # TLS
-./bin/ffxiv-census server --start --port 8080 --profile  # also serve pprof on :6060
-./bin/ffxiv-census server --start --port 8080 --shutdown-max-requests 1000  # graceful drain
-```
+All commands accept `--help` and report build details via `--version`. Database migrations run automatically at boot on the first database operation.
 
-### `migrate` — SQLite schema migrations
+### 1. `server` — Web UI, REST API & Metrics
+
+Starts the HTTP/HTTPS server serving the HTMX Web UI, REST API, Swagger UI, and Prometheus `/metrics`.
 
 ```bash
-./bin/ffxiv-census migrate --direction up    # apply all pending migrations (default)
-./bin/ffxiv-census migrate --direction down  # roll back ALL migrations (destructive)
+# Start server on default port 8080
+./bin/ffxiv-census server --start --port 8080
+
+# Start with TLS encryption
+./bin/ffxiv-census server --start --port 8443 --cert-file cert.pem --key-file key.pem
+
+# Enable pprof profiler on :6060
+./bin/ffxiv-census server --start --port 8080 --profile
 ```
 
-### `publish id-sweep` — enqueue ID-range probes
+### 2. `consume` — Multi-Queue Worker with Provider Rate-Limit Pausing
 
-Probes every character ID in `[from, to]` in chunks; each job is a bounded range.
-```bash
-# 10 jobs covering IDs 1..1000 (100 IDs per job)
-SQLITE_PATH=/tmp/census.db ./bin/ffxiv-census publish id-sweep --from 1 --to 1000 --chunk-size 100
+Runs long-running consumer worker goroutines. By default, consumes from **all** registered event queues concurrently (`id-sweep`, `character-census`, `achievement-census`, `fc-census`).
 
-# single-ID jobs — verbose per-job publish logs (dedup: re-running inserts nothing)
-LOGGING_LEVEL=debug SQLITE_PATH=/tmp/census.db ./bin/ffxiv-census publish id-sweep --from 1 --to 10 --chunk-size 1
-```
-
-### `publish character-census` — re-census stale characters
-
-Enqueues a `character-census` job per character not seen within `--older-than`.
-```bash
-SQLITE_PATH=/tmp/census.db ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
-```
-
-### `consume <event>` — run a consumer worker (long-running)
-
-Claims and processes jobs of one event type; Ctrl-C shuts down gracefully.
-Valid events: `id-sweep`, `character-census`, `achievement-census`, `fc-census` —
-see [Events](#events) for what each one does.
+When an external provider (Lodestone or Tomestone) returns HTTP 429 (rate limit exceeded), the worker automatically pauses consumption of queues dependent on that provider for a cooldown period without blocking the other provider's queues.
 
 ```bash
-SQLITE_PATH=/tmp/census.db ./bin/ffxiv-census consume id-sweep                 # 4 workers (default)
-SQLITE_PATH=/tmp/census.db ./bin/ffxiv-census consume achievement-census --concurrency 1
-LOGGING_LEVEL=debug SQLITE_PATH=/tmp/census.db ./bin/ffxiv-census consume fc-census  # verbose worker/queue logs
+# Consume from ALL event queues concurrently (default 4 workers)
+./bin/ffxiv-census consume
+
+# Consume from specific queues using the --events flag
+./bin/ffxiv-census consume --events "id-sweep,character-census" --concurrency 8
+
+# Consume a single queue via positional argument
+./bin/ffxiv-census consume achievement-census --concurrency 2
+
+# Adjust polling interval for idle queues
+./bin/ffxiv-census consume --poll-interval 250ms
 ```
 
-### End-to-end example
+### 3. `publish` — Enqueue Census Operations
+
+Enqueues census jobs to be processed asynchronously by worker consumers.
+
+#### `publish id-sweep`
+Probes character ID ranges across Lodestone or Tomestone. Uses chunking and infinite retries (`max_attempts = 0`).
+```bash
+# Probe character IDs 1 to 10,000 in chunks of 100
+./bin/ffxiv-census publish id-sweep --from 1 --to 10000 --chunk-size 100
+
+# Sweep using Tomestone API instead of Lodestone
+./bin/ffxiv-census publish id-sweep --from 1 --to 5000 --source tomestone
+```
+
+#### `publish character-census`
+Enqueues known characters that have not been updated within a specified duration.
+```bash
+# Re-census characters older than 30 days
+./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
+```
+
+#### `publish fc-census`
+Enqueues Free Company profile updates.
+```bash
+# Re-census stale Free Companies
+./bin/ffxiv-census publish fc-census --older-than 720h --limit 500
+```
+
+### 4. `queue` — Queue Inspection & Dead-Letter Replay
+
+Administrative commands to inspect queue depth, replay failed jobs, or purge historical records.
 
 ```bash
-DB=/tmp/census.db
-SQLITE_PATH=$DB ./bin/ffxiv-census publish id-sweep --from 1 --to 100 --chunk-size 10   # 10 jobs
-SQLITE_PATH=$DB ./bin/ffxiv-census consume id-sweep                                       # process them
+# Display live ASCII table with queue depths and sample jobs
+./bin/ffxiv-census queue stats
+
+# Display stats for a specific event type with up to 10 samples
+./bin/ffxiv-census queue stats --event-type id-sweep --sample-limit 10
+
+# Replay failed dead-letter jobs back to pending
+./bin/ffxiv-census queue retry-failed --event-type character-census --limit 500
+
+# Purge completed jobs older than 7 days
+./bin/ffxiv-census queue purge --status done --older-than 168h
 ```
 
-### Environment overrides
+### 5. `export` — Data Export (CSV & JSON)
 
-| Variable | Overrides |
-|---|---|
-| `SQLITE_PATH` | `[sqlite] path` (default `data/ffxiv-census.db`) |
-| `LOGGING_LEVEL` | `[logging] level` — `info` (default), `debug`, `warn`, `error` |
-| `LODESTONE_RATE_LIMIT` | `[lodestone] rate_limit` (requests/second, capped at 1.0 req/s safety ceiling; 403/404 handled as non-existent) |
+Exports census data for characters, free companies, or achievements directly to disk.
 
-Queue/worker/handler progress is logged through the process-wide logger: `Info` for
-lifecycle and per-job completion, `Warn` for retries, `Error` for terminal failures,
-`Debug` for high-frequency detail (opt-in via `LOGGING_LEVEL=debug`). See
-`docs/logging-and-middleware.md` and `docs/queue.md` for details.
+```bash
+# Export all active characters to CSV
+./bin/ffxiv-census export characters --format csv --output ./exports/characters.csv
 
-## Events
+# Export free companies on a specific datacenter to JSON
+./bin/ffxiv-census export free-companies --datacenter Chaos --format json --output ./exports/fc_chaos.json
 
-The ingest pipeline is event-driven: publishers enqueue jobs (`publish ...`), workers
-claim and dispatch them to the matching handler (`consume <event>`), and handlers can
-chain downstream jobs. Each job is retried with exponential backoff and fails
-permanently after `[queue] max_attempts` (default 5).
+# Export character achievements
+./bin/ffxiv-census export achievements --format csv --output ./exports/achievements.csv
+```
 
-| Event | Payload | What it does | Chains |
-|---|---|---|---|
-| `id-sweep` | `{"from": N, "to": M}` | Probes every character ID in the inclusive range `[from, to]`. Characters that exist on Lodestone are fetched and upserted; IDs with no character are skipped. | `achievement-census` per discovered character |
-| `character-census` | `{"character_id": N}` | Re-censuses a known character: fetches the profile and upserts it; if Lodestone reports the character as gone (404), it is marked deleted. | `achievement-census`, plus `fc-census` when the character belongs to a free company |
-| `achievement-census` | `{"character_id": N}` | Fetches the character's achievements, records registry milestones, and updates the latest-achievement / private-profile flags. | none (leaf) |
-| `fc-census` | `{"fc_id": "..."}` | Fetches a free company profile and upserts its record. | none (leaf) |
+### 6. `backup` — SQLite Snapshot & Google Drive Backup
 
-Typical flows:
+Performs a point-in-time `VACUUM INTO` snapshot of the SQLite database and saves locally or uploads to Google Drive.
+
+```bash
+# Create local backup in ./backups with 14-day retention rotation
+./bin/ffxiv-census backup --target local --output /var/backups/census --retention-days 14
+
+# Upload snapshot to Google Drive via Service Account key file
+./bin/ffxiv-census backup \
+  --target gdrive \
+  --gdrive-folder-id "1abc123XYZ..." \
+  --service-account-file "/secrets/gdrive-service-account.json"
+
+# Upload using Base64-encoded Service Account string (e.g. in crontab or Docker env)
+./bin/ffxiv-census backup \
+  --target gdrive \
+  --gdrive-folder-id "1abc123XYZ..." \
+  --service-account-b64 "$GDRIVE_SERVICE_ACCOUNT_B64"
+```
+
+### 7. `migrate` — Manual Schema Migrations
+
+Manage database schema versions manually with Goose.
+
+```bash
+# Run all pending migrations (default)
+./bin/ffxiv-census migrate --direction up
+
+# Roll back all migrations (destructive)
+./bin/ffxiv-census migrate --direction down
+```
+
+### 8. `tomestone` — Direct Character Inspection
+
+Queries Tomestone.gg directly to inspect character profiles and verify API keys.
+
+```bash
+# Inspect character by numeric Lodestone ID
+./bin/ffxiv-census tomestone --id 12345678
+
+# Inspect character by server and character name
+./bin/ffxiv-census tomestone --server Ragnarok --name "Firstname Lastname"
+```
+
+---
+
+## Configuration & Environment Variables
+
+`ffxiv-census` reads `config.toml` by default and supports overriding any setting via uppercase environment variables (replacing dots with underscores).
+
+| Environment Variable | Description | Default |
+|---|---|---|
+| `SQLITE_PATH` | Path to SQLite database file | `data/ffxiv-census.db` |
+| `LOGGING_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
+| `LODESTONE_RATE_LIMIT` | Lodestone scraper rate limit (requests/sec, max 1.0) | `1.0` |
+| `TOMESTONE_API_TOKEN` | Bearer API token for Tomestone.gg | `""` |
+| `TOMESTONE_RATE_LIMIT` | Tomestone API rate limit (requests/sec, max 20.0) | `10.0` |
+| `QUEUE_CLAIM_BATCH_SIZE` | Default number of jobs claimed per batch | `4` |
+| `QUEUE_MAX_ATTEMPTS` | Default retry attempts before dead-lettering (0 = infinite) | `5` |
+| `QUEUE_BACKOFF_BASE_SECONDS` | Initial backoff delay for retried jobs | `5` |
+| `GDRIVE_FOLDER_ID` | Google Drive folder ID for automated backups | `""` |
+| `GDRIVE_SERVICE_ACCOUNT_B64` | Base64-encoded Google service account JSON | `""` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google service account credentials file | `""` |
+
+---
+
+## Architecture & Event Pipeline
+
+The ingest pipeline is fully event-driven:
 
 ```text
-publish id-sweep ──► consume id-sweep ──► achievement-census
-publish character-census ──► consume character-census ──► achievement-census
-                                                      └──► fc-census
+publish id-sweep ──────────► consume (all queues) ──► achievement-census
+publish character-census ──► consume (all queues) ──► achievement-census
+                                                  └──► fc-census
 ```
 
-`id-sweep` and `character-census` are the entry points published via the CLI;
-`achievement-census` and `fc-census` are produced as chained downstream jobs and are
-consumed the same way.
+| Event | Description | Downstream Chains |
+|---|---|---|
+| `id-sweep` | Probes ID ranges on Lodestone or Tomestone. Non-existent IDs are skipped. | `achievement-census` per discovered character |
+| `character-census` | Fetches full profile; marks character deleted if HTTP 404. | `achievement-census`, `fc-census` |
+| `achievement-census` | Fetches character achievements and updates registry milestones. | *None (leaf)* |
+| `fc-census` | Fetches Free Company profile and roster details. | *None (leaf)* |
 
-Happy hacking!
+---
+
+## Build & Test Automation
+
+```bash
+# Run all tests
+make test
+
+# Format source code
+make fmt
+
+# Run static linter
+make lint
+
+# Compile production binary
+make build
+```

@@ -65,6 +65,9 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				}
 				h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
 				next = append(next, AchievementCensusJob(id))
+				if tChar.FreeCompanyID != nil && *tChar.FreeCompanyID != "" {
+					next = append(next, FreeCompanyCensusJob(*tChar.FreeCompanyID))
+				}
 				ingested = true
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
@@ -83,6 +86,9 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				}
 				h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
 				next = append(next, AchievementCensusJob(id))
+				if lChar.FreeCompanyID != "" {
+					next = append(next, FreeCompanyCensusJob(lChar.FreeCompanyID))
+				}
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", err))
 				return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, err)
@@ -90,7 +96,6 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
 			}
 		}
-
 		if id == p.To {
 			break
 		}

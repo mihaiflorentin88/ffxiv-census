@@ -26,12 +26,17 @@ Claiming is a single `UPDATE ... WHERE id IN (SELECT ... WHERE status = 'pending
 
 `payload_hash` is a sha256 of the raw payload, computed server-side by the adapter — callers never set it. Combined with `type`, it makes duplicate jobs (e.g. a re-published census request) a no-op regardless of status.
 
-## Backoff
+## Jittered Exponential Backoff & Infinite Retries
 
-`run_at` after a retry is `now + backoff_base * 2^(attempts-1)` seconds. With the default `backoff_base_seconds = 5`: attempt 1 → 5 s, attempt 2 → 10 s, attempt 3 → 20 s, etc.
+- **Exponential Backoff with Jitter**: When a job is retried, its `run_at` delay is computed as `backoff = min(base * 2^(attempts-1), max_cap) * jitter`, where `jitter` is `[0.9, 1.2]`. This prevents thundering herds when external services recover.
+- **Infinite Retry (`max_attempts = 0`)**: For critical tasks like `id-sweep`, setting `MaxAttempts = 0` configures infinite retries—jobs will back off slower on failure, record incrementing attempts and error messages in SQLite, and never transition to `failed`.
 
-## Configuration
+## Multi-Queue Consumption & Rate-Limit Pausing
 
+Consumers (`ffxiv-census consume`) poll all active event queues concurrently. External rate limits are tracked per provider:
+- **`lodestone`** rate limits pause `character-census`, `achievement-census`, and `fc-census` queues.
+- **`tomestone`** rate limits pause `id-sweep` (tomestone provider).
+- When one provider is paused by a 429 response, queues for the other provider continue consuming without interruption. If all providers are paused, the worker sleeps until the earliest provider cooldown expires.
 ```toml
 [queue]
 claim_batch_size = 4

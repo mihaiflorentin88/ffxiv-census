@@ -354,3 +354,88 @@ func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
+
+func TestIDSweep_ChainsFreeCompanyJobWhenFCIDPresent_Lodestone(t *testing.T) {
+	h, ls, _ := newTestIDSweep(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return &godestone.Character{
+			ID:            id,
+			Name:          "Hero",
+			World:         "Spriggan",
+			DC:            "Chaos",
+			FreeCompanyID: "9231234567890123456",
+		}, nil
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayload(100, 100))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	var foundAchievement, foundFC bool
+	for _, j := range next {
+		if j.Type == EventAchievementCensus {
+			foundAchievement = true
+		}
+		if j.Type == EventFreeCompanyCensus {
+			foundFC = true
+			var p FreeCompanyCensusPayload
+			if err := json.Unmarshal(j.Payload, &p); err != nil {
+				t.Fatalf("unmarshal fc payload: %v", err)
+			}
+			if p.FCID != "9231234567890123456" {
+				t.Errorf("fc id = %q, want 9231234567890123456", p.FCID)
+			}
+		}
+	}
+	if !foundAchievement {
+		t.Errorf("expected achievement census job to be chained")
+	}
+	if !foundFC {
+		t.Errorf("expected free company census job to be chained")
+	}
+}
+
+func TestIDSweep_ChainsFreeCompanyJobWhenFCIDPresent_Tomestone(t *testing.T) {
+	h, _, ts, _ := newTestDualIDSweep(t)
+	fcID := "9231234567890123456"
+	fcName := "Crystal Braves"
+	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, retry429 bool) (*contract.TomestoneCharacter, error) {
+		return &contract.TomestoneCharacter{
+			ID:              id,
+			Name:            "Alphinaud",
+			Server:          "Spriggan",
+			Datacenter:      "Chaos",
+			FreeCompanyID:   &fcID,
+			FreeCompanyName: &fcName,
+		}, nil
+	}
+
+	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(200, 200, "tomestone"))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	var foundAchievement, foundFC bool
+	for _, j := range next {
+		if j.Type == EventAchievementCensus {
+			foundAchievement = true
+		}
+		if j.Type == EventFreeCompanyCensus {
+			foundFC = true
+			var p FreeCompanyCensusPayload
+			if err := json.Unmarshal(j.Payload, &p); err != nil {
+				t.Fatalf("unmarshal fc payload: %v", err)
+			}
+			if p.FCID != "9231234567890123456" {
+				t.Errorf("fc id = %q, want 9231234567890123456", p.FCID)
+			}
+		}
+	}
+	if !foundAchievement {
+		t.Errorf("expected achievement census job to be chained")
+	}
+	if !foundFC {
+		t.Errorf("expected free company census job to be chained")
+	}
+}

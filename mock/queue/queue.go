@@ -75,12 +75,21 @@ func payloadHash(payload []byte) string {
 }
 
 func (f *Fake) Claim(ctx context.Context, jobType string, n int) ([]contract.QueueJob, error) {
+	return f.ClaimMultiple(ctx, []string{jobType}, n)
+}
+
+func (f *Fake) ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]contract.QueueJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now().UTC()
+	typesMap := make(map[string]bool, len(jobTypes))
+	for _, jt := range jobTypes {
+		typesMap[jt] = true
+	}
+
 	var candidates []contract.QueueJob
 	for _, j := range f.jobs {
-		if j.Type == jobType && j.Status == contract.QueueJobPending && !j.RunAt.After(now) {
+		if typesMap[j.Type] && j.Status == contract.QueueJobPending && !j.RunAt.After(now) {
 			candidates = append(candidates, j)
 		}
 	}
@@ -134,7 +143,7 @@ func (f *Fake) Retry(ctx context.Context, id int64, lastErr string) error {
 		j.LastError = &errCopy
 	}
 	now := time.Now().UTC()
-	if j.Attempts >= j.MaxAttempts {
+	if j.MaxAttempts > 0 && j.Attempts >= j.MaxAttempts {
 		j.Status = contract.QueueJobFailed
 		j.FailedAt = &now
 	} else {
@@ -142,7 +151,11 @@ func (f *Fake) Retry(ctx context.Context, id int64, lastErr string) error {
 		j.ClaimedAt = nil
 		backoff := 5 * time.Second
 		if j.Attempts >= 2 {
-			backoff *= time.Duration(1 << (j.Attempts - 1))
+			shift := uint(j.Attempts - 1)
+			if shift > 10 {
+				shift = 10
+			}
+			backoff *= time.Duration(1 << shift)
 		}
 		j.RunAt = now.Add(backoff)
 	}

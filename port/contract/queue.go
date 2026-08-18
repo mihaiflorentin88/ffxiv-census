@@ -74,6 +74,9 @@ type Queue interface {
 	// run_at has passed: marks them claimed, increments attempts. Safe for
 	// concurrent consumers.
 	Claim(ctx context.Context, jobType string, n int) ([]QueueJob, error)
+	// ClaimMultiple atomically claims up to n pending jobs matching any of the given job types
+	// whose run_at has passed: marks them claimed, increments attempts.
+	ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]QueueJob, error)
 	// Complete marks a claimed job done and publishes nextJobs in the same
 	// transaction (downstream chaining is atomic).
 	Complete(ctx context.Context, id int64, nextJobs ...QueueJob) error

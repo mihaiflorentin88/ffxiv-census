@@ -46,6 +46,7 @@ type Client struct {
 	maxRetries  int
 	backoffBase time.Duration
 	logger      contract.Logger
+	rateLimiter contract.ProviderRateLimiter
 }
 
 // per second). Lodestone is Cloudflare-fronted; 1 req/s is the established safe
@@ -54,16 +55,24 @@ type Client struct {
 const maxSafeRate = 1.0
 
 // NewClient builds the real godestone scraper (bingode provider, EN locale).
-func NewClient(cfg *config.LodestoneConfig, logger contract.Logger) (contract.LodestoneClient, error) {
-	return newClient(godestone.NewScraper(bingode.New(), godestone.EN), cfg, logger)
+func NewClient(cfg *config.LodestoneConfig, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
+	}
+	return newClient(godestone.NewScraper(bingode.New(), godestone.EN), cfg, logger, rl)
 }
 
-func newClient(sc scraper, cfg *config.LodestoneConfig, logger contract.Logger) (*Client, error) {
+func newClient(sc scraper, cfg *config.LodestoneConfig, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (*Client, error) {
 	if sc == nil {
 		return nil, errors.New("lodestone scraper is nil")
 	}
 	if cfg == nil {
 		return nil, errors.New("lodestone config is nil")
+	}
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
 	}
 	rps := cfg.RateLimit
 	if rps <= 0 {
@@ -77,8 +86,8 @@ func newClient(sc scraper, cfg *config.LodestoneConfig, logger contract.Logger) 
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
 		limiter:     rate.NewLimiter(rate.Limit(rps), 1),
 		maxRetries:  cfg.MaxRetries,
-		backoffBase: 500 * time.Millisecond,
 		logger:      loggerOrDiscard(logger),
+		rateLimiter: rl,
 	}, nil
 }
 func loggerOrDiscard(l contract.Logger) contract.Logger {
@@ -119,6 +128,9 @@ func (c *Client) FetchCharacter(ctx context.Context, id uint32) (*godestone.Char
 		lastErr = err
 		backoff := c.backoffBase * time.Duration(1<<uint(attempt))
 		if isRateLimited(err) {
+			if c.rateLimiter != nil {
+				c.rateLimiter.Pause(contract.ProviderLodestone, 30*time.Second, "lodestone 429 / rate limited")
+			}
 			c.logger.WarnContext(ctx, "lodestone.rate_limited",
 				slog.Uint64("id", uint64(id)),
 				slog.Int("attempt", attempt+1),
@@ -168,6 +180,9 @@ func (c *Client) FetchAchievements(ctx context.Context, id uint32) ([]*godestone
 		}
 		backoff := c.backoffBase * time.Duration(1<<uint(attempt))
 		if isRateLimited(err) {
+			if c.rateLimiter != nil {
+				c.rateLimiter.Pause(contract.ProviderLodestone, 30*time.Second, "lodestone 429 / rate limited")
+			}
 			c.logger.WarnContext(ctx, "lodestone.rate_limited",
 				slog.Uint64("id", uint64(id)),
 				slog.Int("attempt", attempt+1),
@@ -218,6 +233,9 @@ func (c *Client) FetchFreeCompany(ctx context.Context, id string) (*godestone.Fr
 		lastErr = err
 		backoff := c.backoffBase * time.Duration(1<<uint(attempt))
 		if isRateLimited(err) {
+			if c.rateLimiter != nil {
+				c.rateLimiter.Pause(contract.ProviderLodestone, 30*time.Second, "lodestone 429 / rate limited")
+			}
 			c.logger.WarnContext(ctx, "lodestone.rate_limited",
 				slog.String("id", id),
 				slog.Int("attempt", attempt+1),

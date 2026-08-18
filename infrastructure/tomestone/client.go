@@ -32,17 +32,21 @@ type Client struct {
 	mu              sync.Mutex
 	consecutive429s int
 	logger          contract.Logger
+	rateLimiter     contract.ProviderRateLimiter
 }
 
 // NewClient constructs a new TomestoneClient adapter.
-func NewClient(cfg *config.TomestoneConfig, logger contract.Logger) (contract.TomestoneClient, error) {
+func NewClient(cfg *config.TomestoneConfig, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
 	if cfg == nil {
 		return nil, errors.New("tomestone config is nil")
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
+	}
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://tomestone.gg"
@@ -69,6 +73,7 @@ func NewClient(cfg *config.TomestoneConfig, logger contract.Logger) (contract.To
 		limiter:        rate.NewLimiter(rate.Limit(r), 1),
 		configuredRate: r,
 		logger:         logger,
+		rateLimiter:    rl,
 	}, nil
 }
 
@@ -236,6 +241,14 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 			} else if t, err := http.ParseTime(retryAfterHeader); err == nil {
 				retryAfterDuration = time.Until(t)
 			}
+		}
+
+		pauseDuration := 30 * time.Second
+		if retryAfterDuration > 0 {
+			pauseDuration = retryAfterDuration
+		}
+		if c.rateLimiter != nil {
+			c.rateLimiter.Pause(contract.ProviderTomestone, pauseDuration, "tomestone 429")
 		}
 
 		c.logger.WarnContext(ctx, "tomestone.rate_limited",

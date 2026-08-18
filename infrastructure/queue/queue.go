@@ -7,13 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
-	"strings"
-	"time"
-
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
+	"io"
+	"log/slog"
+	"math/rand/v2"
+	"strings"
+	"time"
 )
 
 const timeLayout = "2006-01-02T15:04:05.000Z"
@@ -37,6 +37,11 @@ func NewQueue(driver contract.SQLiteDriver, cfg *config.QueueConfig, logger cont
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Queue{driver: driver, cfg: cfg, logger: logger, now: time.Now}, nil
+}
+
+// SetNowFunc overrides the queue's internal clock (useful in tests).
+func (q *Queue) SetNowFunc(f func() time.Time) {
+	q.now = f
 }
 
 func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) (int, error) {
@@ -71,6 +76,13 @@ func (q *Queue) Publish(ctx context.Context, jobs ...contract.QueueJob) (int, er
 }
 
 func (q *Queue) Claim(ctx context.Context, jobType string, n int) ([]contract.QueueJob, error) {
+	return q.ClaimMultiple(ctx, []string{jobType}, n)
+}
+
+func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int) ([]contract.QueueJob, error) {
+	if len(jobTypes) == 0 {
+		return nil, nil
+	}
 	if n <= 0 {
 		n = q.cfg.ClaimBatchSize
 	}
@@ -85,17 +97,27 @@ func (q *Queue) Claim(ctx context.Context, jobType string, n int) ([]contract.Qu
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after commit
 
-	rows, err := tx.QueryContext(ctx,
-		`UPDATE queue_jobs
+	placeholders := make([]string, len(jobTypes))
+	args := make([]any, 0, len(jobTypes)+3)
+	args = append(args, now) // for claimed_at = ?
+	for i, jt := range jobTypes {
+		placeholders[i] = "?"
+		args = append(args, jt)
+	}
+	args = append(args, now, n) // for run_at <= ? and LIMIT ?
+
+	query := fmt.Sprintf(`UPDATE queue_jobs
 		 SET status = 'claimed', claimed_at = ?, attempts = attempts + 1
 		 WHERE id IN (
 		     SELECT id FROM queue_jobs
-		     WHERE type = ? AND status = 'pending' AND run_at <= ?
+		     WHERE type IN (%s) AND status = 'pending' AND run_at <= ?
 		     ORDER BY run_at, id
 		     LIMIT ?
 		 )
 		 RETURNING id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at`,
-		now, jobType, now, n)
+		strings.Join(placeholders, ", "))
+
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim: %w", err)
 	}
@@ -107,9 +129,9 @@ func (q *Queue) Claim(ctx context.Context, jobType string, n int) ([]contract.Qu
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("claim commit: %w", err)
 	}
-	q.logger.DebugContext(ctx, "queue.claim", slog.String("event_type", jobType), slog.Int("requested", n), slog.Int("claimed", len(jobs)))
+	q.logger.DebugContext(ctx, "queue.claim", slog.Any("event_types", jobTypes), slog.Int("requested", n), slog.Int("claimed", len(jobs)))
 	for _, j := range jobs {
-		q.logger.DebugContext(ctx, "queue.claimed", slog.String("event_type", jobType), slog.Int64("job_id", j.ID), slog.Int("attempts", j.Attempts))
+		q.logger.DebugContext(ctx, "queue.claimed", slog.String("event_type", j.Type), slog.Int64("job_id", j.ID), slog.Int("attempts", j.Attempts))
 	}
 	return jobs, nil
 }
@@ -149,12 +171,26 @@ func (q *Queue) Retry(ctx context.Context, id int64, lastErr string) error {
 		`SELECT attempts, max_attempts FROM queue_jobs WHERE id = ?`, id).Scan(&attempts, &maxAttempts); err != nil {
 		return fmt.Errorf("retry read: %w", err)
 	}
-	backoff := time.Duration(q.cfg.BackoffBaseSeconds) * time.Second
-	if attempts >= 2 {
-		backoff *= time.Duration(1 << (attempts - 1)) // base * 2^(attempts-1)
+
+	baseSeconds := q.cfg.BackoffBaseSeconds
+	if baseSeconds <= 0 {
+		baseSeconds = 5
 	}
+	backoff := time.Duration(baseSeconds) * time.Second
+	if attempts >= 2 {
+		shift := uint(attempts - 1)
+		if shift > 10 {
+			shift = 10 // clamp exponential growth to 2^10 (~5120s max base)
+		}
+		backoff *= time.Duration(1 << shift)
+	}
+	// Add 10-20% jitter: [0.9, 1.2] * backoff
+	jitterFactor := 0.9 + 0.3*rand.Float64()
+	backoff = time.Duration(float64(backoff) * jitterFactor)
 	runAt := now.Add(backoff).UTC().Format(timeLayout)
-	if attempts >= maxAttempts {
+
+	// If max_attempts > 0 and attempts >= max_attempts, fail the job. If max_attempts == 0 (or < 0), infinite retry.
+	if maxAttempts > 0 && attempts >= maxAttempts {
 		q.logger.ErrorContext(ctx, "queue.failed", slog.Int64("job_id", id), slog.Int("attempts", attempts), slog.Int("max_attempts", maxAttempts), slog.String("last_error", lastErr))
 		_, err = db.ExecContext(ctx,
 			`UPDATE queue_jobs SET status = 'failed', last_error = ?, failed_at = ? WHERE id = ? AND status = 'claimed'`, lastErr, nowStr, id)

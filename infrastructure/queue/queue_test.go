@@ -158,7 +158,7 @@ func TestRetryBackoffThenFail(t *testing.T) {
 		t.Fatal("job claimed before backoff elapsed")
 	}
 	inner := q.(*Queue)
-	inner.now = func() time.Time { return time.Now().Add(5 * time.Second) }
+	inner.now = func() time.Time { return time.Now().Add(10 * time.Second) }
 	c2, err := q.Claim(ctx, "character-census", 1)
 	if err != nil {
 		t.Fatalf("claim after backoff: %v", err)

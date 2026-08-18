@@ -57,9 +57,17 @@ Manual ops: `./bin/ffxiv-census migrate --direction down` rolls back all migrati
 
 ## Documentation
 
-`docs/` is living documentation. When adding features, update the relevant doc alongside the code. New docs needed for new subsystems (e.g., `docs/events.md`, `docs/queue.md`).
+Detailed architecture and operational guides are maintained under `docs/`:
+- Overview & Quickstart: `README.md` and `docs/getting-started.md`
+- System Architecture & Locator: `docs/architecture.md` and `docs/container.md`
+- Database & Migrations: `docs/sqlite.md` and `docs/census.md`
+- Queue & Worker Engine: `docs/queue.md` and `docs/events.md`
+- Point-in-Time Backups: `docs/backup.md`
+- External Adapters: `docs/lodestone.md` and `docs/tomestone.md`
+- HTTP REST APIs & Metrics: `docs/http-api.md`, `docs/metrics.md`, and `docs/logging-and-middleware.md`
+- Web Interface: `docs/ui.md`
 
-## Web UI
+Specs and implementation plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/`. When adding features or changing behavior, always keep documentation in sync with code.
 
 Server-rendered Go templates + HTMX in `cmd/http/ui/` (embedded via `//go:embed`). No separate frontend build pipeline. Vendored Chart.js for charts, no CDN dependencies.
 
