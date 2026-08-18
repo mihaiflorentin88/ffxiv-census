@@ -1,0 +1,117 @@
+{{- if .Values.components.cronjobs.enabled }}
+{{- $dot := . }}
+{{- $global := .Values }}
+{{- $defaults := $global.cronjobs.defaults | default dict }}
+{{- $fullName := include "manifest.fullname" $dot }}
+
+{{- range $global.cronjobs.instances }}
+  {{- $instance := . }}
+
+  {{- $instanceImage := (get $instance "image" | default dict) }}
+  {{- $defaultImage := (get $defaults "image" | default dict) }}
+
+  {{- $imageRepository := get $instanceImage "repository" | default (get $defaultImage "repository") | default $global.image.repository }}
+  {{- $imageTag := get $instanceImage "tag" | default (get $defaultImage "tag") | default $global.image.tag }}
+  {{- $imagePullPolicy := get $instanceImage "pullPolicy" | default (get $defaultImage "pullPolicy") | default $global.image.pullPolicy }}
+
+  {{- $image := dict "repository" $imageRepository "tag" $imageTag "pullPolicy" $imagePullPolicy }}
+
+  {{- $cronName := printf "%s-cron-%s" $fullName $instance.name | trunc 63 | trimSuffix "-" }}
+
+
+  {{- $name := $instance.name }}
+  {{- $schedule := $instance.schedule }}
+  {{- $suspend := default false $instance.suspend }}
+  {{- $concurrencyPolicy := default "Forbid" $instance.concurrencyPolicy }}
+  {{- $successfulJobsHistoryLimit := default 1 $instance.successfulJobsHistoryLimit }}
+  {{- $failedJobsHistoryLimit := default 1 $instance.failedJobsHistoryLimit }}
+  {{- $activeDeadlineSeconds := default $defaults.activeDeadlineSeconds $instance.activeDeadlineSeconds | default 600 }}
+  {{- $restartPolicy := default $defaults.restartPolicy $instance.restartPolicy }}
+  {{- $command := $instance.command }}
+  {{- $resources := default $defaults.resources $instance.resources }}
+  {{- $volumeMounts := default $defaults.volumeMounts $instance.volumeMounts }}
+  {{- $volumes := default $defaults.volumes $instance.volumes }}
+  {{- $nodeSelector := default $defaults.nodeSelector $instance.nodeSelector }}
+  {{- $affinity := default $defaults.affinity $instance.affinity }}
+  {{- $tolerations := default $defaults.tolerations $instance.tolerations }}
+  {{- $podAnnotations := default $defaults.podAnnotations $instance.podAnnotations }}
+  {{- $podLabels := default $defaults.podLabels $instance.podLabels }}
+
+{{- $cron := dict "name" $name "schedule" $schedule "suspend" $suspend "concurrencyPolicy" $concurrencyPolicy "successfulJobsHistoryLimit" $successfulJobsHistoryLimit "failedJobsHistoryLimit" $failedJobsHistoryLimit "activeDeadlineSeconds" $activeDeadlineSeconds "restartPolicy" $restartPolicy "command" $command "resources" $resources "volumeMounts" $volumeMounts "volumes" $volumes "nodeSelector" $nodeSelector "affinity" $affinity "tolerations" $tolerations "podAnnotations" $podAnnotations "podLabels" $podLabels "image" $image }}
+
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $cronName }}
+  namespace: {{ $global.namespace }}
+  labels:
+    {{- include "manifest.labels" $dot | nindent 4 }}
+    tier: cron
+    component: cron
+    cron: {{ $cron.name }}
+spec:
+  schedule: "{{ $cron.schedule }}"
+  timeZone: {{ $cron.timezone | default "Europe/Bucharest" | quote }}
+  suspend: {{ $cron.suspend }}
+  concurrencyPolicy: {{ $cron.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ $cron.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $cron.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ $cron.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "manifest.labels" $dot | nindent 12 }}
+            tier: cron
+            component: cron
+            cron: {{ $cron.name }}
+            logging.banzaicloud.io/index: {{ $cron.name }}
+          {{- with $cron.podAnnotations }}
+          annotations:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          serviceAccountName: {{ include "manifest.serviceAccountName" $dot }}
+          restartPolicy: {{ $cron.restartPolicy }}
+          {{- with $global.imagePullSecrets }}
+          imagePullSecrets:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: {{ $dot.Chart.Name }}
+              image: "{{ include "manifest.image" (dict "image" $cron.image "Values" $global "Chart" $dot.Chart) }}"
+              imagePullPolicy: {{ include "manifest.pullPolicy" (dict "image" $cron.image "Values" $global) }}
+              command: {{ $cron.command | toJson }}
+              {{- if $global.vault.enabled }}
+              envFrom:
+                - secretRef:
+                    name: {{ $fullName }}-eso-secret
+              {{- end }}
+              resources:
+{{ toYaml $cron.resources | nindent 16 }}
+              {{- with $cron.volumeMounts }}
+              volumeMounts:
+{{ toYaml . | nindent 16 }}
+              {{- end }}
+          {{- with $cron.volumes }}
+          volumes:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cron.nodeSelector }}
+          nodeSelector:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cron.affinity }}
+          affinity:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $cron.tolerations }}
+          tolerations:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+
+{{- end }}
+{{- end }}

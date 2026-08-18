@@ -1,0 +1,20 @@
+{{- if .Values.components.webserver.enabled }}
+{{- with .Values.webserver.service }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "manifest.fullname" $ }}-test-connection"
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "manifest.labels" $ | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['{{ include "manifest.fullname" $ }}:{{ .port }}']
+  restartPolicy: Never
+{{- end }}
+{{- end }}

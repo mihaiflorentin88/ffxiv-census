@@ -1,0 +1,220 @@
+{{- if .Values.components.webserver.enabled }}
+{{- $fullName := include "manifest.fullname" . }}
+{{- $web := .Values.webserver }}
+
+# --- Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-www
+  namespace: {{ .Values.namespace }}
+  labels:
+{{ include "manifest.labels" . | nindent 4 }}
+    tier: www
+    component: webserver
+    {{- with $web.podLabels }}
+{{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if not $web.autoscaling.enabled }}
+  replicas: {{ $web.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+{{ include "manifest.selectorLabels" . | nindent 6 }}
+      tier: www
+      component: webserver
+  template:
+    metadata:
+      labels:
+{{ include "manifest.labels" . | nindent 8 }}
+        tier: www
+        component: webserver
+        logging.banzaicloud.io/index: {{ $fullName }}-www
+        {{- with $web.podLabels }}
+{{ toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with $web.podAnnotations }}
+{{ toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "manifest.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+{{ toYaml $web.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ include "manifest.name" . }}
+          image: "{{ include "manifest.image" (dict "image" $web.image "Values" .Values "Chart" .Chart) }}"
+          imagePullPolicy: {{ include "manifest.pullPolicy" (dict "image" $web.image "Values" .Values) }}
+          command: {{ $web.command | toJson }}
+          ports:
+            - name: http
+              containerPort: {{ $web.containerPort | default 8080 }}
+              protocol: TCP
+          {{- if .Values.vault.enabled }}
+          envFrom:
+            - secretRef:
+                name: {{ $fullName }}-eso-secret
+          {{- end }}
+          {{- if $web.livenessProbe }}
+          livenessProbe:
+{{ toYaml $web.livenessProbe | nindent 12 }}
+          {{- end }}
+          {{- if $web.readinessProbe }}
+          readinessProbe:
+{{ toYaml $web.readinessProbe | nindent 12 }}
+          {{- end }}
+          resources:
+{{ include "manifest.resources" $web }}
+          {{- with $web.volumeMounts }}
+          volumeMounts:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $web.volumes }}
+      volumes:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $web.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $web.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $web.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+
+---
+
+# --- HorizontalPodAutoscaler ---
+{{- if $web.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullName }}-www
+  namespace: {{ .Values.namespace }}
+  labels:
+{{ include "manifest.labels" . | nindent 4 }}
+    tier: www
+    component: webserver
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullName }}-www
+  minReplicas: {{ $web.autoscaling.minReplicas }}
+  maxReplicas: {{ $web.autoscaling.maxReplicas }}
+  metrics:
+    {{- if $web.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $web.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if $web.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $web.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    {{- if $web.autoscaling.targetCPUUtilizationValue }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Value
+          averageValue: {{ $web.autoscaling.targetCPUUtilizationValue }}
+    {{- end }}
+    {{- if $web.autoscaling.targetMemoryUtilizationValue }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Value
+          averageValue: {{ $web.autoscaling.targetMemoryUtilizationValue }}
+    {{- end }}
+
+{{- end }}
+
+---
+
+# --- Ingress ---
+{{- if $web.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+{{ include "manifest.labels" . | nindent 4 }}
+    tier: www
+    component: webserver
+  {{- with $web.ingress.annotations }}
+  annotations:
+{{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $web.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if $web.ingress.tls }}
+  tls:
+    {{- range $web.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range $web.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ if and .backend (and .backend.service (and .backend.service.port .backend.service.port.number)) }}{{ .backend.service.port.number }}{{ else }}{{ $web.service.port | default 80 }}{{ end }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+---
+
+# --- Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+{{ include "manifest.labels" . | nindent 4 }}
+    tier: www
+    component: webserver
+spec:
+  type: {{ $web.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ $web.service.port | default 80 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+{{ include "manifest.selectorLabels" . | nindent 4 }}
+    tier: www
+    component: webserver
+{{- end }}

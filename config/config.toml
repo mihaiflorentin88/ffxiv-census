@@ -21,7 +21,7 @@ write_timeout = "60s"
 idle_timeout  = "120s"
 
 [metrics]
-endpoint = "127.0.0.1:8125"
+endpoint = "graphite.monitoring.svc.cluster.local:8125"
 prefix   = "ffxiv-census"
 
 [sqlite]

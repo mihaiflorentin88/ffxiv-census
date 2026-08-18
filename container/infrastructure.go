@@ -2,6 +2,7 @@ package container
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
@@ -47,15 +48,27 @@ func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
 }
 
 func (s *ServiceContainer) Statsd() contract.StatsdClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.statsd != nil {
 		return s.infrastructure.statsd
 	}
-	cfg := s.Config().Metrics
-	if cfg == nil {
-		logging.Warn("container.metrics", "metrics config missing")
-		return nil
+	cfg := s.configUnlocked().Metrics
+	endpoint := ""
+	prefix := "ffxiv-census"
+	if cfg != nil {
+		endpoint = cfg.Endpoint
+		if cfg.Prefix != "" {
+			prefix = cfg.Prefix
+		}
 	}
-	client, err := metrics.New(cfg.Endpoint, cfg.Prefix)
+	if envEndpoint := os.Getenv("STATSD_ADDRESS"); envEndpoint != "" {
+		endpoint = envEndpoint
+	}
+	if endpoint == "" {
+		endpoint = "127.0.0.1:8125"
+	}
+	client, err := metrics.New(endpoint, prefix)
 	if err != nil {
 		logging.Error("container.metrics", fmt.Sprintf("failed to create statsd client: %v", err))
 		return nil
@@ -64,6 +77,8 @@ func (s *ServiceContainer) Statsd() contract.StatsdClient {
 	return client
 }
 func (s *ServiceContainer) PrometheusRegistry() *metrics.Registry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.infrastructure.prometheusRegistry != nil {
 		return s.infrastructure.prometheusRegistry
 	}
@@ -71,7 +86,6 @@ func (s *ServiceContainer) PrometheusRegistry() *metrics.Registry {
 	s.infrastructure.prometheusRegistry = reg
 	return reg
 }
-
 func (s *ServiceContainer) ProviderRateLimiter() contract.ProviderRateLimiter {
 	s.mu.Lock()
 	defer s.mu.Unlock()

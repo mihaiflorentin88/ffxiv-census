@@ -1,0 +1,52 @@
+{{- if .Values.vault.enabled }}
+{{- $fullName := include "manifest.fullname" . -}}
+{{- $defaultCert := "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUYyVENDQThHZ0F3SUJBZ0lKQU51UERLdjMvS0lXTUEwR0NTcUdTSWIzRFFFQkN3VUFNSUdDTVFzd0NRWUQKVlFRR0V3SlNUekVRTUE0R0ExVUVDQXdIVW05dFlXNXBZVEVTTUJBR0ExVUVCd3dKUW5WamFHRnlaWE4wTVEwdwpDd1lEVlFRS0RBUmxUVUZITVJjd0ZRWURWUVFMREE1SmJtWnlZWE4wY25WamRIVnlaVEVsTUNNR0ExVUVBd3djClpVMUJSeUJEWlhKMGFXWnBZMkYwYVc5dUlFRjFkR2h2Y21sMGVUQWVGdzB4TmpBeE1USXhOVEl6TkRCYUZ3MHoKTmpBeE1EY3hOVEl6TkRCYU1JR0NNUXN3Q1FZRFZRUUdFd0pTVHpFUU1BNEdBMVVFQ0F3SFVtOXRZVzVwWVRFUwpNQkFHQTFVRUJ3d0pRblZqYUdGeVpYTjBNUTB3Q3dZRFZRUUtEQVJsVFVGSE1SY3dGUVlEVlFRTERBNUpibVp5CllYTjBjblZqZEhWeVpURWxNQ01HQTFVRUF3d2NaVTFCUnlCRFpYSjBhV1pwWTJGMGFXOXVJRUYxZEdodmNtbDAKZVRDQ0FpSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnSVBBRENDQWdvQ2dnSUJBTHZWYlJpQnJUVjhaVGhrcTBxOQpHUlBpQ09ONCtrWW5ZejBqMk9pdndpanMveWVtQU1JNDNhVThnZUpDUDM2YWtSWWJ2VnBTa2tFdWJEQTNhb08rCmhvMlJHSGh5MUdNNjd5RHpqTG9ETlJ3QUVWMUpmbVQ5bjlLVERnTzJEL0NtNFp5MVJzNk5kRytGWjZDRGVONlAKV2gwQmV6MjBLYVZScC90QVQ1MlpoSVJXeDhLV3RFL3VzNmg0UjFvUGxaa2owaVFrZmNxY2NBZk5yNmNtS1hKZApHbE5rZjUybTE0bEFjZHpJWGJKeVByYlpqNVFHZjRORHNSeXR2RitGSHRsZW5IZEd6VVE0ZnNPWmd0REkwZ1VLCnFRY09JbHByVjdLVCtvU0dVcjhWYldCb3hoM29hdWw5MzAwY3NWZDR0RXo5WUY5b1REcWptYi9WNlEyYXN6V28KWUZyQUxwS3NqaHZYd3J6MXl3cEY0L3R3NVlwUmx3KzB3S0UyWmQ4MVdUMnJRNVBQVVBWM2RzK29iczhpUjVYbApnR3l2MnJjNVhYTnhiUENaUEVqN3l2YUFQUzl0d05HY0hqUFEzeWdwZlRXMzB2QW1ZQnVEc3lzbWZ6ZU1iSmcrCmh5U1VMU0N3UkIzaUFGMCtwanpyYTljVHN2dVd0MmJoRW8wb0hhWFVjaGNxNUQ4TDZ0dy96cWJFR0FtM3FicGMKMnhGNHJqOEhNZkZ6UGV5NEZvMVEvZEpoWEZrbjRKU2d5Si9qRHFjMEFIazNYdFBvOC9sc3R3MVViNkczb3JyawpLdEIvalR2MFI0VTltM2F3d3Y1SHN2b2sydlZ5alQyVFdVL0o0dUxnbjhFTmtvb3RhVTVsd2p2TWd6a1cwWjZHCit0ZnBoN2laK2dTVkRLT2hkVHkyVVNkZkFnTUJBQUdqVURCT01CMEdBMVVkRGdRV0JCUm5HU3hBeWI0aW03ZlcKVktXdVZDQW5vOGxiempBZkJnTlZIU01FR0RBV2dCUm5HU3hBeWI0aW03ZldWS1d1VkNBbm84bGJ6akFNQmdOVgpIUk1FQlRBREFRSC9NQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUNBUUNjTHkzb3ZWcVlYblh1TjZGV3pkeXQ1OWsyCjJRYWR4ZWlTTWw3Unc0QWRoN1gzVytpQ2ZMV2ZHb08zeFdnMnRHYnZtS2JOa2tTVFdXYWxNajh5YUhneC9Bck8KdFhaU3I5OTRNUWJ6cHI5WjdWdkw3aVZ6bkkxb0tFemFOTlAzMjVvandXMEdNN1FBSk1QTHEzcms0ZzB5K0FTQwpEL29BNkdBK1Vla3JwRWZSY0hGY29qVnBub0Q1ME1wVVdzcUhLaXp6NTF2R0kzZithclgyUjZteWo5OU44SXFKCndLVUI4TkVQR1JkdGpTS3Z6SktyanhzWWFJcGFNNTY0b3hKSWNsSEd0dlBHaUE0UlJVb3A1bUxvaDlIT1RtRmEKaGhYOWJsU0svU1hvSjZ5TDdUeWRzTEJVTzY1R1FMUytqZC9lK2tjT2l0Q2JDSE9ISklxSEVsbWs5NU5FUjVWKwplRUliSHphQk9BTDRMQnU3dzlCem1BSWg3Ry9EMHhreTBNVTBXZFVDT3dwazh0bFJuT3lHY28yM0VJY1FVK3BvCktzMlEwMVZRWXdQNGM5aXVPL0M2OTlYc2pIekF6RUcwRzhHUXU2TVJtQ3NySnJBbnVXRW12S1o1M3FnMFdmSlIKekxOaGFkYm1Oc3dJemtsV2ZkV0pnZVRTc2xVY05sYWt4UXp5MktPVStrZlBubWFpSmxpcnEzTzByVmRNZXRXZApJYU13RkxVOGYyVVMrQ2piSnh2WnFRd0RUdXg1UnVwakVqQWM2MDhreTVrbHBrbWRXMVFWamIrVEFsVVJaOG9KCjQwV1VTL0MwQm11dnNsMytEVWVpZGdwdnVjWG1OcWFBbzNUekszMSs4M25sWTFJekRPN25uUWtwVzJNN0pTTUcKOWwwQk44eklzMWQxZ24rVkdnPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=" }}
+{{- $cert := .Values.vault.cert | default $defaultCert }}
+
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install,pre-rollback
+    "helm.sh/hook-weight": "-6"
+spec:
+  provider:
+    vault:
+      auth:
+        kubernetes:
+          mountPath: {{ .Values.vault.mountPath }}
+          role: {{ .Values.vault.authRole }}
+          serviceAccountRef:
+            name: {{ .Values.vault.authServiceAccount }}
+      {{ if semverCompare "<=1.21-0" .Capabilities.KubeVersion.GitVersion }}
+            namespace: {{ .Release.Namespace }}
+      {{ end }}
+      version: {{ .Values.vault.version }}
+      path: {{ .Values.vault.secretPreffix }}
+      server: {{ .Values.vault.server }}
+      caBundle: {{ $cert }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "manifest.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install,pre-rollback
+    "helm.sh/hook-weight": "-5"
+spec:
+  dataFrom:
+    - extract:
+        key: {{ .Values.vault.fetchAllDataFrom }}
+  refreshInterval: {{ .Values.vault.secretRefreshInterval }}
+  secretStoreRef:
+    name: {{ $fullName }}
+    kind: SecretStore
+  target:
+    name: {{ $fullName }}-eso-secret
+    creationPolicy: Owner
+{{- end }}

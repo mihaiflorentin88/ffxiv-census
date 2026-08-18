@@ -1,0 +1,164 @@
+{{- if .Values.components.workers.enabled }}
+{{- $dot := . }}
+{{- $global := .Values }}
+{{- $defaults := $global.workers.defaults | default dict }}
+{{- $fullName := include "manifest.fullname" $dot }}
+
+{{- range $global.workers.instances }}
+  {{- $instance := . }}
+
+  {{- $instanceImage := get $instance "image" | default dict }}
+  {{- $defaultImage := get $defaults "image" | default dict }}
+
+  {{- $imageRepository := get $instanceImage "repository" | default (get $defaultImage "repository") | default $global.image.repository }}
+  {{- $imageTag := get $instanceImage "tag" | default (get $defaultImage "tag") | default $global.image.tag }}
+  {{- $imagePullPolicy := get $instanceImage "pullPolicy" | default (get $defaultImage "pullPolicy") | default $global.image.pullPolicy }}
+
+  {{- $image := dict "repository" $imageRepository "tag" $imageTag "pullPolicy" $imagePullPolicy }}
+
+  {{- $workerName := printf "%s-worker-%s" $fullName $instance.name | trunc 63 | trimSuffix "-" }}
+
+
+  {{- $instanceAutoscaling := get $instance "autoscaling" | default dict }}
+  {{- $defaultAutoscaling := get $defaults "autoscaling" | default dict }}
+  {{- $autoscaling := merge $defaultAutoscaling $instanceAutoscaling }}
+  {{- $resources := default $defaults.resources $instance.resources }}
+  {{- $volumeMounts := default $defaults.volumeMounts $instance.volumeMounts }}
+  {{- $volumes := default $defaults.volumes $instance.volumes }}
+  {{- $nodeSelector := default $defaults.nodeSelector $instance.nodeSelector }}
+  {{- $affinity := default $defaults.affinity $instance.affinity }}
+  {{- $tolerations := default $defaults.tolerations $instance.tolerations }}
+  {{- $podAnnotations := default $defaults.podAnnotations $instance.podAnnotations }}
+  {{- $podLabels := default $defaults.podLabels $instance.podLabels }}
+  {{- $podSecurityContext := default $defaults.podSecurityContext $instance.podSecurityContext }}
+  {{- $port := default $defaults.port $instance.port | default 8080 }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $workerName }}
+  namespace: {{ $global.namespace }}
+  labels:
+    {{- include "manifest.labels" $dot | nindent 4 }}
+    tier: worker
+    component: worker
+    worker: {{ $instance.name }}
+spec:
+  {{- if not $autoscaling.enabled }}
+  replicas: {{ default 1 $instance.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "manifest.selectorLabels" $dot | nindent 6 }}
+      tier: worker
+      component: worker
+      worker: {{ $instance.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "manifest.labels" $dot | nindent 8 }}
+        tier: worker
+        component: worker
+        worker: {{ $instance.name }}
+        logging.banzaicloud.io/index: {{ $workerName }}
+        {{- with $podLabels }}
+{{ toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with $podAnnotations }}
+{{ toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "manifest.serviceAccountName" $dot }}
+      {{- with $global.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+{{ toYaml ($podSecurityContext | default dict) | nindent 8 }}
+      containers:
+        - name: {{ $dot.Chart.Name }}
+          image: "{{ include "manifest.image" (dict "image" $image "Values" $global "Chart" $dot.Chart) }}"
+          imagePullPolicy: {{ include "manifest.pullPolicy" (dict "image" $image "Values" $global) }}
+          command: {{ $instance.command | toJson }}
+          ports:
+            - name: http
+              containerPort: {{ $port }}
+              protocol: TCP
+          {{- if $global.vault.enabled }}
+          envFrom:
+            - secretRef:
+                name: {{ $fullName }}-eso-secret
+          {{- end }}
+          {{- if $instance.livenessProbe }}
+          livenessProbe:
+{{ toYaml $instance.livenessProbe | nindent 12 }}
+          {{- end }}
+          {{- if $instance.readinessProbe }}
+          readinessProbe:
+{{ toYaml $instance.readinessProbe | nindent 12 }}
+          {{- end }}
+          resources:
+{{ include "manifest.resources" (dict "resources" $resources) }}
+          {{- with $volumeMounts }}
+          volumeMounts:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $volumes }}
+      volumes:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+
+{{- if $autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $workerName }}-autoscaler
+  namespace: {{ $global.namespace }}
+  labels:
+    {{- include "manifest.labels" $dot | nindent 4 }}
+    tier: worker
+    component: worker
+    worker: {{ $instance.name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $workerName }}
+  minReplicas: {{ $autoscaling.minReplicas }}
+  maxReplicas: {{ $autoscaling.maxReplicas }}
+  metrics:
+    {{- if $autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if $autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}
+
+{{- end }}
+{{- end }}
