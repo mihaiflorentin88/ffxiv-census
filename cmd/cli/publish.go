@@ -294,24 +294,59 @@ var publishCharacterCensusCmd = &cobra.Command{
 
 var publishFCCensusCmd = &cobra.Command{
 	Use:   "fc-census",
-	Short: "Publish fc-census job for a free company",
+	Short: "Publish fc-census jobs for free companies",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fcID, _ := cmd.Flags().GetString("fc-id")
-		if fcID == "" {
-			return fmt.Errorf("--fc-id is required")
-		}
+		limit, _ := cmd.Flags().GetInt("limit")
+		olderThan, _ := cmd.Flags().GetDuration("older-than")
+
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
-		job := handler.FreeCompanyCensusJob(fcID)
-		inserted, err := q.Publish(cmd.Context(), job)
+
+		if fcID != "" {
+			job := handler.FreeCompanyCensusJob(fcID)
+			inserted, err := q.Publish(cmd.Context(), job)
+			if err != nil {
+				return err
+			}
+			container.Load.Logger().InfoContext(cmd.Context(), "publish.fc_census",
+				slog.String("fc_id", fcID),
+				slog.Int("enqueued", inserted),
+			)
+			return nil
+		}
+
+		if limit <= 0 {
+			limit = 500
+		}
+		repo := container.Load.FreeCompanyRepository()
+		if repo == nil {
+			return fmt.Errorf("free company repository not initialised")
+		}
+		fcs, err := repo.List(cmd.Context(), contract.FreeCompanyFilter{}, limit, 0)
+		if err != nil {
+			return fmt.Errorf("list free companies: %w", err)
+		}
+
+		cutoff := time.Now().UTC().Add(-olderThan)
+		var jobs []contract.QueueJob
+		for _, fc := range fcs {
+			if olderThan <= 0 || fc.LastSeenAt.Before(cutoff) {
+				jobs = append(jobs, handler.FreeCompanyCensusJob(fc.ID))
+			}
+		}
+
+		inserted, err := q.Publish(cmd.Context(), jobs...)
 		if err != nil {
 			return err
 		}
 		container.Load.Logger().InfoContext(cmd.Context(), "publish.fc_census",
-			slog.String("fc_id", fcID),
+			slog.Int("limit", limit),
+			slog.Int("found", len(fcs)),
 			slog.Int("enqueued", inserted),
+			slog.Int("deduplicated", len(jobs)-inserted),
 		)
 		return nil
 	},
@@ -338,4 +373,6 @@ func init() {
 	publishCharacterCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")
 	publishCmd.AddCommand(publishFCCensusCmd)
 	publishFCCensusCmd.Flags().String("fc-id", "", "Lodestone Free Company ID")
+	publishFCCensusCmd.Flags().Duration("older-than", 720*time.Hour, "only re-census free companies not seen within this duration")
+	publishFCCensusCmd.Flags().Int("limit", 500, "max free companies to enqueue")
 }
