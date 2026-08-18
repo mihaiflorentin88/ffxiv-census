@@ -158,7 +158,9 @@ func (s *Service) PerformBackup(ctx context.Context, cfg *Config) (string, error
 		if err != nil {
 			return "", fmt.Errorf("create temp backup dir: %w", err)
 		}
-		defer os.RemoveAll(tempDir)
+		defer func() {
+			_ = os.RemoveAll(tempDir)
+		}()
 
 		tempFile := filepath.Join(tempDir, fileName)
 		if err := s.DumpDatabase(ctx, tempFile); err != nil {
@@ -166,6 +168,7 @@ func (s *Service) PerformBackup(ctx context.Context, cfg *Config) (string, error
 		}
 
 		res, err := s.UploadToGDrive(ctx, tempFile, cfg)
+		_ = os.Remove(tempFile)
 		if err != nil {
 			return "", err
 		}
