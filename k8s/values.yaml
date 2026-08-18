@@ -113,6 +113,9 @@ webserver:
     failureThreshold: 3
   podAnnotations: {}
   podLabels: {}
+  env:
+    - name: SQLITE_PATH
+      value: /data/ffxiv-census.db
   volumeMounts:
     - name: shared-storage
       mountPath: /data
@@ -157,6 +160,9 @@ workers:
       runAsGroup: 65532
       fsGroup: 65532
       runAsNonRoot: true
+    env:
+      - name: SQLITE_PATH
+        value: /data/ffxiv-census.db
     volumeMounts:
       - name: shared-storage
         mountPath: /data
@@ -187,6 +193,9 @@ cronjobs:
       runAsGroup: 65532
       fsGroup: 65532
       runAsNonRoot: true
+    env:
+      - name: SQLITE_PATH
+        value: /data/ffxiv-census.db
     volumeMounts:
       - name: shared-storage
         mountPath: /data

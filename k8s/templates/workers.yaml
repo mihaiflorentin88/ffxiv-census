@@ -32,6 +32,7 @@
   {{- $podLabels := default $defaults.podLabels $instance.podLabels }}
   {{- $podSecurityContext := default $defaults.podSecurityContext $instance.podSecurityContext }}
   {{- $port := default $defaults.port $instance.port | default 8080 }}
+  {{- $env := default $defaults.env $instance.env }}
 
 ---
 apiVersion: apps/v1
@@ -90,6 +91,10 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ $fullName }}-eso-secret
+          {{- end }}
+          {{- with $env }}
+          env:
+{{ toYaml . | nindent 12 }}
           {{- end }}
           {{- if $instance.livenessProbe }}
           livenessProbe:

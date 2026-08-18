@@ -60,6 +60,10 @@ spec:
             - secretRef:
                 name: {{ $fullName }}-eso-secret
           {{- end }}
+          {{- with $web.env }}
+          env:
+{{ toYaml . | nindent 12 }}
+          {{- end }}
           {{- if $web.livenessProbe }}
           livenessProbe:
 {{ toYaml $web.livenessProbe | nindent 12 }}

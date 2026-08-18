@@ -281,38 +281,54 @@ make build
 
 ## Release Workflow
 
-The application release process involves building cross-compiled Linux/ARM64 artifacts, containerizing, tagging, pushing to Docker Hub, and deploying via Helm to Kubernetes.
+The application release process involves checking existing release tags, bumping the version tag according to Semantic Versioning (`vMAJOR.MINOR.PATCH`), building cross-compiled Linux/ARM64 artifacts, containerizing, pushing to Docker Hub, creating a Git tag, and deploying via Helm to Kubernetes.
 
-### 1. Build & Push Docker Image
+> **Important**: Always check existing Git and Docker tags before releasing, and bump the version tag (e.g., `v1.0.0` -> `v1.0.1`). Do not reuse or overwrite existing release tags.
+
+### 1. Check Existing Tags & Determine Next Version
+
+```bash
+# Check local and remote git tags
+git tag -l
+git ls-remote --tags origin
+```
+
+### 2. Build & Push Docker Image
 
 ```bash
 # 1. Build ARM64 binary and Docker image (tagged as latest)
 make docker-build
 
 # 2. Tag image with release version
-make docker-tag TAG=v1.0.0
+make docker-tag TAG=v1.0.1
 
-# 3. Push image to registry
-make docker-push TAG=v1.0.0
+# 3. Push release tag and latest to Docker Hub
+make docker-push TAG=v1.0.1
+make docker-push TAG=latest
 ```
 
-### 2. Deploy to Kubernetes
+### 3. Create & Push Git Tag
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+### 4. Deploy to Kubernetes
 
 Deploy the release to the Kubernetes cluster using Helm:
 
 ```bash
 # Deploy via root Makefile
-make k8s-release TAG=v1.0.0
+make k8s-release TAG=v1.0.1
 
 # Or directly via Helm Makefile in k8s/
-make -C k8s deploy TAG=v1.0.0
+make -C k8s deploy TAG=v1.0.1
 
 # Verify rollout status
 make -C k8s post-deploy-check
 ```
-
-### 3. Internal Cluster Services & Monitoring Endpoints
-
+### 5. Internal Cluster Services & Monitoring Endpoints
 The Kubernetes cluster provides internal monitoring and metrics services accessible to components within the cluster network:
 
 | Service | Internal Cluster Host / Endpoint | Type | Description |

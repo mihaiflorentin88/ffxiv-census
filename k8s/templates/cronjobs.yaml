@@ -36,8 +36,9 @@
   {{- $tolerations := default $defaults.tolerations $instance.tolerations }}
   {{- $podAnnotations := default $defaults.podAnnotations $instance.podAnnotations }}
   {{- $podLabels := default $defaults.podLabels $instance.podLabels }}
+  {{- $env := default $defaults.env $instance.env }}
 
-{{- $cron := dict "name" $name "schedule" $schedule "suspend" $suspend "concurrencyPolicy" $concurrencyPolicy "successfulJobsHistoryLimit" $successfulJobsHistoryLimit "failedJobsHistoryLimit" $failedJobsHistoryLimit "activeDeadlineSeconds" $activeDeadlineSeconds "restartPolicy" $restartPolicy "command" $command "resources" $resources "volumeMounts" $volumeMounts "volumes" $volumes "nodeSelector" $nodeSelector "affinity" $affinity "tolerations" $tolerations "podAnnotations" $podAnnotations "podLabels" $podLabels "image" $image }}
+{{- $cron := dict "name" $name "schedule" $schedule "suspend" $suspend "concurrencyPolicy" $concurrencyPolicy "successfulJobsHistoryLimit" $successfulJobsHistoryLimit "failedJobsHistoryLimit" $failedJobsHistoryLimit "activeDeadlineSeconds" $activeDeadlineSeconds "restartPolicy" $restartPolicy "command" $command "resources" $resources "volumeMounts" $volumeMounts "volumes" $volumes "nodeSelector" $nodeSelector "affinity" $affinity "tolerations" $tolerations "podAnnotations" $podAnnotations "podLabels" $podLabels "image" $image "env" $env }}
 
 
 ---
@@ -89,6 +90,10 @@ spec:
               envFrom:
                 - secretRef:
                     name: {{ $fullName }}-eso-secret
+              {{- end }}
+              {{- with $cron.env }}
+              env:
+{{ toYaml . | nindent 16 }}
               {{- end }}
               resources:
 {{ toYaml $cron.resources | nindent 16 }}

@@ -18,11 +18,10 @@ deploy: ## Deploy the Helm chart to Kubernetes (requires TAG=<version>)
 		echo "Error: TAG variable cannot be 'updateMe'. Please provide a valid image tag."; \
 		exit 1; \
 	fi
-	$(HELM) -n default upgrade --force -i $(RELEASE_NAME) . \
+	$(HELM) -n default upgrade -i $(RELEASE_NAME) . \
 		--set image.tag=${TAG} \
 		--wait \
 		--timeout 3m0s \
-		--atomic \
 		-f values.yaml
 
 .PHONY: post-deploy-check
