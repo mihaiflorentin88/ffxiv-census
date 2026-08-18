@@ -182,25 +182,27 @@ Exports census data for characters, free companies, or achievements directly to 
 
 ### 6. `backup` — SQLite Snapshot & Google Drive Backup
 
-Performs a point-in-time `VACUUM INTO` snapshot of the SQLite database and saves locally or uploads to Google Drive.
+Performs a point-in-time `VACUUM INTO` snapshot of the SQLite database and saves locally or uploads to Google Drive. The source database path defaults to `config.toml` (`[sqlite] path` or `SQLITE_PATH`), and Google Drive credentials/folder IDs default to `[backup]` configuration or `BACKUP_` environment variables.
 
 ```bash
 # Create local backup in ./backups with 14-day retention rotation
 ./bin/ffxiv-census backup --target local --output /var/backups/census --retention-days 14
 
-# Upload snapshot to Google Drive via Service Account key file
+# Upload snapshot to Google Drive using config/environment variables (BACKUP_GDRIVE_FOLDER_ID & BACKUP_SERVICE_ACCOUNT_B64)
+./bin/ffxiv-census backup --target gdrive
+
+# Upload snapshot to Google Drive overriding credentials via CLI flags
 ./bin/ffxiv-census backup \
   --target gdrive \
   --gdrive-folder-id "1abc123XYZ..." \
   --service-account-file "/secrets/gdrive-service-account.json"
 
-# Upload using Base64-encoded Service Account string (e.g. in crontab or Docker env)
+# Upload using Base64-encoded Service Account string
 ./bin/ffxiv-census backup \
   --target gdrive \
   --gdrive-folder-id "1abc123XYZ..." \
-  --service-account-b64 "$GDRIVE_SERVICE_ACCOUNT_B64"
+  --service-account-b64 "$BACKUP_SERVICE_ACCOUNT_B64"
 ```
-
 ### 7. `migrate` — Manual Schema Migrations
 
 Manage database schema versions manually with Goose.
@@ -240,8 +242,8 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 | `QUEUE_CLAIM_BATCH_SIZE` | Default number of jobs claimed per batch | `4` |
 | `QUEUE_MAX_ATTEMPTS` | Default retry attempts before dead-lettering (0 = infinite) | `5` |
 | `QUEUE_BACKOFF_BASE_SECONDS` | Initial backoff delay for retried jobs | `5` |
-| `GDRIVE_FOLDER_ID` | Google Drive folder ID for automated backups | `""` |
-| `GDRIVE_SERVICE_ACCOUNT_B64` | Base64-encoded Google service account JSON | `""` |
+| `BACKUP_GDRIVE_FOLDER_ID` | Default Google Drive destination folder ID (`[backup] gdrive_folder_id`) | `""` |
+| `BACKUP_SERVICE_ACCOUNT_B64` | Base64-encoded Google service account JSON (`[backup] service_account_b64`) | `""` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google service account credentials file | `""` |
 
 ---

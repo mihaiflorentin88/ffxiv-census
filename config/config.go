@@ -25,6 +25,7 @@ type Config struct {
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
 	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
 	Census    *CensusConfig    `mapstructure:"census"`
+	Backup    *BackupConfig    `mapstructure:"backup"`
 }
 
 type AppConfig struct {
@@ -91,6 +92,11 @@ type CensusConfig struct {
 	ActivityWindowDays int               `mapstructure:"activity_window_days"`
 	MaxLevel           uint32            `mapstructure:"max_level"`
 	Expansions         []ExpansionConfig `mapstructure:"expansions"`
+}
+
+type BackupConfig struct {
+	ServiceAccountB64 string `mapstructure:"service_account_b64"`
+	GDriveFolderID    string `mapstructure:"gdrive_folder_id"`
 }
 
 func loadDotEnv() {

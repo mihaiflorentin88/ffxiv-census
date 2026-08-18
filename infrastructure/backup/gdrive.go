@@ -91,9 +91,6 @@ func (s *Service) UploadToGDrive(ctx context.Context, filePath string, cfg *Conf
 	}
 
 	folderID := cfg.GDriveFolderID
-	if folderID == "" {
-		folderID = os.Getenv("GDRIVE_FOLDER_ID")
-	}
 	if folderID != "" {
 		driveFile.Parents = []string{folderID}
 	}
@@ -184,17 +181,9 @@ func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
 			option.WithScopes(drive.DriveFileScope),
 		}, nil
 	}
-
-	// 2. Base64-encoded credentials (flag or env)
-	b64 := cfg.ServiceAccountB64
-	if b64 == "" {
-		b64 = os.Getenv("GDRIVE_SERVICE_ACCOUNT_B64")
-	}
-	if b64 == "" {
-		b64 = os.Getenv("GDRIVE_SERVICE_ACCOUNT_BASE64")
-	}
-	if b64 != "" {
-		decoded, err := base64.StdEncoding.DecodeString(b64)
+	// 2. Base64-encoded credentials (from flag or config)
+	if cfg.ServiceAccountB64 != "" {
+		decoded, err := base64.StdEncoding.DecodeString(cfg.ServiceAccountB64)
 		if err != nil {
 			return nil, fmt.Errorf("decode base64 service account: %w", err)
 		}
@@ -204,14 +193,10 @@ func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
 		}, nil
 	}
 
-	// 3. Raw JSON credentials string (flag or env)
-	rawJSON := cfg.ServiceAccountJSON
-	if rawJSON == "" {
-		rawJSON = os.Getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
-	}
-	if rawJSON != "" {
+	// 3. Raw JSON credentials string (from flag or config)
+	if cfg.ServiceAccountJSON != "" {
 		return []option.ClientOption{
-			option.WithCredentialsJSON([]byte(rawJSON)),
+			option.WithCredentialsJSON([]byte(cfg.ServiceAccountJSON)),
 			option.WithScopes(drive.DriveFileScope),
 		}, nil
 	}
@@ -224,5 +209,5 @@ func resolveGDriveOptions(cfg *Config) ([]option.ClientOption, error) {
 		}, nil
 	}
 
-	return nil, errors.New("no Google Drive credentials found. Provide --service-account-file, --service-account-b64, or set GDRIVE_SERVICE_ACCOUNT_B64 / GOOGLE_APPLICATION_CREDENTIALS")
+	return nil, errors.New("no Google Drive credentials found. Provide --service-account-file, --service-account-b64, or set GOOGLE_APPLICATION_CREDENTIALS")
 }

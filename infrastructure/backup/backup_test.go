@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
@@ -63,5 +64,80 @@ func TestBackup_LocalSnapshotCreation(t *testing.T) {
 	}
 	if val != "hello" {
 		t.Fatalf("expected val='hello', got %s", val)
+	}
+}
+
+func TestBackup_GDrive_MissingCredentials(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "source.db")
+
+	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
+	if err != nil {
+		t.Fatalf("create sqlite driver: %v", err)
+	}
+
+	svc := backup.NewService(driver, nil)
+	cfg := &backup.Config{
+		Target: "gdrive",
+	}
+
+	_, err = svc.PerformBackup(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error with missing credentials, got nil")
+	}
+	if !strings.Contains(err.Error(), "no Google Drive credentials found") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestBackup_GDrive_InvalidBase64Credentials(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "source.db")
+
+	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
+	if err != nil {
+		t.Fatalf("create sqlite driver: %v", err)
+	}
+
+	svc := backup.NewService(driver, nil)
+	cfg := &backup.Config{
+		Target:            "gdrive",
+		ServiceAccountB64: "invalid-not-base64!@#$",
+	}
+
+	_, err = svc.PerformBackup(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error with invalid base64 credentials, got nil")
+	}
+	if !strings.Contains(err.Error(), "decode base64 service account") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestBackup_GDrive_IgnoresRawEnvDirectly(t *testing.T) {
+	// Ensure infrastructure does not read GDRIVE_SERVICE_ACCOUNT_B64 directly from os.Getenv
+	t.Setenv("GDRIVE_SERVICE_ACCOUNT_B64", "invalid-b64")
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "source.db")
+
+	driver, err := sqlite.NewDriver(&config.SQLiteConfig{Path: dbPath}, sqlitemigration.FS())
+	if err != nil {
+		t.Fatalf("create sqlite driver: %v", err)
+	}
+
+	svc := backup.NewService(driver, nil)
+	cfg := &backup.Config{
+		Target: "gdrive",
+	}
+
+	_, err = svc.PerformBackup(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// If it was reading GDRIVE_SERVICE_ACCOUNT_B64, it would say "decode base64 service account"
+	// Because it's removed, it should say "no Google Drive credentials found"
+	if !strings.Contains(err.Error(), "no Google Drive credentials found") {
+		t.Errorf("expected 'no Google Drive credentials found', got: %v", err)
 	}
 }

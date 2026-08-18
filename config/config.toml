@@ -97,3 +97,7 @@ final_quest = "In the Glow of a New Dawn"
 icon = "☀️"
 level_cap = 100
 achievement_id = 3496
+
+[backup]
+service_account_b64 = ""
+gdrive_folder_id = ""

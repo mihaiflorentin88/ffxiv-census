@@ -38,23 +38,52 @@
   --service-account-b64 "$(base64 -w0 /secrets/gdrive-service-account.json)"
 ```
 
-### Environment Variables
+### Configuration & Environment Variables
 
-| Variable | Description |
-|---|---|
-| `GDRIVE_FOLDER_ID` | Default Google Drive destination folder ID |
-| `GDRIVE_SERVICE_ACCOUNT_B64` | Base64-encoded Service Account JSON key |
-| `GDRIVE_SERVICE_ACCOUNT_JSON` | Raw Service Account JSON key string |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google Service Account JSON file |
+Backup parameters can be defined in `config.toml`, overridden by environment variables via Viper, or passed directly via CLI flags.
+
+#### 1. `config.toml` Settings
+
+```toml
+[sqlite]
+path = "data/ffxiv-census.db"
+
+[backup]
+service_account_b64 = ""
+gdrive_folder_id = ""
+```
+
+#### 2. Environment Variables (Viper Mapping)
+
+Viper automatically maps uppercase environment variables with underscores to configuration keys:
+
+| Variable | Config Mapping | Description |
+|---|---|---|
+| `SQLITE_PATH` | `[sqlite] path` | Source SQLite database file to snapshot |
+| `BACKUP_GDRIVE_FOLDER_ID` | `[backup] gdrive_folder_id` | Default Google Drive destination folder ID |
+| `BACKUP_SERVICE_ACCOUNT_B64` | `[backup] service_account_b64` | Base64-encoded Service Account JSON key |
+| `GOOGLE_APPLICATION_CREDENTIALS` | External Google SDK | Path to Google Service Account credentials file |
+
+#### 3. Precedence Order
+
+1. **CLI Flags** (`--gdrive-folder-id`, `--service-account-b64`, `--service-account-file`, `--service-account-json`) — Highest precedence.
+2. **Environment Variables** (`BACKUP_GDRIVE_FOLDER_ID`, `BACKUP_SERVICE_ACCOUNT_B64`, `SQLITE_PATH`, `GOOGLE_APPLICATION_CREDENTIALS`).
+3. **Configuration File** (`config.toml` `[backup]` and `[sqlite]` blocks).
+
+When `BACKUP_GDRIVE_FOLDER_ID` and `BACKUP_SERVICE_ACCOUNT_B64` (or their `config.toml` entries) are set, you can run a Google Drive backup without passing credentials on the CLI:
+
+```bash
+./bin/ffxiv-census backup --target gdrive
+```
 
 ## Automated Cronjob Setup
 
 To configure daily backups with automatic rotation, add the following to your crontab (`crontab -e`):
 
 ```bash
-# Run local backup daily at 02:00 AM with 14-day retention
+# Run local backup daily at 02:00 AM with 14-day retention (database path defaults to config.toml or SQLITE_PATH)
 0 2 * * * cd /opt/ffxiv-census && SQLITE_PATH=/var/lib/ffxiv-census/census.db ./bin/ffxiv-census backup --target local --output /var/backups/census --retention-days 14 >> /var/log/census-backup.log 2>&1
 
-# Run Google Drive backup daily at 03:00 AM
-0 3 * * * cd /opt/ffxiv-census && SQLITE_PATH=/var/lib/ffxiv-census/census.db GDRIVE_FOLDER_ID="1xyz..." GDRIVE_SERVICE_ACCOUNT_B64="..." ./bin/ffxiv-census backup --target gdrive >> /var/log/census-backup.log 2>&1
+# Run Google Drive backup daily at 03:00 AM using environment variables
+0 3 * * * cd /opt/ffxiv-census && SQLITE_PATH=/var/lib/ffxiv-census/census.db BACKUP_GDRIVE_FOLDER_ID="1xyz..." BACKUP_SERVICE_ACCOUNT_B64="..." ./bin/ffxiv-census backup --target gdrive >> /var/log/census-backup.log 2>&1
 ```
