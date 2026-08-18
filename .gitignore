@@ -3,6 +3,11 @@ dist/
 coverage/
 *.log
 .env
+.env.*
+*.pem
+*.key
+*service-account*.json
+gdrive-*.json
 .idea/
 .vscode/
 Dockerfile.*
