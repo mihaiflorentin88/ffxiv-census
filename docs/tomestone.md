@@ -11,7 +11,7 @@ Tokens and configuration can be set in `config.toml`, via a local `.env` file (l
 [tomestone]
 api_token = "your-bearer-token"
 base_url = "https://tomestone.gg"
-rate_limit = 10.0
+rate_limit = 5.0
 timeout = "10s"
 ```
 
@@ -19,7 +19,7 @@ timeout = "10s"
 | ------------ | --------------------- | ---------------------- | ------------------------------------------------------------------ |
 | `api_token`  | `""`                  | `TOMESTONE_API_TOKEN`  | Laravel Sanctum Bearer token for authentication.                   |
 | `base_url`   | `https://tomestone.gg`| `TOMESTONE_BASE_URL`   | Base URL for Tomestone.gg REST API.                                |
-| `rate_limit` | `10.0`                | `TOMESTONE_RATE_LIMIT` | Token-bucket rate limiter ceiling in requests per second.         |
+| `rate_limit` | `5.0`                 | `TOMESTONE_RATE_LIMIT` | Token-bucket rate limiter ceiling in requests per second.         |
 | `timeout`    | `10s`                 | `TOMESTONE_TIMEOUT`    | HTTP client timeout per request.                                   |
 
 ## Port & Architecture
@@ -60,7 +60,7 @@ Inspect live Tomestone character profiles directly via the CLI:
 
 Tomestone.gg serves as the **primary provider for `id-sweep`** (character discovery) and the **fallback provider for `character-census`** (profile re-census).
 
-- **`id-sweep` (Tomestone primary):** When `--source auto` (default) is set, handlers probe Tomestone.gg first (10 req/s REST API) for maximum discovery throughput. If Tomestone returns a 404 or transient error, handlers fall back to The Lodestone. If both return 404, the character is confirmed missing.
+- **`id-sweep` (Tomestone primary):** When `--source auto` (default) is set, handlers probe Tomestone.gg first (5 req/s REST API) for maximum discovery throughput. If Tomestone returns a 404 or transient error, handlers fall back to The Lodestone. If both return 404, the character is confirmed missing.
 - **`character-census` (Lodestone primary, Tomestone fallback):** Handlers query The Lodestone first as the authoritative source. If Lodestone returns a 404, scrape error, or encounters rate limits, handlers fall back to Tomestone.gg.
 - Explicit `--source tomestone` on `id-sweep` queries Tomestone.gg directly without querying Lodestone.
 - Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into downstream jobs (`achievement-census`, and `fc-census` when affiliated with a free company) via `BuildDependentCharacterJobs`.

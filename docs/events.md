@@ -39,7 +39,7 @@ The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an iden
 Both `id-sweep` and `character-census` are dual-source events, but they use different primary providers in `auto` source mode:
 
 **`id-sweep` (character discovery):** Tomestone primary, Lodestone fallback.
-1. Handlers probe **Tomestone.gg** first. Tomestone runs at 10 req/s (REST API) vs Lodestone's 1 req/s (scraper), making it the faster discovery path.
+1. Handlers probe **Tomestone.gg** first. Tomestone runs at 5 req/s (REST API) vs Lodestone's 1 req/s (scraper), making it the faster discovery path.
 2. When Tomestone returns a 404 (`contract.ErrCharacterNotFound`), handlers fall back to **The Lodestone** — the character may exist but not be indexed by Tomestone.
 3. When Tomestone encounters a transient error, handlers fall back to **The Lodestone** as the authoritative source.
 4. If Tomestone returns 404 and Lodestone is unavailable/paused, the job returns an error to retry on Lodestone later.

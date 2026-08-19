@@ -16,8 +16,8 @@ func TestNewConfig_TomestoneDefaults(t *testing.T) {
 	if cfg.Tomestone.BaseURL != "https://tomestone.gg" {
 		t.Errorf("base_url = %q, want https://tomestone.gg", cfg.Tomestone.BaseURL)
 	}
-	if cfg.Tomestone.RateLimit != 10.0 {
-		t.Errorf("rate_limit = %v, want 10.0", cfg.Tomestone.RateLimit)
+	if cfg.Tomestone.RateLimit != 5.0 {
+		t.Errorf("rate_limit = %v, want 5.0", cfg.Tomestone.RateLimit)
 	}
 	if cfg.Tomestone.Timeout != "10s" {
 		t.Errorf("timeout = %q, want 10s", cfg.Tomestone.Timeout)

@@ -132,8 +132,9 @@ func (q *Queue) ClaimMultiple(ctx context.Context, jobTypes []string, n int, mod
 		 WHERE id IN (
 		     SELECT id FROM queue_jobs
 		     WHERE type IN (%s) AND status = 'pending' AND run_at <= $%d %s
-		     ORDER BY run_at, id
+	ORDER BY run_at, id
 		     LIMIT $%d
+		     FOR UPDATE SKIP LOCKED
 		 )
 		 RETURNING id, type, payload, payload_hash, status, run_at, attempts, max_attempts, last_error, claimed_at, created_at, failed_at, completed_at`,
 		strings.Join(placeholders, ", "), runAtPos, modeFilter, limitPos)

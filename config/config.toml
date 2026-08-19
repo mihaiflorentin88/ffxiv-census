@@ -46,7 +46,7 @@ max_retries = 3
 [tomestone]
 api_token = ""
 base_url = "https://tomestone.gg"
-rate_limit = 10.0
+rate_limit = 5.0
 timeout = "10s"
 
 [census]
