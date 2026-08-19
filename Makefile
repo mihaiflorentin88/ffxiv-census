@@ -58,7 +58,9 @@ build-windows-arm64:
 
 docker-build: build-linux-arm64
 	@echo "==> building ARM64 Docker image"
-	@docker build --platform linux/arm64 -t $(DOCKER_IMAGE):latest .
+	@docker buildx build --platform linux/arm64 \
+		--build-arg BINARY=dist/ffxiv-census-linux-arm64 \
+		-t $(DOCKER_IMAGE):latest . --load
 
 docker-tag:
 	@tag="$(TAG)"; \
