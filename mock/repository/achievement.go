@@ -134,10 +134,32 @@ func (f *AchievementRepository) NewCharactersPerDay(ctx context.Context, since, 
 	if f.NewCharactersResponse != nil {
 		return f.NewCharactersResponse, nil
 	}
-	if f.chars != nil {
-		return f.chars.NewPerDay(ctx, since, until, filter)
+	// Query actual milestone data: characters with achievement 590 in [since, until)
+	dayCounts := make(map[string]int64)
+	for charID, milestones := range f.milestones {
+		for _, m := range milestones {
+			if m.AchievementID != 590 {
+				continue
+			}
+			if m.AchievedAt.Before(since) || !m.AchievedAt.Before(until) {
+				continue
+			}
+			if f.chars != nil {
+				rec, ok := f.chars.characters[charID]
+				if !ok || rec.DeletedAt != nil || !matchesFilter(rec, f.chars.jobs[charID], filter) {
+					continue
+				}
+			}
+			day := m.AchievedAt.UTC().Format("2006-01-02")
+			dayCounts[day]++
+		}
 	}
-	return []contract.DailyCount{}, nil
+	var out []contract.DailyCount
+	for day, count := range dayCounts {
+		out = append(out, contract.DailyCount{Day: day, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Day < out[j].Day })
+	return out, nil
 }
 
 func (f *AchievementRepository) CountChocoboMilestones(ctx context.Context, since time.Time, filter contract.CharacterFilter) (int64, error) {
@@ -149,10 +171,23 @@ func (f *AchievementRepository) CountChocoboMilestones(ctx context.Context, sinc
 	if f.ChocoboCountResponse != 0 {
 		return f.ChocoboCountResponse, nil
 	}
-	if f.chars != nil {
-		return f.chars.Count(ctx, filter)
+	// Count characters with chocobo milestone (590) achieved_at >= since
+	seen := make(map[uint32]bool)
+	for charID, milestones := range f.milestones {
+		for _, m := range milestones {
+			if m.AchievementID != 590 || m.AchievedAt.Before(since) {
+				continue
+			}
+			if f.chars != nil {
+				rec, ok := f.chars.characters[charID]
+				if !ok || rec.DeletedAt != nil || !matchesFilter(rec, f.chars.jobs[charID], filter) {
+					continue
+				}
+			}
+			seen[charID] = true
+		}
 	}
-	return 0, nil
+	return int64(len(seen)), nil
 }
 
 var _ contract.AchievementRepository = (*AchievementRepository)(nil)

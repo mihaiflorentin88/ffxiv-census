@@ -18,6 +18,7 @@
 | `/ui/partials/world-breakdown` | `GET` | HTMX partial returning world and datacenter rows for a requested region (`?region=NA`) |
 | `/ui/races` | `GET` | Playable race demographics, global percentage shares, active ratios, and Chart.js doughnut chart |
 | `/ui/worlds` | `GET` | Global server rankings table with interactive region/datacenter filters |
+| `/ui/worlds/{world}` | `GET` | World detail page: total population, active players (30d), new characters (chocobo milestone 590 in last 30 days), race breakdown, MSQ completions, and 30-day new-character timeline |
 | `/ui/expansions` | `GET` | MSQ story completion funnel (A Realm Reborn, Heavensward, Stormblood, Shadowbringers, Endwalker, Dawntrail) with retention and drop-off metrics |
 | `/ui/characters/{id}` | `GET` | Detailed character profile with Dawntrail Lv 100 job matrix, story milestone timeline, Free Company badge, and external links |
 | `/ui/characters` | `GET` | Paginated directory browser of discovered player characters |

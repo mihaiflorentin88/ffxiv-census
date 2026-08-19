@@ -3,15 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/xivapi/godestone/v2"
-	"github.com/xivapi/godestone/v2/data/gender"
-	"github.com/xivapi/godestone/v2/provider/models"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xivapi/godestone/v2"
+	"github.com/xivapi/godestone/v2/data/gender"
+	"github.com/xivapi/godestone/v2/provider/models"
 
 	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
@@ -327,15 +328,20 @@ func TestCensusController_Breakdown_InvalidDimension(t *testing.T) {
 
 func TestCensusController_NewCharacters(t *testing.T) {
 	rig := newRig(t)
-	// Seed the fake directly with a fixed FirstSeenAt so the expected UTC day
-	// is deterministic — UpsertCharacter would stamp time.Now() internally,
-	// which flakes across a UTC-midnight crossing. The handler and service
-	// path (NewCharacters -> NewPerDay) is still fully exercised.
-	if err := rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+	ctx := context.Background()
+	// Seed a character and its chocobo milestone (achievement 590) so the
+	// service path (NewCharacters -> achievements.NewCharactersPerDay) is
+	// exercised against real milestone data, not first_seen_at.
+	if err := rig.chars.Upsert(ctx, contract.CharacterRecord{
 		ID: 1, Name: "A", World: "Ultros", Datacenter: "Primal", Region: "NA",
 		FirstSeenAt: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
 	}, nil); err != nil {
 		t.Fatalf("Upsert: %v", err)
+	}
+	if err := rig.ach.UpsertCharacterMilestones(ctx, 1, []contract.CharacterMilestone{
+		{CharacterID: 1, AchievementID: 590, AchievedAt: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)},
+	}); err != nil {
+		t.Fatalf("UpsertCharacterMilestones: %v", err)
 	}
 
 	var days []response.NewCharactersDay
@@ -449,7 +455,8 @@ func TestQueueController_Events(t *testing.T) {
 	}
 
 	// Publish and transition jobs
-	_, _ = rig.q.Publish(ctx,
+	_, _ = rig.q.Publish(
+		ctx,
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":10}`)},
 		contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":10}`)},
 		contract.QueueJob{Type: "fc-census", Payload: []byte(`{"id":"failed"}`)},
@@ -487,7 +494,8 @@ func TestQueueController_ListJobs_FiltersAndPagination(t *testing.T) {
 	rig := newRig(t)
 	ctx := context.Background()
 
-	_, _ = rig.q.Publish(ctx,
+	_, _ = rig.q.Publish(
+		ctx,
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":2}`)},
 		contract.QueueJob{Type: "character-census", Payload: []byte(`{"id":10}`)},
@@ -615,7 +623,8 @@ func TestQueueController_RetryFailed(t *testing.T) {
 	rig := newRig(t)
 	ctx := context.Background()
 
-	_, _ = rig.q.Publish(ctx,
+	_, _ = rig.q.Publish(
+		ctx,
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":1}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"chunk":2}`)},
 	)

@@ -189,17 +189,18 @@ func (r *AchievementRepository) NewCharactersPerDay(ctx context.Context, since, 
 }
 
 func (r *AchievementRepository) CountChocoboMilestones(ctx context.Context, since time.Time, filter contract.CharacterFilter) (int64, error) {
-	where, filterArgs := characterJoinFilterWhere(filter, "c", 3)
+	where, filterArgs := characterJoinFilterWhere(filter, "c", 2)
 
-	args := []any{since, since}
+	args := []any{since}
 	args = append(args, filterArgs...)
 
 	query := fmt.Sprintf(`
-		SELECT COUNT(DISTINCT c.id)
-		  FROM characters c
-		  LEFT JOIN character_milestones cm ON cm.character_id = c.id AND cm.achievement_id = 590
-		 WHERE c.deleted_at IS NULL
-		   AND (cm.achieved_at >= $1 OR (cm.achievement_id IS NULL AND c.first_seen_at >= $2))
+		SELECT COUNT(DISTINCT cm.character_id)
+		  FROM character_milestones cm
+		  JOIN characters c ON c.id = cm.character_id
+		 WHERE cm.achievement_id = 590
+		   AND cm.achieved_at >= $1
+		   AND c.deleted_at IS NULL
 		   %s`, where)
 
 	row, err := r.driver.FetchOne(ctx, query, args...)

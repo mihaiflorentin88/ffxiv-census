@@ -167,8 +167,9 @@ func (c *CensusController) Breakdown(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewCharacters serves GET /api/v1/stats/new-characters?since=YYYY-MM-DD:
-// characters first seen per UTC day in [since, until). since is required and
-// must parse as a date; until defaults to now.
+// characters who earned the Chocobo milestone (achievement 590) per UTC day
+// in [since, until). since is required and must parse as a date; until
+// defaults to now.
 func (c *CensusController) NewCharacters(w http.ResponseWriter, r *http.Request) {
 	if c.svc == nil {
 		writeError(w, http.StatusInternalServerError, "census service unavailable")

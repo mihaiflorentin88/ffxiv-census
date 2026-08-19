@@ -609,7 +609,7 @@ const docTemplate = `{
     "/api/v1/stats/new-characters": {
       "get": {
         "summary": "New characters per day",
-        "description": "Daily counts of newly seen characters in the given range.",
+        "description": "Daily counts of characters who earned the Chocobo milestone (achievement 590) in the given range.",
         "produces": [
           "application/json"
         ],
