@@ -129,12 +129,8 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 				return next, nil
 			}
 			if errors.Is(terr, contract.ErrCharacterNotFound) {
-				if derr := h.census.MarkCharacterDeleted(ctx, p.CharacterID, time.Now().UTC()); derr != nil {
-					h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", derr))
-					return nil, fmt.Errorf("character-census mark-deleted %d: %w", p.CharacterID, derr)
-				}
-				h.logger.InfoContext(ctx, "handler.character_census.deleted", slog.Uint64("character_id", uint64(p.CharacterID)))
-				return nil, nil
+				h.logger.WarnContext(ctx, "handler.character_census.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("lodestone_error", err))
+				return nil, fmt.Errorf("character-census %d: not found on tomestone and lodestone error (%v), retrying on lodestone", p.CharacterID, err)
 			}
 			h.logger.WarnContext(ctx, "handler.character_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("source", "tomestone"), slog.Any("error", terr))
 			return nil, fmt.Errorf("character-census tomestone fetch %d: %w", p.CharacterID, terr)
@@ -163,12 +159,8 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	}
 
 	if errors.Is(err, contract.ErrCharacterNotFound) {
-		if derr := h.census.MarkCharacterDeleted(ctx, p.CharacterID, time.Now().UTC()); derr != nil {
-			h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", derr))
-			return nil, fmt.Errorf("character-census mark-deleted %d: %w", p.CharacterID, derr)
-		}
-		h.logger.InfoContext(ctx, "handler.character_census.deleted", slog.Uint64("character_id", uint64(p.CharacterID)))
-		return nil, nil
+		h.logger.WarnContext(ctx, "handler.character_census.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(p.CharacterID)))
+		return nil, fmt.Errorf("character-census %d: not found on tomestone and lodestone currently paused/unavailable, retrying on lodestone", p.CharacterID)
 	}
 
 	h.logger.WarnContext(ctx, "handler.character_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("source", "tomestone"), slog.Any("error", err))

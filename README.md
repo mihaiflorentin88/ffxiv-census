@@ -234,7 +234,7 @@ publish character-census ──► consume (all queues) ──┬──► achie
 
 ### Provider Coordination & Automatic Queue Switching
 
-- **Dual-Source Queues (`id-sweep`, `character-census`)**: Use The Lodestone as the primary scraper. When Lodestone returns scrape errors, 429 rate limits, or 404s, workers automatically fall back to Tomestone.gg.
+- **Dual-Source Queues (`id-sweep`, `character-census`)**: Use The Lodestone as the primary source of truth. When Lodestone returns a confirmed 404, the ID is recorded as missing/deleted. When Lodestone encounters errors or is paused, Tomestone.gg is probed as a fallback; if Tomestone returns 404 (because Tomestone only indexes a subset of characters), the job automatically retries against The Lodestone with exponential backoff.
 - **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone encounters HTTP 429 or is paused, workers pause these queues and process dual-source queues via Tomestone.gg.
 - **Earliest Cooldown Sleep**: If all external providers are rate-limited simultaneously, workers sleep until the earliest cooldown expires without burning database transactions or CPU cycles.
 ---

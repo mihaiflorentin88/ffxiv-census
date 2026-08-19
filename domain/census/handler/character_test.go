@@ -243,6 +243,40 @@ func TestCharacterCensus_Lodestone404_Tomestone404_MarksDeleted(t *testing.T) {
 	}
 }
 
+func TestCharacterCensus_LodestoneError_Tomestone404_ReturnsErrorForLodestoneRetry(t *testing.T) {
+	h, ls, _, _, chars := newTestDualCharacterCensus(t)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 550, Name: "Existing Character", FirstSeenAt: time.Now()}, nil)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, errors.New("lodestone 503 or 429 rate limit")
+	}
+	// ts has no character 550 (returns ErrCharacterNotFound)
+
+	_, err := h.Handle(context.Background(), characterPayload(550))
+	if err == nil {
+		t.Fatal("expected error to retry on Lodestone when Tomestone 404s during Lodestone failure, got nil")
+	}
+	got, _ := chars.Get(context.Background(), 550)
+	if got == nil || got.DeletedAt != nil {
+		t.Errorf("character should NOT be marked deleted when Tomestone 404s on Lodestone error, got %+v", got)
+	}
+}
+
+func TestCharacterCensus_LodestonePaused_Tomestone404_ReturnsErrorForLodestoneRetry(t *testing.T) {
+	h, _, _, limiter, chars := newTestDualCharacterCensus(t)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 560, Name: "Existing Character", FirstSeenAt: time.Now()}, nil)
+	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "lodestone paused")
+	// ts has no character 560 (returns ErrCharacterNotFound)
+
+	_, err := h.Handle(context.Background(), characterPayload(560))
+	if err == nil {
+		t.Fatal("expected error to retry on Lodestone when Tomestone 404s while Lodestone is paused, got nil")
+	}
+	got, _ := chars.Get(context.Background(), 560)
+	if got == nil || got.DeletedAt != nil {
+		t.Errorf("character should NOT be marked deleted when Tomestone 404s while Lodestone is paused, got %+v", got)
+	}
+}
+
 func TestCharacterCensus_AllProvidersRateLimited_ReturnsError(t *testing.T) {
 	h, _, _, limiter, _ := newTestDualCharacterCensus(t)
 	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "lodestone paused")

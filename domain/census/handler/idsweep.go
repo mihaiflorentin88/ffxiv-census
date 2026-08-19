@@ -161,7 +161,8 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 							}
 							next = append(next, BuildDependentCharacterJobs(tChar.ID, fcID)...)
 						} else if errors.Is(terr, contract.ErrCharacterNotFound) {
-							h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
+							h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)), slog.Any("lodestone_error", err))
+							return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone error (%v), retrying on lodestone", id, err)
 						} else {
 							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", terr))
 							return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, terr)
@@ -185,11 +186,12 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						fcID = *tChar.FreeCompanyID
 					}
 					next = append(next, BuildDependentCharacterJobs(tChar.ID, fcID)...)
-				} else if !errors.Is(err, contract.ErrCharacterNotFound) {
+				} else if errors.Is(err, contract.ErrCharacterNotFound) {
+					h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)))
+					return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone currently paused/unavailable, retrying on lodestone", id)
+				} else {
 					h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
 					return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, err)
-				} else {
-					h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
 				}
 			}
 		}

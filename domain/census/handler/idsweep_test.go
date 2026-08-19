@@ -272,6 +272,31 @@ func TestIDSweep_Lodestone404_FallbackToTomestoneHit(t *testing.T) {
 	}
 }
 
+func TestIDSweep_LodestoneError_Tomestone404_ReturnsErrorForLodestoneRetry(t *testing.T) {
+	h, ls, _, _ := newTestDualIDSweep(t)
+
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, errors.New("lodestone 503 or 429 rate limit")
+	}
+	// ts has no character 215 (returns ErrCharacterNotFound)
+
+	_, err := h.Handle(context.Background(), idsweepPayloadWithSource(215, 215, "auto"))
+	if err == nil {
+		t.Fatal("expected error to retry on Lodestone when Tomestone 404s on Lodestone error, got nil")
+	}
+}
+
+func TestIDSweep_LodestonePaused_Tomestone404_ReturnsErrorForLodestoneRetry(t *testing.T) {
+	h, _, _, limiter, _ := newTestDualIDSweepWithLimiter(t)
+	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "lodestone paused")
+	// ts has no character 216 (returns ErrCharacterNotFound)
+
+	_, err := h.Handle(context.Background(), idsweepPayloadWithSource(216, 216, "auto"))
+	if err == nil {
+		t.Fatal("expected error to retry on Lodestone when Tomestone 404s while Lodestone is paused, got nil")
+	}
+}
+
 func TestIDSweep_DualSource_Double404(t *testing.T) {
 	h, ls, _, chars := newTestDualIDSweep(t)
 
