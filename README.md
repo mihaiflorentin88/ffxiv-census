@@ -207,14 +207,14 @@ publish character-census ──► consume (all queues) ──┬──► achie
 
 | Event Name | Purpose | Payload Schema | Provider(s) | Downstream Event Cascading |
 |---|---|---|---|---|
-| `id-sweep` | Probes ranges of character IDs to discover and ingest newly created or active characters. Non-existent IDs are skipped without failing the chunk. | `{"from": 1, "to": 1000, "source": "auto"}` | **Dual-Source**: Lodestone (primary) + Tomestone.gg (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
+| `id-sweep` | Probes ranges of character IDs to discover and ingest newly created or active characters. Non-existent IDs are skipped without failing the chunk. | `{"from": 1, "to": 1000, "source": "auto"}` | **Dual-Source**: Tomestone.gg (primary, 10 req/s) + Lodestone (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
 | `character-census` | Re-censuses a known character's profile, job levels, and affiliation. Confirmed 404 on both providers marks the character deleted. | `{"character_id": 12345}` | **Dual-Source**: Lodestone (primary) + Tomestone.gg (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
 | `achievement-census` | Fetches character achievements and updates registered expansion and milestone progression. | `{"character_id": 12345}` | **Lodestone-exclusive** | *None (leaf job)* |
 | `fc-census` | Fetches Free Company profile and roster details. | `{"fc_id": "9234567890123456789"}` | **Lodestone-exclusive** | *None (leaf job)* |
 
 ### Provider Coordination & Automatic Queue Switching
 
-- **Dual-Source Queues (`id-sweep`, `character-census`)**: Use The Lodestone as the primary source of truth. When Lodestone returns a confirmed 404, the ID is recorded as missing/deleted. When Lodestone encounters errors or is paused, Tomestone.gg is probed as a fallback; if Tomestone returns 404 (because Tomestone only indexes a subset of characters), the job automatically retries against The Lodestone with exponential backoff.
+- **Dual-Source Queues (`id-sweep`, `character-census`)**: `id-sweep` uses Tomestone.gg as primary (10 req/s REST API for fast discovery) with Lodestone fallback; `character-census` uses Lodestone as primary (authoritative source) with Tomestone.gg fallback. When Tomestone returns 404 on `id-sweep`, Lodestone is probed as fallback. When Lodestone returns 404 on `character-census`, Tomestone is probed. If the fallback also returns 404, the character is confirmed missing. If the fallback is unavailable, the job retries with exponential backoff.
 - **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone encounters HTTP 429 or is paused, workers pause these queues and process dual-source queues via Tomestone.gg.
 - **Earliest Cooldown Sleep**: If all external providers are rate-limited simultaneously, workers sleep until the earliest cooldown expires without burning database transactions or CPU cycles.
 ---

@@ -36,12 +36,24 @@ The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an iden
 
 ## Dual-source ingest, Fallback & Provider Rate-Limit Coordination
 
-Both `id-sweep` and `character-census` are dual-source events. In `auto` source mode:
-1. Handlers use **The Lodestone** as the primary data provider and authoritative source of truth.
-2. When Lodestone returns a 404 (`contract.ErrCharacterNotFound`), handlers check Tomestone.gg. If Tomestone also 404s (or is unavailable), the ID is confirmed missing/deleted.
-3. When Lodestone encounters a transient error, 429 rate limit, or is paused in the rate limiter, Tomestone.gg is probed as an opportunistic cache. If Tomestone returns 404 (because Tomestone does not possess all characters that exist on Lodestone), the job is **not** skipped or marked deleted—it returns an error to trigger an automatic queue retry against The Lodestone once available.
-4. Downstream dependent jobs (`achievement-census`, plus `fc-census` when in an FC) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
-5. **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`, `fc-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting database claims or CPU cycles.
+Both `id-sweep` and `character-census` are dual-source events, but they use different primary providers in `auto` source mode:
+
+**`id-sweep` (character discovery):** Tomestone primary, Lodestone fallback.
+1. Handlers probe **Tomestone.gg** first. Tomestone runs at 10 req/s (REST API) vs Lodestone's 1 req/s (scraper), making it the faster discovery path.
+2. When Tomestone returns a 404 (`contract.ErrCharacterNotFound`), handlers fall back to **The Lodestone** — the character may exist but not be indexed by Tomestone.
+3. When Tomestone encounters a transient error, handlers fall back to **The Lodestone** as the authoritative source.
+4. If Tomestone returns 404 and Lodestone is unavailable/paused, the job returns an error to retry on Lodestone later.
+5. If both providers return 404, the character is confirmed missing/deleted and skipped.
+6. If Tomestone errors and Lodestone returns 404, the character is confirmed missing (Lodestone is authoritative for existence).
+
+**`character-census` (profile re-census):** Lodestone primary, Tomestone fallback.
+1. Handlers query **The Lodestone** first as the authoritative source of truth.
+2. When Lodestone returns a 404, handlers check Tomestone.gg. If Tomestone also 404s (or is unavailable), the character is confirmed deleted.
+3. When Lodestone encounters a transient error or is paused, Tomestone.gg is probed as a fallback. If Tomestone returns 404, the job retries on Lodestone with backoff.
+
+**Shared rules:**
+- Downstream dependent jobs (`achievement-census`, plus `fc-census` when in an FC) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
+- **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`, `fc-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting database claims or CPU cycles.
 
 ### Lodestone-Only Event Rate-Limit Handling
 
