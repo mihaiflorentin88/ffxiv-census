@@ -78,6 +78,7 @@ spec:
       {{- end }}
       securityContext:
 {{ toYaml ($podSecurityContext | default dict) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $instance.terminationGracePeriodSeconds | default $defaults.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: {{ $dot.Chart.Name }}
           image: "{{ include "manifest.image" (dict "image" $image "Values" $global "Chart" $dot.Chart) }}"

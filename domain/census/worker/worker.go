@@ -96,8 +96,20 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 	}
 
-	childCtx, cancel := context.WithCancel(ctx)
+	childCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// stopClaiming is cancelled when the signal context fires, causing worker loops
+	// to stop claiming new jobs. childCtx stays alive so in-flight processJob calls
+	// can finish their Handle/Complete/Retry using a live context.
+	stopClaiming, stopClaimingCancel := context.WithCancel(context.Background())
+	defer stopClaimingCancel()
+
+	go func() {
+		<-ctx.Done()
+		w.logger.InfoContext(ctx, "worker.draining", slog.String("signal", "stop claiming new jobs, waiting for in-flight jobs to complete"))
+		stopClaimingCancel()
+	}()
 
 	// Reserve 1 goroutine for retries, distribute the rest evenly across event types.
 	retryWorkers := 1
@@ -118,7 +130,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		wg.Add(1)
 		go func(allTypes []string, wid int) {
 			defer wg.Done()
-			if err := w.eventWorkerLoop(childCtx, allTypes[0], allTypes, wid, true); err != nil && !errors.Is(err, context.Canceled) {
+			if err := w.eventWorkerLoop(stopClaiming, childCtx, allTypes[0], allTypes, wid, true); err != nil && !errors.Is(err, context.Canceled) {
 				w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", "retry"), slog.Int("worker_id", wid), slog.Any("error", err))
 				errCh <- err
 				cancel()
@@ -140,7 +152,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 			wg.Add(1)
 			go func(primaryType string, allTypes []string, wid int) {
 				defer wg.Done()
-				if err := w.eventWorkerLoop(childCtx, primaryType, allTypes, wid, false); err != nil && !errors.Is(err, context.Canceled) {
+				if err := w.eventWorkerLoop(stopClaiming, childCtx, primaryType, allTypes, wid, false); err != nil && !errors.Is(err, context.Canceled) {
 					w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", primaryType), slog.Int("worker_id", wid), slog.Any("error", err))
 					errCh <- err
 					cancel()
@@ -178,7 +190,7 @@ func (w *Worker) isEventTypeAvailable(eventType string) bool {
 	}
 }
 
-func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTypes []string, workerID int, isRetryWorker bool) error {
+func (w *Worker) eventWorkerLoop(claimCtx context.Context, processCtx context.Context, primaryType string, allTypes []string, workerID int, isRetryWorker bool) error {
 	// Determine the preferred claim mode based on worker role.
 	// Retry worker prefers retries; new workers prefer new jobs.
 	// Both fall back to ClaimModeAny when idle to prevent starvation.
@@ -188,7 +200,7 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 	}
 
 	for {
-		if ctx.Err() != nil {
+		if claimCtx.Err() != nil {
 			return nil
 		}
 
@@ -196,13 +208,13 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 		primaryAvail := w.isEventTypeAvailable(primaryType)
 		if primaryAvail {
 			// Try to claim from primary dedicated queue using preferred mode
-			jobs, err := w.queue.Claim(ctx, primaryType, 1, preferredMode)
-			if err != nil && ctx.Err() == nil {
-				w.logger.ErrorContext(ctx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
+			jobs, err := w.queue.Claim(claimCtx, primaryType, 1, preferredMode)
+			if err != nil && claimCtx.Err() == nil {
+				w.logger.ErrorContext(claimCtx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
 			if len(jobs) > 0 {
 				for _, job := range jobs {
-					w.processJob(ctx, job, workerID)
+					w.processJob(processCtx, job, workerID)
 				}
 				continue
 			}
@@ -217,13 +229,13 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 		}
 
 		if len(otherAvailable) > 0 {
-			jobs, err := w.queue.ClaimMultiple(ctx, otherAvailable, 1, preferredMode)
-			if err != nil && ctx.Err() == nil {
-				w.logger.ErrorContext(ctx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
+			jobs, err := w.queue.ClaimMultiple(claimCtx, otherAvailable, 1, preferredMode)
+			if err != nil && claimCtx.Err() == nil {
+				w.logger.ErrorContext(claimCtx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
 			if len(jobs) > 0 {
 				for _, job := range jobs {
-					w.processJob(ctx, job, workerID)
+					w.processJob(processCtx, job, workerID)
 				}
 				continue
 			}
@@ -233,26 +245,26 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 		// This means the retry goroutine can help with new jobs when no retries exist,
 		// and new-job goroutines can help with retries when no new jobs exist.
 		if primaryAvail {
-			jobs, err := w.queue.Claim(ctx, primaryType, 1, contract.ClaimModeAny)
-			if err != nil && ctx.Err() == nil {
-				w.logger.ErrorContext(ctx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
+			jobs, err := w.queue.Claim(claimCtx, primaryType, 1, contract.ClaimModeAny)
+			if err != nil && claimCtx.Err() == nil {
+				w.logger.ErrorContext(claimCtx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
 			if len(jobs) > 0 {
 				for _, job := range jobs {
-					w.processJob(ctx, job, workerID)
+					w.processJob(processCtx, job, workerID)
 				}
 				continue
 			}
 		}
 
 		if len(otherAvailable) > 0 {
-			jobs, err := w.queue.ClaimMultiple(ctx, otherAvailable, 1, contract.ClaimModeAny)
-			if err != nil && ctx.Err() == nil {
-				w.logger.ErrorContext(ctx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
+			jobs, err := w.queue.ClaimMultiple(claimCtx, otherAvailable, 1, contract.ClaimModeAny)
+			if err != nil && claimCtx.Err() == nil {
+				w.logger.ErrorContext(claimCtx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
 			if len(jobs) > 0 {
 				for _, job := range jobs {
-					w.processJob(ctx, job, workerID)
+					w.processJob(processCtx, job, workerID)
 				}
 				continue
 			}
@@ -266,7 +278,7 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 				waitDuration = w.pollInterval
 			}
 			select {
-			case <-ctx.Done():
+			case <-claimCtx.Done():
 				return nil
 			case <-time.After(waitDuration):
 				continue
@@ -274,7 +286,7 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 		}
 
 		select {
-		case <-ctx.Done():
+		case <-claimCtx.Done():
 			return nil
 		case <-time.After(w.pollInterval):
 			continue

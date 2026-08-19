@@ -362,3 +362,85 @@ func TestWorker_RetryGoroutine_LogsRetriesOnlyMode(t *testing.T) {
 		t.Errorf("logs missing new_only mode:\n%s", logs)
 	}
 }
+
+func TestWorker_GracefulShutdown_StopsClaimingFinishesInFlight(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	q := mockqueue.NewFake()
+	if _, err := q.Publish(
+		context.Background(),
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1}`)},
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":2}`)},
+		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":3}`)},
+	); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	reg := handler.NewRegistry()
+	// Slow handler: each job takes 100ms so workers are mid-flight when we cancel.
+	slowHandler := &slowRecordingHandler{delay: 100 * time.Millisecond}
+	reg.Register("id-sweep", slowHandler)
+
+	w := New(q, reg, logger)
+	w.pollInterval = 10 * time.Millisecond
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- w.Run(parentCtx, "id-sweep", 2) }()
+
+	// Wait for both workers to be busy processing (2 workers, 3 jobs, 100ms each).
+	// After ~120ms at least 2 jobs are in-flight.
+	time.Sleep(120 * time.Millisecond)
+
+	// Signal shutdown: stopClaiming fires, but childCtx (processCtx) stays alive.
+	parentCancel()
+
+	// Wait for worker to drain and exit.
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not exit within 5s")
+	}
+
+	// All in-flight jobs must have completed (handler ran to completion).
+	slowHandler.mu.Lock()
+	completed := slowHandler.calls
+	slowHandler.mu.Unlock()
+
+	if completed < 2 {
+		t.Errorf("completed handler calls = %d, want at least 2 (in-flight jobs finished)", completed)
+	}
+
+	// Draining log must be present.
+	logs := buf.String()
+	if !strings.Contains(logs, "worker.draining") {
+		t.Errorf("logs missing worker.draining:\n%s", logs)
+	}
+
+	// Verify completed jobs were marked done in the queue.
+	depth, _ := q.Depth(context.Background())
+	if depth[contract.QueueJobDone] < 2 {
+		t.Errorf("done jobs = %d, want at least 2", depth[contract.QueueJobDone])
+	}
+}
+
+// slowRecordingHandler sleeps for the configured delay on each call,
+// used to simulate in-flight work during graceful shutdown tests.
+type slowRecordingHandler struct {
+	mu    sync.Mutex
+	calls int
+	delay time.Duration
+}
+
+func (h *slowRecordingHandler) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
+	time.Sleep(h.delay)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls++
+	return nil, nil
+}

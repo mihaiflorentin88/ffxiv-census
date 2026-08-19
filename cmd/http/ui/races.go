@@ -24,8 +24,10 @@ type RaceRow struct {
 type RacesViewData struct {
 	TotalCharacters  int64
 	ActiveCharacters int64
+	SelectedRegion   string
 	SelectedDC       string
 	SelectedWorld    string
+	Regions          []string
 	Datacenters      []string
 	Worlds           []string
 	Races            []RaceRow
@@ -36,10 +38,12 @@ type RacesViewData struct {
 // Races handles GET /ui/races.
 func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	selectedRegion := strings.TrimSpace(r.URL.Query().Get("region"))
 	selectedDC := strings.TrimSpace(r.URL.Query().Get("dc"))
 	selectedWorld := strings.TrimSpace(r.URL.Query().Get("world"))
 
 	filter := contract.CharacterFilter{
+		Region:     selectedRegion,
 		Datacenter: selectedDC,
 		World:      selectedWorld,
 	}
@@ -116,7 +120,11 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 		title = fmt.Sprintf("Race Distribution - %s", selectedWorld)
 	} else if selectedDC != "" {
 		title = fmt.Sprintf("Race Distribution - %s DC", selectedDC)
+	} else if selectedRegion != "" {
+		title = fmt.Sprintf("Race Distribution - %s", selectedRegion)
 	}
+
+	regionList := []string{"NA", "EU", "JP", "OCE"}
 
 	c.render(w, "templates/races.html", PageData{
 		Title:     title,
@@ -124,8 +132,10 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 		Data: RacesViewData{
 			TotalCharacters:  totalChars,
 			ActiveCharacters: activeChars,
+			SelectedRegion:   selectedRegion,
 			SelectedDC:       selectedDC,
 			SelectedWorld:    selectedWorld,
+			Regions:          regionList,
 			Datacenters:      dcList,
 			Worlds:           worldList,
 			Races:            raceRows,

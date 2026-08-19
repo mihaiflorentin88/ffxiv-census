@@ -12,6 +12,16 @@
     <div class="panel-body" style="padding: 1rem 1.5rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem;">
         <form method="GET" action="/ui/races" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; width: 100%;">
             <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Region:</span>
+                <select name="region" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
+                    <option value="">-- All Regions --</option>
+                    {{range .Data.Regions}}
+                    <option value="{{.}}" {{if eq $.Data.SelectedRegion .}}selected{{end}}>{{.}}</option>
+                    {{end}}
+                </select>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Datacenter:</span>
                 <select name="dc" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
                     <option value="">-- All Datacenters --</option>
@@ -31,7 +41,7 @@
                 </select>
             </div>
 
-            {{if or .Data.SelectedDC .Data.SelectedWorld}}
+            {{if or .Data.SelectedRegion .Data.SelectedDC .Data.SelectedWorld}}
             <a href="/ui/races" class="btn btn-outline" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; margin-left: auto;">Clear Filters</a>
             {{end}}
         </form>

@@ -21,7 +21,7 @@ deploy: ## Deploy the Helm chart to Kubernetes (requires TAG=<version>)
 	$(HELM) -n default upgrade -i $(RELEASE_NAME) . \
 		--set image.tag=${TAG} \
 		--wait \
-		--timeout 3m0s \
+		--timeout 5m0s \
 		-f values.yaml
 
 .PHONY: post-deploy-check

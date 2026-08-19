@@ -149,6 +149,7 @@ webserver:
 
 workers:
   defaults:
+    terminationGracePeriodSeconds: 180
     resources:
       requests:
         memory: 100Mi
@@ -174,7 +175,8 @@ workers:
         - consume
         - all
         - -c
-        - "20"
+        - --chunk-size
+        - "100"
 
 cronjobs:
   defaults:
@@ -226,3 +228,12 @@ cronjobs:
         - 720h
         - --limit
         - "500"
+    - name: publish-fill-gaps
+      schedule: "0 3 1 * *"
+      command:
+        - /app/ffxiv-census
+        - publish
+        - id-sweep
+        - --fill-gaps
+        - --chunk-size
+        - "100"
