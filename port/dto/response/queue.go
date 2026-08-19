@@ -44,11 +44,20 @@ type QueueJobSummaryDTO struct {
 }
 
 type QueueOverviewSummary struct {
-	Total   int `json:"total"`
+	Total   int                         `json:"total"`
+	Pending int                         `json:"pending"`
+	Claimed int                         `json:"claimed"`
+	Done    int                         `json:"done"`
+	Failed  int                         `json:"failed"`
+	ByEvent map[string]QueueEventCounts `json:"by_event"`
+}
+
+type QueueEventCounts struct {
 	Pending int `json:"pending"`
 	Claimed int `json:"claimed"`
 	Done    int `json:"done"`
 	Failed  int `json:"failed"`
+	Total   int `json:"total"`
 }
 
 type QueueOverviewResponse struct {
@@ -68,6 +77,7 @@ type QueueEventTypeSummary struct {
 	NextJobs    []QueueJobSummaryDTO `json:"next_jobs"`
 	FailedJobs  []QueueJobSummaryDTO `json:"failed_jobs"`
 }
+
 type QueueRetryFailedResponse struct {
 	Retried int    `json:"retried"`
 	Message string `json:"message"`

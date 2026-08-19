@@ -39,6 +39,7 @@ func (c *QueueController) Depth(w http.ResponseWriter, r *http.Request) {
 		Claimed: depth[contract.QueueJobClaimed],
 		Done:    depth[contract.QueueJobDone],
 		Failed:  depth[contract.QueueJobFailed],
+		ByEvent: make(map[string]response.QueueEventCounts),
 	}
 	summary.Total = summary.Pending + summary.Claimed + summary.Done + summary.Failed
 
@@ -110,6 +111,16 @@ func (c *QueueController) Depth(w http.ResponseWriter, r *http.Request) {
 				NextJobs:    toQueueJobSummaryDTOs(d.NextJobs),
 				FailedJobs:  toQueueJobSummaryDTOs(d.FailedJobs),
 			})
+		}
+	}
+
+	for _, e := range events {
+		summary.ByEvent[e.Type] = response.QueueEventCounts{
+			Pending: e.Pending,
+			Claimed: e.Claimed,
+			Done:    e.Done,
+			Failed:  e.Failed,
+			Total:   e.Total,
 		}
 	}
 
