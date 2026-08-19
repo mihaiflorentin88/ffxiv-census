@@ -206,7 +206,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "1000"
+        - "5000"
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
