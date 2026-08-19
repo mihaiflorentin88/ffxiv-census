@@ -175,8 +175,7 @@ workers:
         - consume
         - all
         - -c
-        - --chunk-size
-        - "100"
+        - "4"
 
 cronjobs:
   defaults:
