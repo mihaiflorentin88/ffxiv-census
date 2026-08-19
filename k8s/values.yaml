@@ -26,11 +26,10 @@ persistence:
   size: 10Gi
   storageClass: nfs-rwx
 
-postgresql:
-  enabled: true
-  instances: 3
-  storageClass: local-path
-  storageSize: 20Gi
+externalPostgres:
+  host: pgres-postgresql-rw
+  port: "5432"
+  database: postgres
 
 vault:
   enabled: true
@@ -198,13 +197,6 @@ cronjobs:
     volumeMounts: []
     volumes: []
   instances:
-    - name: backup
-      schedule: "0 1 * * *"
-      command:
-        - /app/ffxiv-census
-        - backup
-        - --target
-        - gdrive
     - name: publish-character
       schedule: "30 */3 * * *"
       command:

@@ -1,5 +1,7 @@
 # Backup & Point-in-Time Recovery
 
+> **Note:** PostgreSQL database backups are now managed by the standalone [pgres-chart](https://github.com/mihaiflorentin88/pgres-chart). See [External PostgreSQL](external-postgres.md) for details. The backup functionality described below applies to the legacy SQLite-based deployment only.
+
 `ffxiv-census` provides an automated backup subsystem (`ffxiv-census backup`) built for SQLite reliability and cloud synchronization.
 
 ## Architecture

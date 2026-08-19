@@ -55,40 +55,23 @@ spec:
             - name: http
               containerPort: {{ $web.containerPort | default 8080 }}
               protocol: TCP
-          {{- if or .Values.vault.enabled .Values.postgresql.enabled }}
           envFrom:
           {{- if .Values.vault.enabled }}
             - secretRef:
                 name: {{ $fullName }}-eso-secret
           {{- end }}
-          {{- if .Values.postgresql.enabled }}
-            - secretRef:
-                name: {{ $fullName }}-pg-credentials
-          {{- end }}
-          {{- end }}
           env:
-          {{- if .Values.postgresql.enabled }}
+          {{- if .Values.externalPostgres }}
             - name: POSTGRES_HOST
-              value: {{ $fullName }}-postgresql-rw
+              value: {{ .Values.externalPostgres.host }}
             - name: POSTGRES_PORT
-              value: "5432"
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $fullName }}-pg-credentials
-                  key: username
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $fullName }}-pg-credentials
-                  key: password
+              value: {{ .Values.externalPostgres.port | quote }}
             - name: POSTGRES_DATABASE
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $fullName }}-pg-credentials
-                  key: POSTGRES_DATABASE
+              value: {{ .Values.externalPostgres.database }}
+            - name: POSTGRES_SSLMODE
+              value: disable
             - name: POSTGRES_DSN
-              value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE)?sslmode=disable"
+              value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE)?sslmode=$(POSTGRES_SSLMODE)"
           {{- end }}
           {{- with $web.env }}
 {{ toYaml . | nindent 12 }}
