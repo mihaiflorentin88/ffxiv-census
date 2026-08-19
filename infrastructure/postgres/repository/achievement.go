@@ -128,7 +128,7 @@ func (r *AchievementRepository) CountExpansionsFiltered(ctx context.Context, fil
 		  FROM milestone_achievements m
 		  JOIN character_milestones cm ON cm.achievement_id = m.achievement_id
 		  JOIN characters c ON c.id = cm.character_id
-		 WHERE m.kind = 'expansion'
+		 WHERE (m.kind = 'expansion_msq' OR m.kind = 'expansion')
 		   AND m.expansion IS NOT NULL
 		   AND c.deleted_at IS NULL
 		   %s

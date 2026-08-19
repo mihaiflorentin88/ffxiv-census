@@ -293,12 +293,17 @@ func (r *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 var breakdownColumns = map[string]bool{"race": true, "world": true, "datacenter": true, "region": true}
 
 func characterFilterWhere(f contract.CharacterFilter) (string, []any) {
+	return characterFilterWhereWithStart(f, 1)
+}
+
+func characterFilterWhereWithStart(f contract.CharacterFilter, startIdx int) (string, []any) {
 	var where []string
 	var args []any
 
 	addParam := func(clauseTpl string, val any) {
+		paramIdx := startIdx + len(args)
 		args = append(args, val)
-		where = append(where, fmt.Sprintf(clauseTpl, len(args)))
+		where = append(where, fmt.Sprintf(clauseTpl, paramIdx))
 	}
 
 	if f.World != "" {
@@ -438,11 +443,10 @@ func (r *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 	if !breakdownColumns[column] {
 		return nil, fmt.Errorf("invalid breakdown column %q", column)
 	}
-	filterWhere, filterArgs := characterFilterWhere(f)
+	filterWhere, filterArgs := characterFilterWhereWithStart(f, 2)
 
 	args := []any{since}
 	args = append(args, filterArgs...)
-
 	// In PostgreSQL, COUNT(*) FILTER (WHERE ...) is native and fast
 	query := fmt.Sprintf(`SELECT %s AS key,
 	                             COUNT(*) AS total,
@@ -474,11 +478,10 @@ func (r *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 }
 
 func (r *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time, f contract.CharacterFilter) ([]contract.DailyCount, error) {
-	filterWhere, filterArgs := characterFilterWhere(f)
+	filterWhere, filterArgs := characterFilterWhereWithStart(f, 3)
 
 	args := []any{since, until}
 	args = append(args, filterArgs...)
-
 	query := fmt.Sprintf(`SELECT TO_CHAR(first_seen_at, 'YYYY-MM-DD') AS day,
 	                             COUNT(*) AS count
 	                        FROM characters

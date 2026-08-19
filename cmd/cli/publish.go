@@ -170,7 +170,8 @@ var publishIDSweepCmd = &cobra.Command{
 				return 0, err
 			}
 			dedup := len(jobs) - inserted
-			logger.InfoContext(cmd.Context(), "publish.id_sweep",
+			logger.InfoContext(
+				cmd.Context(), "publish.id_sweep",
 				slog.Bool("fill_gaps", fillGaps),
 				slog.Uint64("chunk_size", uint64(chunkSize)),
 				slog.String("source", source),
@@ -179,7 +180,8 @@ var publishIDSweepCmd = &cobra.Command{
 				slog.Int("deduplicated", dedup),
 			)
 			if inserted == 0 && len(jobs) > 0 {
-				logger.WarnContext(cmd.Context(), "publish.id_sweep_deduplicated",
+				logger.WarnContext(
+					cmd.Context(), "publish.id_sweep_deduplicated",
 					slog.String("notice", "all requested jobs already exist in queue (done/pending/failed); no new work enqueued"),
 					slog.Int("requested", len(jobs)),
 					slog.Int("deduplicated", dedup),
@@ -196,7 +198,8 @@ var publishIDSweepCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		logger.InfoContext(ctx, "publish.id_sweep_daemon.started",
+		logger.InfoContext(
+			ctx, "publish.id_sweep_daemon.started",
 			slog.Duration("interval", daemonInterval),
 			slog.Int("min_pending_jobs", minPendingJobs),
 			slog.Bool("fill_gaps", fillGaps),
@@ -226,7 +229,8 @@ var publishIDSweepCmd = &cobra.Command{
 					continue
 				}
 				if pending < int64(minPendingJobs) {
-					logger.InfoContext(ctx, "publish.id_sweep_daemon.threshold_reached",
+					logger.InfoContext(
+						ctx, "publish.id_sweep_daemon.threshold_reached",
 						slog.Int64("pending", pending),
 						slog.Int("min_pending", minPendingJobs),
 					)
@@ -273,7 +277,8 @@ var publishCharacterCensusCmd = &cobra.Command{
 			return err
 		}
 		dedup := len(jobs) - inserted
-		container.Load.Logger().InfoContext(cmd.Context(), "publish.character_census",
+		container.Load.Logger().InfoContext(
+			cmd.Context(), "publish.character_census",
 			slog.String("older_than", olderThan.String()),
 			slog.Int("limit", limit),
 			slog.Int("stale", len(stale)),
@@ -282,7 +287,8 @@ var publishCharacterCensusCmd = &cobra.Command{
 			slog.Int("deduplicated", dedup),
 		)
 		if inserted == 0 && len(jobs) > 0 {
-			container.Load.Logger().WarnContext(cmd.Context(), "publish.character_census_deduplicated",
+			container.Load.Logger().WarnContext(
+				cmd.Context(), "publish.character_census_deduplicated",
 				slog.String("notice", "all requested jobs already exist in queue (done/pending/failed); no new work enqueued"),
 				slog.Int("requested", len(jobs)),
 				slog.Int("deduplicated", dedup),
@@ -311,7 +317,8 @@ var publishFCCensusCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			container.Load.Logger().InfoContext(cmd.Context(), "publish.fc_census",
+			container.Load.Logger().InfoContext(
+				cmd.Context(), "publish.fc_census",
 				slog.String("fc_id", fcID),
 				slog.Int("enqueued", inserted),
 			)
@@ -342,9 +349,68 @@ var publishFCCensusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		container.Load.Logger().InfoContext(cmd.Context(), "publish.fc_census",
+		container.Load.Logger().InfoContext(
+			cmd.Context(), "publish.fc_census",
 			slog.Int("limit", limit),
 			slog.Int("found", len(fcs)),
+			slog.Int("enqueued", inserted),
+			slog.Int("deduplicated", len(jobs)-inserted),
+		)
+		return nil
+	},
+}
+
+var publishAchievementCensusCmd = &cobra.Command{
+	Use:   "achievement-census",
+	Short: "Publish achievement-census jobs for characters",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		charID, _ := cmd.Flags().GetUint32("character-id")
+		limit, _ := cmd.Flags().GetInt("limit")
+
+		q := container.Load.Queue()
+		if q == nil {
+			return fmt.Errorf("queue not initialised")
+		}
+
+		if charID > 0 {
+			job := handler.AchievementCensusJob(charID)
+			inserted, err := q.Publish(cmd.Context(), job)
+			if err != nil {
+				return err
+			}
+			container.Load.Logger().InfoContext(
+				cmd.Context(), "publish.achievement_census",
+				slog.Uint64("character_id", uint64(charID)),
+				slog.Int("enqueued", inserted),
+			)
+			return nil
+		}
+
+		if limit <= 0 {
+			limit = 1000
+		}
+		repo := container.Load.CharacterRepository()
+		if repo == nil {
+			return fmt.Errorf("character repository not initialised")
+		}
+		chars, err := repo.List(cmd.Context(), contract.CharacterFilter{}, limit, 0)
+		if err != nil {
+			return fmt.Errorf("list characters: %w", err)
+		}
+
+		var jobs []contract.QueueJob
+		for _, c := range chars {
+			jobs = append(jobs, handler.AchievementCensusJob(c.ID))
+		}
+
+		inserted, err := q.Publish(cmd.Context(), jobs...)
+		if err != nil {
+			return err
+		}
+		container.Load.Logger().InfoContext(
+			cmd.Context(), "publish.achievement_census",
+			slog.Int("limit", limit),
+			slog.Int("found", len(chars)),
 			slog.Int("enqueued", inserted),
 			slog.Int("deduplicated", len(jobs)-inserted),
 		)
@@ -375,4 +441,7 @@ func init() {
 	publishFCCensusCmd.Flags().String("fc-id", "", "Lodestone Free Company ID")
 	publishFCCensusCmd.Flags().Duration("older-than", 720*time.Hour, "only re-census free companies not seen within this duration")
 	publishFCCensusCmd.Flags().Int("limit", 500, "max free companies to enqueue")
+	publishCmd.AddCommand(publishAchievementCensusCmd)
+	publishAchievementCensusCmd.Flags().Uint32("character-id", 0, "specific character ID to census")
+	publishAchievementCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")
 }
