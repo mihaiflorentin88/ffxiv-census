@@ -42,7 +42,7 @@ func (h *concurrencyTrackingHandler) Handle(ctx context.Context, payload []byte)
 	return nil, nil
 }
 
-func TestWorker_DynamicDispatcher_CeilingEnforcement(t *testing.T) {
+func TestWorker_DynamicDispatcher_DedicatedPoolsConcurrentProcessing(t *testing.T) {
 	q := mockqueue.NewFake()
 	reg := handler.NewRegistry()
 
@@ -67,10 +67,6 @@ func TestWorker_DynamicDispatcher_CeilingEnforcement(t *testing.T) {
 		)
 	}
 
-	// Concurrency = 20:
-	// - Updates ceiling = 25% of 20 = 5
-	// - Secondary ceiling = 25% of 20 = 5
-	// - Primary ceiling = 100% of 20 = 20
 	w := worker.New(q, reg, nil)
 	w.SetPollInterval(10 * time.Millisecond)
 
@@ -90,15 +86,25 @@ func TestWorker_DynamicDispatcher_CeilingEnforcement(t *testing.T) {
 
 	peakChar := atomic.LoadInt32(&hChar.peakInFlight)
 	peakFC := atomic.LoadInt32(&hFC.peakInFlight)
+	peakSweep := atomic.LoadInt32(&hSweep.peakInFlight)
 
-	if peakChar > 5 {
-		t.Errorf("character-census exceeded 25%% ceiling: peak=%d, want <= 5", peakChar)
+	if peakChar == 0 {
+		t.Errorf("expected character-census to be processed concurrently, got peak=0")
 	}
-	if peakFC > 5 {
-		t.Errorf("free-company-census exceeded 25%% ceiling: peak=%d, want <= 5", peakFC)
+	if peakFC == 0 {
+		t.Errorf("expected free-company-census to be processed concurrently, got peak=0")
+	}
+	if peakSweep == 0 {
+		t.Errorf("expected id-sweep to be processed concurrently, got peak=0")
+	}
+	if atomic.LoadInt32(&hChar.totalHandled) == 0 {
+		t.Errorf("expected character-census jobs to be handled")
+	}
+	if atomic.LoadInt32(&hFC.totalHandled) == 0 {
+		t.Errorf("expected fc-census jobs to be handled")
 	}
 	if atomic.LoadInt32(&hSweep.totalHandled) == 0 {
-		t.Errorf("expected id-sweep jobs to be processed, got 0")
+		t.Errorf("expected id-sweep jobs to be handled")
 	}
 }
 

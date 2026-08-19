@@ -12,6 +12,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
+	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	mocktomestone "github.com/mihaiflorentin88/ffxiv-census/mock/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -22,7 +23,7 @@ func newTestCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewCharacterCensus(ls, nil, svc, nil), ls, chars
+	return NewCharacterCensus(ls, nil, svc, nil, nil), ls, chars
 }
 
 func newTestDualCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake, *mocktomestone.Fake, *mock.ProviderRateLimiter, *mockrepo.CharacterRepository) {
@@ -32,7 +33,7 @@ func newTestDualCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.
 	limiter := mock.NewProviderRateLimiter()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewCharacterCensus(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
+	return NewCharacterCensus(ls, ts, svc, nil, nil, limiter), ls, ts, limiter, chars
 }
 
 func characterPayload(id uint32) []byte {
@@ -90,6 +91,38 @@ func TestCharacterCensus_NotFoundMarksDeleted(t *testing.T) {
 	got, _ := chars.Get(context.Background(), 42)
 	if got.DeletedAt == nil {
 		t.Errorf("character 42 should be marked deleted")
+	}
+}
+
+func TestCharacterCensus_PublishesDownstreamJobsImmediately(t *testing.T) {
+	ls := mocklodestone.NewFake()
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	q := mockqueue.NewFake()
+
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return &godestone.Character{
+			ID:            id,
+			Name:          "Immediate Character",
+			World:         "Ultros",
+			DC:            "Primal",
+			FreeCompanyID: "9234567890123456789",
+		}, nil
+	}
+
+	h := NewCharacterCensus(ls, nil, svc, q, nil)
+
+	next, err := h.Handle(context.Background(), characterPayload(42))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 2 {
+		t.Fatalf("expected 2 returned jobs (ach + fc), got %d", len(next))
+	}
+
+	depth, _ := q.Depth(context.Background())
+	if depth[contract.QueueJobPending] != 2 {
+		t.Fatalf("expected 2 jobs immediately published to queue, got %d", depth[contract.QueueJobPending])
 	}
 }
 

@@ -78,7 +78,7 @@ func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) err
 	return w.RunEvents(ctx, []string{eventType}, concurrency)
 }
 
-// RunEvents runs the worker consuming jobs from multiple event types concurrently.
+// RunEvents runs dedicated concurrent worker pools for all configured event types simultaneously.
 func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = 4
@@ -113,29 +113,47 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	jobCh := make(chan contract.QueueJob, concurrency)
-	doneCh := make(chan jobCategory, concurrency)
+	// Calculate dedicated workers per event type so all events process simultaneously in parallel.
+	workersPerEvent := max(1, concurrency/len(eventTypes))
+	extraWorkers := concurrency - (workersPerEvent * len(eventTypes))
 
 	var wg sync.WaitGroup
+	errCh := make(chan error, concurrency)
 
-	// Start Worker Pool
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			w.workerLoop(childCtx, jobCh, doneCh, workerID)
-		}(i)
+	workerIDCounter := 0
+	for i, eventType := range eventTypes {
+		numWorkers := workersPerEvent
+		if i == 0 && extraWorkers > 0 {
+			numWorkers += extraWorkers
+		}
+		w.logger.InfoContext(ctx, "worker.pool_allocated", slog.String("event_type", eventType), slog.Int("workers", numWorkers))
+
+		for j := 0; j < numWorkers; j++ {
+			workerID := workerIDCounter
+			workerIDCounter++
+			wg.Add(1)
+			go func(primaryType string, allTypes []string, wid int) {
+				defer wg.Done()
+				if err := w.eventWorkerLoop(childCtx, primaryType, allTypes, wid); err != nil && !errors.Is(err, context.Canceled) {
+					w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", primaryType), slog.Int("worker_id", wid), slog.Any("error", err))
+					errCh <- err
+					cancel()
+				}
+			}(eventType, eventTypes, workerID)
+		}
 	}
-
-	// Run Dispatcher in current goroutine
-	err := w.runDispatcher(childCtx, eventTypes, jobCh, doneCh, concurrency)
-	cancel() // cancel workers when dispatcher finishes
-
 	wg.Wait()
+	close(errCh)
 	w.logger.InfoContext(ctx, "worker.stop", slog.Any("event_types", eventTypes))
 
-	if err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	var errs []error
+	for err := range errCh {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -148,281 +166,75 @@ func (w *Worker) isEventTypeAvailable(eventType string) bool {
 	case handler.EventAchievementCensus, handler.EventFreeCompanyCensus:
 		return w.rateLimiter.IsAvailable(contract.ProviderLodestone)
 	case handler.EventCharacterCensus, handler.EventIDSweep:
-		// Character census and ID sweep are dual-source; claim if at least one provider is available
 		return w.rateLimiter.IsAvailable(contract.ProviderLodestone) || w.rateLimiter.IsAvailable(contract.ProviderTomestone)
 	default:
 		return true
 	}
 }
 
-func (w *Worker) runDispatcher(
-	ctx context.Context,
-	eventTypes []string,
-	jobCh chan<- contract.QueueJob,
-	doneCh <-chan jobCategory,
-	concurrency int,
-) error {
-	defer close(jobCh)
-
-	// Calculate category ceilings
-	maxRetries := max(1, concurrency/4)
-	maxUpdates := max(1, concurrency/4)
-	maxSecondary := max(1, concurrency/4)
-	var primaryInFlight, updatesInFlight, retriesInFlight, secondaryInFlight int
-	lastCategoryIndex := 0
-
-	decrement := func(cat jobCategory) {
-		switch cat {
-		case catRetries:
-			if retriesInFlight > 0 {
-				retriesInFlight--
-			}
-		case catUpdates:
-			if updatesInFlight > 0 {
-				updatesInFlight--
-			}
-		case catSecondary:
-			if secondaryInFlight > 0 {
-				secondaryInFlight--
-			}
-		case catPrimary:
-			if primaryInFlight > 0 {
-				primaryInFlight--
-			}
-		}
-	}
-
+func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTypes []string, workerID int) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 
-		// Drain finished notifications
-	drainLoop:
-		for {
-			select {
-			case cat := <-doneCh:
-				decrement(cat)
-			default:
-				break drainLoop
+		// 1. Check provider availability for primary dedicated event type
+		primaryAvail := w.isEventTypeAvailable(primaryType)
+		if primaryAvail {
+			// Try to claim from primary dedicated queue first
+			jobs, err := w.queue.Claim(ctx, primaryType, 1, contract.ClaimModeAny)
+			if err != nil && ctx.Err() == nil {
+				w.logger.ErrorContext(ctx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
-		}
-
-		totalInFlight := primaryInFlight + updatesInFlight + retriesInFlight + secondaryInFlight
-		freeCapacity := concurrency - totalInFlight
-
-		if freeCapacity <= 0 {
-			select {
-			case <-ctx.Done():
-				return nil
-			case cat := <-doneCh:
-				decrement(cat)
-				continue
-			case <-time.After(w.pollInterval):
+			if len(jobs) > 0 {
+				for _, job := range jobs {
+					w.processJob(ctx, job, workerID)
+				}
 				continue
 			}
 		}
 
-		// Filter available event types based on provider rate limits
-		var availableTypes []string
-		for _, et := range eventTypes {
-			if w.isEventTypeAvailable(et) {
-				availableTypes = append(availableTypes, et)
+		// 2. If primary queue is empty (or paused), dynamically borrow work from other available queues
+		var otherAvailable []string
+		for _, et := range allTypes {
+			if et != primaryType && w.isEventTypeAvailable(et) {
+				otherAvailable = append(otherAvailable, et)
 			}
 		}
 
-		if len(availableTypes) == 0 {
-			if w.rateLimiter != nil {
-				earliest := w.rateLimiter.EarliestAvailable()
-				waitDuration := time.Until(earliest)
-				if waitDuration <= 0 {
-					waitDuration = w.pollInterval
-				}
-				w.logger.WarnContext(
-					ctx, "worker.all_providers_paused",
-					slog.Duration("wait_duration", waitDuration),
-					slog.Time("earliest_available", earliest),
-				)
-				select {
-				case <-ctx.Done():
-					return nil
-				case cat := <-doneCh:
-					decrement(cat)
-				case <-time.After(waitDuration):
-				}
-			} else {
-				select {
-				case <-ctx.Done():
-					return nil
-				case cat := <-doneCh:
-					decrement(cat)
-				case <-time.After(w.pollInterval):
-				}
+		if len(otherAvailable) > 0 {
+			jobs, err := w.queue.ClaimMultiple(ctx, otherAvailable, 1, contract.ClaimModeAny)
+			if err != nil && ctx.Err() == nil {
+				w.logger.ErrorContext(ctx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
-			continue
-		}
-
-		hasOtherTypes := contains(availableTypes, handler.EventCharacterCensus) ||
-			contains(availableTypes, handler.EventAchievementCensus) ||
-			contains(availableTypes, handler.EventFreeCompanyCensus)
-
-		maxPrimary := concurrency
-		if hasOtherTypes {
-			maxPrimary = max(1, concurrency-maxUpdates-maxSecondary)
-			if updatesInFlight == 0 && secondaryInFlight == 0 {
-				maxPrimary = concurrency
+			if len(jobs) > 0 {
+				for _, job := range jobs {
+					w.processJob(ctx, job, workerID)
+				}
+				continue
 			}
 		}
 
-		claimedTotal := 0
-		categories := []jobCategory{catRetries, catUpdates, catSecondary, catPrimary}
-
-		for step := 0; step < len(categories) && freeCapacity > 0; step++ {
-			cat := categories[(lastCategoryIndex+step)%len(categories)]
-
-			switch cat {
-			case catRetries:
-				allowed := min(freeCapacity, maxRetries-retriesInFlight)
-				if allowed > 0 && len(availableTypes) > 0 {
-					retryTypes := availableTypes
-					if primaryInFlight >= maxPrimary {
-						retryTypes = filterMatching(availableTypes, []string{
-							handler.EventCharacterCensus,
-							handler.EventFreeCompanyCensus,
-							handler.EventAchievementCensus,
-						})
-					}
-					if len(retryTypes) > 0 {
-						jobs, err := w.queue.ClaimMultiple(ctx, retryTypes, allowed, contract.ClaimModeRetriesOnly)
-						if err != nil && ctx.Err() == nil {
-							w.logger.ErrorContext(ctx, "worker.claim_retries_error", slog.Any("error", err))
-						}
-						for _, j := range jobs {
-							retriesInFlight++
-							freeCapacity--
-							claimedTotal++
-							select {
-							case jobCh <- j:
-							case <-ctx.Done():
-								return nil
-							}
-						}
-						if len(jobs) > 0 {
-							lastCategoryIndex = (lastCategoryIndex + step + 1) % len(categories)
-						}
-					}
-				}
-
-			case catUpdates:
-				allowed := min(freeCapacity, maxUpdates-updatesInFlight)
-				if allowed > 0 && contains(availableTypes, handler.EventCharacterCensus) {
-					jobs, err := w.queue.Claim(ctx, handler.EventCharacterCensus, allowed, contract.ClaimModeNewOnly)
-					if err != nil && ctx.Err() == nil {
-						w.logger.ErrorContext(ctx, "worker.claim_updates_error", slog.Any("error", err))
-					}
-					for _, j := range jobs {
-						updatesInFlight++
-						freeCapacity--
-						claimedTotal++
-						select {
-						case jobCh <- j:
-						case <-ctx.Done():
-							return nil
-						}
-					}
-					if len(jobs) > 0 {
-						lastCategoryIndex = (lastCategoryIndex + step + 1) % len(categories)
-					}
-				}
-
-			case catSecondary:
-				secondaryTypes := filterMatching(availableTypes, []string{
-					handler.EventFreeCompanyCensus,
-					handler.EventAchievementCensus,
-				})
-				allowed := min(freeCapacity, maxSecondary-secondaryInFlight)
-				if allowed > 0 && len(secondaryTypes) > 0 {
-					jobs, err := w.queue.ClaimMultiple(ctx, secondaryTypes, allowed, contract.ClaimModeNewOnly)
-					if err != nil && ctx.Err() == nil {
-						w.logger.ErrorContext(ctx, "worker.claim_secondary_error", slog.Any("error", err))
-					}
-					for _, j := range jobs {
-						secondaryInFlight++
-						freeCapacity--
-						claimedTotal++
-						select {
-						case jobCh <- j:
-						case <-ctx.Done():
-							return nil
-						}
-					}
-					if len(jobs) > 0 {
-						lastCategoryIndex = (lastCategoryIndex + step + 1) % len(categories)
-					}
-				}
-
-			case catPrimary:
-				allowed := min(freeCapacity, maxPrimary-primaryInFlight)
-				// Primary handles id-sweep and any other non-secondary/non-update types
-				primaryTypes := filterNotMatching(availableTypes, []string{
-					handler.EventCharacterCensus,
-					handler.EventFreeCompanyCensus,
-					handler.EventAchievementCensus,
-				})
-				if allowed > 0 && len(primaryTypes) > 0 {
-					jobs, err := w.queue.ClaimMultiple(ctx, primaryTypes, allowed, contract.ClaimModeNewOnly)
-					if err != nil && ctx.Err() == nil {
-						w.logger.ErrorContext(ctx, "worker.claim_primary_error", slog.Any("error", err))
-					}
-					for _, j := range jobs {
-						primaryInFlight++
-						freeCapacity--
-						claimedTotal++
-						select {
-						case jobCh <- j:
-						case <-ctx.Done():
-							return nil
-						}
-					}
-					if len(jobs) > 0 {
-						lastCategoryIndex = (lastCategoryIndex + step + 1) % len(categories)
-					}
-				}
+		// 3. If all queues are empty or paused, wait for poll interval or earliest rate limit cooldown
+		if !primaryAvail && len(otherAvailable) == 0 && w.rateLimiter != nil {
+			earliest := w.rateLimiter.EarliestAvailable()
+			waitDuration := time.Until(earliest)
+			if waitDuration <= 0 {
+				waitDuration = w.pollInterval
 			}
-		}
-
-		if claimedTotal == 0 {
 			select {
 			case <-ctx.Done():
 				return nil
-			case cat := <-doneCh:
-				decrement(cat)
-			case <-time.After(w.pollInterval):
+			case <-time.After(waitDuration):
+				continue
 			}
 		}
-	}
-}
 
-func (w *Worker) workerLoop(
-	ctx context.Context,
-	jobCh <-chan contract.QueueJob,
-	doneCh chan<- jobCategory,
-	workerID int,
-) {
-	for {
 		select {
 		case <-ctx.Done():
-			return
-		case job, ok := <-jobCh:
-			if !ok {
-				return
-			}
-			w.processJob(ctx, job, workerID)
-			select {
-			case doneCh <- classifyJob(job):
-			case <-ctx.Done():
-				return
-			}
+			return nil
+		case <-time.After(w.pollInterval):
+			continue
 		}
 	}
 }

@@ -19,6 +19,7 @@ type CharacterCensus struct {
 	lodestone   contract.LodestoneClient
 	tomestone   contract.TomestoneClient
 	census      *census.Service
+	queue       contract.Queue
 	logger      contract.Logger
 	rateLimiter contract.ProviderRateLimiter
 }
@@ -27,6 +28,7 @@ func NewCharacterCensus(
 	lodestone contract.LodestoneClient,
 	tomestone contract.TomestoneClient,
 	svc *census.Service,
+	q contract.Queue,
 	logger contract.Logger,
 	rateLimiter ...contract.ProviderRateLimiter,
 ) *CharacterCensus {
@@ -38,6 +40,7 @@ func NewCharacterCensus(
 		lodestone:   lodestone,
 		tomestone:   tomestone,
 		census:      svc,
+		queue:       q,
 		logger:      loggerOrDiscard(logger),
 		rateLimiter: rl,
 	}
@@ -67,6 +70,11 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 			}
 			h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World))
 			next := BuildDependentCharacterJobs(char.ID, char.FreeCompanyID)
+			if h.queue != nil && len(next) > 0 {
+				if _, qerr := h.queue.Publish(ctx, next...); qerr != nil {
+					h.logger.ErrorContext(ctx, "handler.character_census.publish_downstream_error", slog.Uint64("character_id", uint64(char.ID)), slog.Any("error", qerr))
+				}
+			}
 			h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 			return next, nil
 		}
@@ -86,6 +94,11 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 						fcID = *tChar.FreeCompanyID
 					}
 					next := BuildDependentCharacterJobs(tChar.ID, fcID)
+					if h.queue != nil && len(next) > 0 {
+						if _, qerr := h.queue.Publish(ctx, next...); qerr != nil {
+							h.logger.ErrorContext(ctx, "handler.character_census.publish_downstream_error", slog.Uint64("character_id", uint64(tChar.ID)), slog.Any("error", qerr))
+						}
+					}
 					h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 					return next, nil
 				}
@@ -125,6 +138,11 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 					fcID = *tChar.FreeCompanyID
 				}
 				next := BuildDependentCharacterJobs(tChar.ID, fcID)
+				if h.queue != nil && len(next) > 0 {
+					if _, qerr := h.queue.Publish(ctx, next...); qerr != nil {
+						h.logger.ErrorContext(ctx, "handler.character_census.publish_downstream_error", slog.Uint64("character_id", uint64(tChar.ID)), slog.Any("error", qerr))
+					}
+				}
 				h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 				return next, nil
 			}
@@ -154,6 +172,11 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 			fcID = *tChar.FreeCompanyID
 		}
 		next := BuildDependentCharacterJobs(tChar.ID, fcID)
+		if h.queue != nil && len(next) > 0 {
+			if _, qerr := h.queue.Publish(ctx, next...); qerr != nil {
+				h.logger.ErrorContext(ctx, "handler.character_census.publish_downstream_error", slog.Uint64("character_id", uint64(tChar.ID)), slog.Any("error", qerr))
+			}
+		}
 		h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 		return next, nil
 	}

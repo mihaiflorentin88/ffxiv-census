@@ -69,7 +69,7 @@ func (s *ServiceContainer) Handlers() *handler.Registry {
 	}
 	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), s.TomestoneClient(), svc, s.Queue(), s.Logger(), s.ProviderRateLimiter()))
 	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), svc, s.Logger()))
-	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), s.TomestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
+	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), s.TomestoneClient(), svc, s.Queue(), s.Logger(), s.ProviderRateLimiter()))
 	reg.Register(handler.EventFreeCompanyCensus, handler.NewFreeCompanyCensus(s.LodestoneClient(), svc, s.Logger()))
 	return reg
 }
