@@ -205,7 +205,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "5000"
+        - "1000"
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
@@ -217,17 +217,17 @@ cronjobs:
         - "3000"
         - --chunk-size
         - "100"
-    - name: publish-fc-census
-      schedule: "0 6 * * 0"
-      command:
-        - /app/ffxiv-census
-        - publish
-        - fc-census
-        - --older-than
-        - 720h
-        - --limit
-        - "500"
-    - name: publish-fill-gaps
+    # - name: publish-fc-census disabled for now. please do not remove or uncomment
+    #   schedule: "0 6 * * 0"
+    #   command:
+    #     - /app/ffxiv-census
+    #     - publish
+    #     - fc-census
+    #     - --older-than
+    #     - 720h
+    #     - --limit
+    #     - "500"
+    - name: publish-fill-gaps commented for now, please do not remove or uncomment
       schedule: "0 3 1 * *"
       command:
         - /app/ffxiv-census
