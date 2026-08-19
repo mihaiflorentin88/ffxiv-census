@@ -227,12 +227,12 @@ cronjobs:
     #     - 720h
     #     - --limit
     #     - "500"
-    - name: publish-fill-gaps commented for now, please do not remove or uncomment
-      schedule: "0 3 1 * *"
-      command:
-        - /app/ffxiv-census
-        - publish
-        - id-sweep
-        - --fill-gaps
-        - --chunk-size
-        - "100"
+    # - name: publish-fill-gaps commented for now, please do not remove or uncomment
+    #   schedule: "0 3 1 * *"
+    #   command:
+    #     - /app/ffxiv-census
+    #     - publish
+    #     - id-sweep
+    #     - --fill-gaps
+    #     - --chunk-size
+    #     - "100"
