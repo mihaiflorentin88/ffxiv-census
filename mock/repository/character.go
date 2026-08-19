@@ -259,6 +259,11 @@ func matchesFilter(rec contract.CharacterRecord, jobs []contract.ClassJobRecord,
 	if f.ActiveOnly && rec.LatestAchievementAt == nil {
 		return false
 	}
+	if f.Since != nil {
+		if rec.LatestAchievementAt == nil || rec.LatestAchievementAt.Before(*f.Since) {
+			return false
+		}
+	}
 	if f.MinLevel > 0 {
 		hasLevel := false
 		for _, j := range jobs {

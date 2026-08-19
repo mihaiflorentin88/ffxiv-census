@@ -172,7 +172,7 @@ Population per group, sorted by `total` descending. `by` is required; a missing 
 
 ### GET /api/v1/stats/new-characters?since=YYYY-MM-DD[&until=YYYY-MM-DD]
 
-Characters first seen per UTC day in `[since, until)`, ordered ascending by day. `since` is required and must parse as a date; `until` is optional and defaults to now (UTC). Parse failures are 400s.
+Characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`, ordered ascending by day. `since` is required and must parse as a date; `until` is optional and defaults to now (UTC). Parse failures are 400s.
 
 ```json
 [

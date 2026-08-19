@@ -72,10 +72,26 @@ Four contracts in `port/contract`, each with a SQLite implementation in `infrast
 
 - **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `UpsertGear`, `GetGear`, `FindIDGaps`, `MarkDeleted`, `UpdateAchievementSummary`, `SetAchievementsPrivate`, `ListStale`, `List`, `Count`, `CountActive`, `Breakdown`, `NewPerDay`, `MaxID`. The complete persistence and query contract for character data.
 - **`FreeCompanyRepository`** — `Upsert`, `Get`.
-- **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones`, `ListCharacterMilestones`.
+- **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones`, `ListCharacterMilestones`, `CountExpansions`, `CountExpansionsFiltered`, `NewCharactersPerDay`, `CountChocoboMilestones`.
 - **`CensusRunRepository`** — `Start`, `Finish`.
 
 Repositories are resolved via the service locator (`container.Load.CharacterRepository()`, etc.), which builds them from the shared `SQLiteDriver`.
+
+### CharacterFilter
+
+The `CharacterFilter` struct (`port/contract/character_repository.go`) controls `List`, `Count`, `Stream`, and `Breakdown` queries:
+
+| Field | Type | Effect |
+|---|---|---|
+| `World`, `Datacenter`, `Region`, `Race`, `GrandCompany`, `FreeCompanyID` | `string` | Exact match (ignored when empty) |
+| `Name` | `string` | Case-insensitive substring (`ILIKE`) |
+| `ActiveOnly` | `bool` | Adds `deleted_at IS NULL`. Without `Since`, this is redundant with the base query which already excludes deleted characters. |
+| `Since` | `*time.Time` | When non-nil, only characters with `latest_achievement_at >= Since` are returned (activity window filter). This is the proper way to filter by "recently active". |
+| `MinLevel` | `uint32` | When > 0, only characters with at least one job at or above this level are returned (subquery on `character_jobs`). |
+| `SortBy` | `string` | Column to sort by: `"id"`, `"name"`, `"world"`, `"created_at"`, `"updated_at"`, `"achievement_points"` |
+| `SortOrder` | `string` | `"asc"` (default) or `"desc"` |
+
+**Active filtering**: To filter by the activity window (e.g. "active in last 30 days"), set `Since` to the window start time. `ActiveOnly` alone does not include the activity window — it only checks `deleted_at IS NULL`.
 
 ## CensusService
 
@@ -92,7 +108,7 @@ Repositories are resolved via the service locator (`container.Load.CharacterRepo
 - `ListCharacters(ctx, filter, limit, offset)` — one page of characters matching `filter` plus the matching count (the HTTP pagination/filtering source).
 - `CharacterDetail(ctx, id)` — character plus jobs and milestones, with the free company when the character is in one; `nil` when the id is unknown.
 - `Breakdown(ctx, by)` — per-`race`/`world`/`datacenter`/`region` totals and active counts; any other dimension returns `ErrInvalidDimension`.
-- `NewCharacters(ctx, since, until)` — characters first seen per UTC day in `[since, until)`.
+- `NewCharacters(ctx, since, until)` — characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`. The Chocobo milestone is the canonical definition for "new character" as it indicates the character has started playing.
 - `ExpansionCompletions(ctx)` — distinct characters per expansion that completed that expansion's MSQ.
 
 **DC→region mapping** (`domain/census/region.go`):

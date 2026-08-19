@@ -248,6 +248,10 @@ func (c *UIController) CharacterList(w http.ResponseWriter, r *http.Request) {
 		SortBy:       sortBy,
 		SortOrder:    sortOrder,
 	}
+	if activeOnly && c.svc != nil {
+		since := c.svc.ActivitySince()
+		filter.Since = &since
+	}
 
 	var chars []contract.CharacterRecord
 	var total int64

@@ -14,7 +14,7 @@
 | Route | Method | Description |
 |---|---|---|
 | `/` | `GET` | Redirects to `/ui/dashboard` |
-| `/ui/dashboard` | `GET` | Executive overview: total population, 30-day active ratio, ingest status, 30-day time-series line chart, and region summary |
+| `/ui/dashboard` | `GET` | Executive overview: total population, 30-day active ratio, ingest status, 30-day time-series line chart (new characters based on Chocobo milestone achievement 590), and region summary |
 | `/ui/partials/world-breakdown` | `GET` | HTMX partial returning world and datacenter rows for a requested region (`?region=NA`) |
 | `/ui/races` | `GET` | Playable race demographics, global percentage shares, active ratios, and Chart.js doughnut chart |
 | `/ui/worlds` | `GET` | Global server rankings table with interactive region/datacenter filters |

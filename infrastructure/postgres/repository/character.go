@@ -327,8 +327,14 @@ func characterFilterWhereWithStart(f contract.CharacterFilter, startIdx int) (st
 	if f.Name != "" {
 		addParam("name ILIKE $%d", "%"+f.Name+"%")
 	}
+	if f.Since != nil {
+		addParam("latest_achievement_at >= $%d", *f.Since)
+	}
 	if f.ActiveOnly {
 		where = append(where, "deleted_at IS NULL")
+	}
+	if f.MinLevel > 0 {
+		addParam("id IN (SELECT character_id FROM character_jobs WHERE level >= $%d)", f.MinLevel)
 	}
 	if len(where) == 0 {
 		return "", nil

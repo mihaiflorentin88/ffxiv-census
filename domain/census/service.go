@@ -236,6 +236,7 @@ func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
 	}
 	return rec
 }
+
 func toJobRecords(char *godestone.Character) []contract.ClassJobRecord {
 	jobs := make([]contract.ClassJobRecord, 0, len(char.ClassJobs))
 	for _, j := range char.ClassJobs {
@@ -346,6 +347,12 @@ func (s *Service) SetActivityWindow(d time.Duration) {
 		s.activityWindow = d
 		s.mu.Unlock()
 	}
+}
+
+// ActivitySince returns the UTC instant marking the start of the activity
+// window. Exported for use by handlers that need to construct filters.
+func (s *Service) ActivitySince() time.Time {
+	return s.activitySince()
 }
 
 // activitySince returns the UTC instant marking the start of the activity
@@ -509,7 +516,8 @@ func (s *Service) WorldDetail(ctx context.Context, worldName string) (*WorldDeta
 		return nil, err
 	}
 
-	filterActive := contract.CharacterFilter{World: worldName, ActiveOnly: true}
+	since := s.ActivitySince()
+	filterActive := contract.CharacterFilter{World: worldName, Since: &since}
 	active, err := s.characters.Count(ctx, filterActive)
 	if err != nil {
 		return nil, err

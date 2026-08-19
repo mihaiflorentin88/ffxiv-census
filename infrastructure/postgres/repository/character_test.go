@@ -103,3 +103,96 @@ func TestCharacterRepository_ListAndCount(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+func TestCharacterRepository_Count_SinceFilter(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	recent := now.Add(-time.Hour)
+	old := now.Add(-60 * 24 * time.Hour)
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 1, Name: "Active", World: "Balmung", FirstSeenAt: now,
+	}, nil)
+	_ = repo.UpdateAchievementSummary(ctx, 1, false, nil, &recent)
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 2, Name: "Inactive", World: "Balmung", FirstSeenAt: now,
+	}, nil)
+	_ = repo.UpdateAchievementSummary(ctx, 2, false, nil, &old)
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 3, Name: "Never", World: "Balmung", FirstSeenAt: now,
+	}, nil)
+
+	since := now.Add(-24 * time.Hour)
+	count, err := repo.Count(ctx, contract.CharacterFilter{World: "Balmung", Since: &since})
+	if err != nil {
+		t.Fatalf("Count with Since: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Count with Since = %d, want 1 (only recent)", count)
+	}
+
+	// Without Since, all non-deleted are counted
+	count, err = repo.Count(ctx, contract.CharacterFilter{World: "Balmung"})
+	if err != nil {
+		t.Fatalf("Count without Since: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("Count without Since = %d, want 3", count)
+	}
+}
+
+func TestCharacterRepository_Count_MinLevelFilter(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 1, Name: "Max", World: "Balmung", FirstSeenAt: now,
+	}, []contract.ClassJobRecord{
+		{CharacterID: 1, Name: "Paladin", Level: 100},
+		{CharacterID: 1, Name: "Warrior", Level: 90},
+	})
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 2, Name: "Mid", World: "Balmung", FirstSeenAt: now,
+	}, []contract.ClassJobRecord{
+		{CharacterID: 2, Name: "Paladin", Level: 80},
+	})
+
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 3, Name: "Low", World: "Balmung", FirstSeenAt: now,
+	}, []contract.ClassJobRecord{
+		{CharacterID: 3, Name: "Paladin", Level: 50},
+	})
+
+	count, err := repo.Count(ctx, contract.CharacterFilter{MinLevel: 100})
+	if err != nil {
+		t.Fatalf("Count MinLevel=100: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Count MinLevel=100 = %d, want 1", count)
+	}
+
+	count, err = repo.Count(ctx, contract.CharacterFilter{MinLevel: 80})
+	if err != nil {
+		t.Fatalf("Count MinLevel=80: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("Count MinLevel=80 = %d, want 2", count)
+	}
+
+	count, err = repo.Count(ctx, contract.CharacterFilter{MinLevel: 50})
+	if err != nil {
+		t.Fatalf("Count MinLevel=50: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("Count MinLevel=50 = %d, want 3", count)
+	}
+}
