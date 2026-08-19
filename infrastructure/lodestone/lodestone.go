@@ -86,10 +86,12 @@ func newClient(sc scraper, cfg *config.LodestoneConfig, logger contract.Logger, 
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
 		limiter:     rate.NewLimiter(rate.Limit(rps), 1),
 		maxRetries:  cfg.MaxRetries,
+		backoffBase: 500 * time.Millisecond,
 		logger:      loggerOrDiscard(logger),
 		rateLimiter: rl,
 	}, nil
 }
+
 func loggerOrDiscard(l contract.Logger) contract.Logger {
 	if l == nil {
 		return slog.New(slog.NewTextHandler(io.Discard, nil))

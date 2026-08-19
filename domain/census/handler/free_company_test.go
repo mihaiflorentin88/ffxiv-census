@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/xivapi/godestone/v2"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 func newTestFCCensus(t *testing.T) (*FreeCompanyCensus, *mocklodestone.Fake, *mockrepo.FreeCompanyRepository) {
@@ -66,5 +69,37 @@ func TestFreeCompanyCensus_FetchError(t *testing.T) {
 	}
 	if _, err := h.Handle(context.Background(), fcPayload("9234567890123456789")); err == nil {
 		t.Fatal("expected error on fetch failure")
+	}
+}
+
+func TestFreeCompanyCensus_WaitsForRateLimitedLodestone(t *testing.T) {
+	ls := mocklodestone.NewFake()
+	fcs := mockrepo.NewFreeCompanyFake()
+	svc := census.NewService(mockrepo.NewCharacterFake(), fcs, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	rl := mock.NewProviderRateLimiter()
+	rl.Pause(contract.ProviderLodestone, 100*time.Millisecond, "test pause")
+
+	var fetched bool
+	ls.FetchFreeCompanyFunc = func(id string) (*godestone.FreeCompany, error) {
+		fetched = true
+		return &godestone.FreeCompany{ID: id, Name: "The Scions", World: "Ultros", DC: "Primal", ActiveMemberCount: 5}, nil
+	}
+	ls.FetchFreeCompanyMembersFunc = func(fcID string) ([]uint32, error) {
+		return nil, nil
+	}
+
+	h := NewFreeCompanyCensus(ls, svc, nil, rl)
+	start := time.Now()
+	_, err := h.Handle(context.Background(), fcPayload("9234567890123456789"))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !fetched {
+		t.Fatal("FetchFreeCompany was not called after wait")
+	}
+	if elapsed < 90*time.Millisecond {
+		t.Errorf("Handle returned too quickly (%v), expected wait ~100ms", elapsed)
 	}
 }

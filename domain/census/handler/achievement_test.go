@@ -11,6 +11,7 @@ import (
 	"github.com/xivapi/godestone/v2/provider/models"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -74,5 +75,36 @@ func TestAchievementCensus_FetchError(t *testing.T) {
 	}
 	if _, err := h.Handle(context.Background(), achievementPayload(1)); err == nil {
 		t.Fatal("expected error on fetch failure")
+	}
+}
+
+func TestAchievementCensus_WaitsForRateLimitedLodestone(t *testing.T) {
+	ls := mocklodestone.NewFake()
+	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	if err := svc.SyncMilestones(context.Background()); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+	rl := mock.NewProviderRateLimiter()
+	rl.Pause(contract.ProviderLodestone, 100*time.Millisecond, "test pause")
+
+	var fetched bool
+	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+		fetched = true
+		return []*godestone.AchievementInfo{}, &godestone.AllAchievementInfo{Private: false}, nil
+	}
+
+	h := NewAchievementCensus(ls, svc, nil, rl)
+	start := time.Now()
+	_, err := h.Handle(context.Background(), achievementPayload(1))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !fetched {
+		t.Fatal("FetchAchievements was not called after wait")
+	}
+	if elapsed < 90*time.Millisecond {
+		t.Errorf("Handle returned too quickly (%v), expected wait ~100ms", elapsed)
 	}
 }

@@ -29,7 +29,7 @@ persistence:
 externalPostgres:
   host: pgres-postgresql-rw
   port: "5432"
-  database: postgres
+  database: ffxiv_census
 
 vault:
   enabled: true

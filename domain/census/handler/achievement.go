@@ -15,13 +15,18 @@ import (
 // AchievementCensus fetches a character's achievements and runs the milestone
 // filter + latest-achievement tracking. It is a leaf event (no chained jobs).
 type AchievementCensus struct {
-	lodestone contract.LodestoneClient
-	census    *census.Service
-	logger    contract.Logger
+	lodestone   contract.LodestoneClient
+	census      *census.Service
+	logger      contract.Logger
+	rateLimiter contract.ProviderRateLimiter
 }
 
-func NewAchievementCensus(lodestone contract.LodestoneClient, svc *census.Service, logger contract.Logger) *AchievementCensus {
-	return &AchievementCensus{lodestone: lodestone, census: svc, logger: loggerOrDiscard(logger)}
+func NewAchievementCensus(lodestone contract.LodestoneClient, svc *census.Service, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) *AchievementCensus {
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
+	}
+	return &AchievementCensus{lodestone: lodestone, census: svc, logger: loggerOrDiscard(logger), rateLimiter: rl}
 }
 
 func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
@@ -30,6 +35,15 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		return nil, fmt.Errorf("achievement-census payload: %w", err)
 	}
 	h.logger.InfoContext(ctx, "handler.achievement_census", slog.Uint64("character_id", uint64(p.CharacterID)))
+
+	// Wait for Lodestone if rate-limited (blocks until cooldown expires).
+	if h.rateLimiter != nil && !h.rateLimiter.IsAvailable(contract.ProviderLodestone) {
+		h.logger.InfoContext(ctx, "handler.achievement_census.waiting_for_lodestone", slog.Uint64("character_id", uint64(p.CharacterID)))
+		if err := h.rateLimiter.WaitUntilAvailable(ctx, contract.ProviderLodestone); err != nil {
+			return nil, fmt.Errorf("achievement-census %d: waiting for lodestone: %w", p.CharacterID, err)
+		}
+	}
+
 	list, all, err := h.lodestone.FetchAchievements(ctx, p.CharacterID)
 	if err != nil {
 		h.logger.WarnContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))

@@ -42,6 +42,16 @@ Environment overrides work like the other sections: `LODESTONE_RATE_LIMIT=0.5`, 
 
 Non-existent or banned/terminated character profiles (HTTP 404 "Not Found" and HTTP 403 "Forbidden") are immediately recognized as `contract.ErrCharacterNotFound` and are **never retried**. All other scraper errors are treated as transient and retried with exponential backoff: `500 ms · 2^attempt` (500 ms, 1 s, 2 s, …). With the default `max_retries = 3` a call makes up to 4 attempts.
 
+The `backoffBase` is set to **500 ms** by default in `newClient()`. Combined with ±10% jitter and the 1 req/s token bucket, retry timing is:
+
+| Attempt | Backoff Delay | Cumulative |
+|---------|---------------|------------|
+| 0 → 1 | 500 ms | 500 ms |
+| 1 → 2 | 1 s | 1.5 s |
+| 2 → 3 | 2 s | 3.5 s |
+
+The token bucket (1 req/s, burst 1) remains the primary rate defense. The backoff only *increases* the gap between retries on errors, never decreases it.
+
 ## Context handling
 
 `ctx` is honored only at the limiter/backoff/retry boundaries:

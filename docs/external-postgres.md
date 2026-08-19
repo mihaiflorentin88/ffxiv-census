@@ -42,7 +42,7 @@ ffxiv-census uses a standalone PostgreSQL cluster managed by the **pgres** Helm 
 | Host (internal network) | `192.168.50.4` |
 | Port (in-cluster) | `5432` |
 | Port (internal network) | `30432` |
-| Database | `postgres` |
+| Database | `ffxiv_census` |
 | Owner | `admin` |
 
 Credentials are stored in Vault at `pgres/prod` and synced to Kubernetes via External Secrets Operator.
@@ -56,7 +56,7 @@ The chart uses `externalPostgres` values instead of a bundled PostgreSQL:
 externalPostgres:
   host: pgres-postgresql-rw
   port: "5432"
-  database: postgres
+  database: ffxiv_census
 ```
 
 Workload templates inject these as environment variables:
@@ -94,7 +94,7 @@ kubectl run pgres-restore --rm -it --restart=Never \
   --env-from=secret/pgres-eso-secret \
   --env="POSTGRES_HOST=pgres-postgresql-rw" \
   --env="POSTGRES_PORT=5432" \
-  --env="POSTGRES_DATABASE=postgres" \
+  --env="POSTGRES_DATABASE=ffxiv_census" \
   --env="POSTGRES_SSLMODE=disable" \
   --command -- /app/pgres restore --latest
 ```

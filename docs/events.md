@@ -42,6 +42,15 @@ Both `id-sweep` and `character-census` are dual-source events. In `auto` source 
 3. When Lodestone encounters a transient error, 429 rate limit, or is paused in the rate limiter, Tomestone.gg is probed as an opportunistic cache. If Tomestone returns 404 (because Tomestone does not possess all characters that exist on Lodestone), the job is **not** skipped or marked deleted—it returns an error to trigger an automatic queue retry against The Lodestone once available.
 4. Downstream dependent jobs (`achievement-census`, plus `fc-census` when in an FC) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
 5. **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`, `fc-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting database claims or CPU cycles.
+
+### Lodestone-Only Event Rate-Limit Handling
+
+`achievement-census` and `fc-census` are Lodestone-exclusive events (no Tomestone fallback). When Lodestone is rate-limited or paused, these handlers call `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retry the fetch inline. This is more efficient than returning an error immediately (which triggers 30s idle + queue retry + 5s backoff = ~35s wasted).
+
+`WaitUntilAvailable` blocks exactly once per rate-limit cooldown. If the subsequent fetch fails again (new 429), the handler returns an error and the queue's exponential backoff kicks in. The handler does NOT loop on `WaitUntilAvailable`.
+
+One worker goroutine blocks during the wait. With the default `concurrency=4`, the other 3 goroutines continue processing. Kubernetes' 180s termination grace period covers extended Lodestone cooldowns.
+
 Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other client entirely.
 ## CLI
 
