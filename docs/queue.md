@@ -33,10 +33,10 @@ Claiming is a single `UPDATE ... WHERE id IN (SELECT ... WHERE status = 'pending
 
 ## Multi-Queue Consumption & Rate-Limit Pausing
 
-Consumers (`ffxiv-census consume`) poll all active event queues concurrently. External rate limits are tracked per provider:
-- **`lodestone`** rate limits pause `character-census`, `achievement-census`, and `fc-census` queues.
-- **`tomestone`** rate limits pause `id-sweep` (tomestone provider).
-- When one provider is paused by a 429 response, queues for the other provider continue consuming without interruption. If all providers are paused, the worker sleeps until the earliest provider cooldown expires.
+Consumers (`ffxiv-census consume`) poll all registered event queues concurrently (`id-sweep`, `character-census`, `achievement-census`, `fc-census`). External rate limits are tracked per provider:
+- **Dual-Source Queues (`id-sweep`, `character-census`)**: Use Lodestone as primary. When Lodestone is rate-limited (HTTP 429), workers automatically route requests through Tomestone.gg. If Tomestone is rate-limited, requests route through Lodestone.
+- **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone is rate-limited, these queues pause consumption until the cooldown expires while dual-source queues continue processing.
+- **Earliest Cooldown Sleep**: When all providers are paused, the worker sleeps until the earliest provider cooldown expires.
 ```toml
 [queue]
 claim_batch_size = 4

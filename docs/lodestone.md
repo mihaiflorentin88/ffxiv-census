@@ -12,6 +12,13 @@ The Lodestone client reads character, achievement, and free-company data from **
 | `FetchAchievements` | `(ctx, id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)` | List of unlocked achievements + aggregate info. A private profile comes back as `AllAchievementInfo.Private = true` with no error. |
 | `FetchFreeCompany` | `(ctx, id string) (*godestone.FreeCompany, error)` | FC ID is the 19-digit Lodestone string, **not** a numeric id. |
 
+## Primary Provider & Fallback Integration
+
+The Lodestone client serves as the **primary data provider** across the census ingest pipeline:
+- **ID Sweep (`id-sweep`)**: Lodestone is queried first for character ranges in `auto` mode, falling back to Tomestone.gg when 404s, scrape errors, or rate limits occur.
+- **Character Census (`character-census`)**: Lodestone is fetched first, falling back to Tomestone.gg when unresolvable or rate-limited.
+- **Achievement Census (`achievement-census`) & Free Company (`fc-census`)**: Lodestone is the exclusive provider. When Lodestone is rate-limited or paused, these queues wait while dual-source queues continue on Tomestone.
+
 ## Rate limiting
 
 A token bucket (`golang.org/x/time/rate`) gates **every** method call: one token, refilled at `rate_limit` per second.

@@ -10,8 +10,10 @@ import (
 	"github.com/xivapi/godestone/v2"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
+	mocktomestone "github.com/mihaiflorentin88/ffxiv-census/mock/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -20,7 +22,17 @@ func newTestCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewCharacterCensus(ls, svc, nil), ls, chars
+	return NewCharacterCensus(ls, nil, svc, nil), ls, chars
+}
+
+func newTestDualCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake, *mocktomestone.Fake, *mock.ProviderRateLimiter, *mockrepo.CharacterRepository) {
+	t.Helper()
+	ls := mocklodestone.NewFake()
+	ts := mocktomestone.NewFake()
+	limiter := mock.NewProviderRateLimiter()
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	return NewCharacterCensus(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
 }
 
 func characterPayload(id uint32) []byte {
@@ -88,5 +100,156 @@ func TestCharacterCensus_FetchError(t *testing.T) {
 	}
 	if _, err := h.Handle(context.Background(), characterPayload(1)); err == nil {
 		t.Fatal("expected error on fetch failure")
+	}
+}
+
+func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievementAndFC(t *testing.T) {
+	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return &godestone.Character{
+			ID:            id,
+			Name:          "Primary Warrior",
+			World:         "Balmung",
+			DC:            "Crystal",
+			FreeCompanyID: "fc-123456",
+		}, nil
+	}
+
+	next, err := h.Handle(context.Background(), characterPayload(100))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 2 {
+		t.Fatalf("next jobs = %d, want 2", len(next))
+	}
+	if next[0].Type != EventAchievementCensus || next[1].Type != EventFreeCompanyCensus {
+		t.Errorf("unexpected job types: %+v", next)
+	}
+	if len(ts.ProfileCalls) != 0 {
+		t.Errorf("expected 0 tomestone profile calls, got %d", len(ts.ProfileCalls))
+	}
+	got, _ := chars.Get(context.Background(), 100)
+	if got == nil || got.Name != "Primary Warrior" {
+		t.Errorf("expected character to be upserted in repository, got %+v", got)
+	}
+}
+
+func TestCharacterCensus_LodestoneError_FallbackToTomestone_Success(t *testing.T) {
+	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, errors.New("lodestone 429 rate limited or cloudflare error")
+	}
+	fcID := "fc-tome-789"
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID:            200,
+		Name:          "Fallback Hero",
+		Server:        "Gilgamesh",
+		FreeCompanyID: &fcID,
+	})
+
+	next, err := h.Handle(context.Background(), characterPayload(200))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 2 {
+		t.Fatalf("next jobs = %d, want 2 (achievement + fc)", len(next))
+	}
+	if next[0].Type != EventAchievementCensus || next[1].Type != EventFreeCompanyCensus {
+		t.Errorf("unexpected job types: %+v", next)
+	}
+	got, _ := chars.Get(context.Background(), 200)
+	if got == nil || got.Name != "Fallback Hero" {
+		t.Errorf("expected character to be upserted via tomestone fallback, got %+v", got)
+	}
+}
+
+func TestCharacterCensus_LodestonePaused_UsesTomestoneDirectly(t *testing.T) {
+	h, ls, ts, limiter, chars := newTestDualCharacterCensus(t)
+	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "429 rate limited")
+
+	lsCalled := false
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		lsCalled = true
+		return nil, errors.New("should not be called when paused")
+	}
+
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID:     300,
+		Name:   "Direct Tomestone Hero",
+		Server: "Leviathan",
+	})
+
+	next, err := h.Handle(context.Background(), characterPayload(300))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if lsCalled {
+		t.Error("lodestone was called while paused")
+	}
+	if len(next) != 1 || next[0].Type != EventAchievementCensus {
+		t.Fatalf("expected 1 achievement job, got %+v", next)
+	}
+	got, _ := chars.Get(context.Background(), 300)
+	if got == nil || got.Name != "Direct Tomestone Hero" {
+		t.Errorf("expected character to be upserted, got %+v", got)
+	}
+}
+
+func TestCharacterCensus_Lodestone404_TomestoneHit(t *testing.T) {
+	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID:     400,
+		Name:   "Alive On Tomestone",
+		Server: "Siren",
+	})
+
+	next, err := h.Handle(context.Background(), characterPayload(400))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 1 || next[0].Type != EventAchievementCensus {
+		t.Fatalf("expected 1 achievement job, got %+v", next)
+	}
+	got, _ := chars.Get(context.Background(), 400)
+	if got == nil || got.Name != "Alive On Tomestone" {
+		t.Errorf("expected character to be upserted, got %+v", got)
+	}
+	if got != nil && got.DeletedAt != nil {
+		t.Errorf("character should not be marked deleted because it was found on Tomestone")
+	}
+}
+
+func TestCharacterCensus_Lodestone404_Tomestone404_MarksDeleted(t *testing.T) {
+	h, ls, _, _, chars := newTestDualCharacterCensus(t)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 500, Name: "Old Name", FirstSeenAt: time.Now()}, nil)
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+	// ts has no character 500 (returns ErrCharacterNotFound)
+
+	next, err := h.Handle(context.Background(), characterPayload(500))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 0 {
+		t.Errorf("expected 0 chained jobs on confirmed delete, got %d", len(next))
+	}
+	got, _ := chars.Get(context.Background(), 500)
+	if got == nil || got.DeletedAt == nil {
+		t.Errorf("expected character 500 to be marked deleted")
+	}
+}
+
+func TestCharacterCensus_AllProvidersRateLimited_ReturnsError(t *testing.T) {
+	h, _, _, limiter, _ := newTestDualCharacterCensus(t)
+	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "lodestone paused")
+	limiter.Pause(contract.ProviderTomestone, 10*time.Minute, "tomestone paused")
+
+	_, err := h.Handle(context.Background(), characterPayload(600))
+	if err == nil {
+		t.Fatal("expected error when all providers are rate limited")
 	}
 }

@@ -13,6 +13,9 @@ func TestRegister_DevelopmentBypass(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("AUTH_TOKEN", "test-token")
 	container.Load = container.NewServiceContainer()
+	if container.Load.Database() == nil {
+		t.Skip("postgres not available")
+	}
 
 	mux := http.NewServeMux()
 	census.Register(mux)
@@ -37,10 +40,12 @@ func TestRegister_ProductionEnforcement(t *testing.T) {
 	t.Setenv("AUTH_TOKEN", validToken)
 
 	container.Load = container.NewServiceContainer()
+	if container.Load.Database() == nil {
+		t.Skip("postgres not available")
+	}
 
 	mux := http.NewServeMux()
 	census.Register(mux)
-
 	t.Run("missing auth header returns 401", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/census/latest", nil)
 		rec := httptest.NewRecorder()

@@ -46,3 +46,13 @@ func FreeCompanyCensusJob(fcID string) contract.QueueJob {
 	b, _ := json.Marshal(FreeCompanyCensusPayload{FCID: fcID})
 	return contract.QueueJob{Type: EventFreeCompanyCensus, Payload: b}
 }
+
+// BuildDependentCharacterJobs creates downstream jobs for an ingested character:
+// always an achievement-census job, plus an fc-census job if the character is affiliated with an FC.
+func BuildDependentCharacterJobs(characterID uint32, freeCompanyID string) []contract.QueueJob {
+	jobs := []contract.QueueJob{AchievementCensusJob(characterID)}
+	if freeCompanyID != "" {
+		jobs = append(jobs, FreeCompanyCensusJob(freeCompanyID))
+	}
+	return jobs
+}

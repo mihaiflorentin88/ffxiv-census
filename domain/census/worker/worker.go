@@ -145,10 +145,10 @@ func (w *Worker) isEventTypeAvailable(eventType string) bool {
 		return true
 	}
 	switch eventType {
-	case handler.EventCharacterCensus, handler.EventAchievementCensus, handler.EventFreeCompanyCensus:
+	case handler.EventAchievementCensus, handler.EventFreeCompanyCensus:
 		return w.rateLimiter.IsAvailable(contract.ProviderLodestone)
-	case handler.EventIDSweep:
-		// ID sweep can use either lodestone or tomestone; claim if at least one is available
+	case handler.EventCharacterCensus, handler.EventIDSweep:
+		// Character census and ID sweep are dual-source; claim if at least one provider is available
 		return w.rateLimiter.IsAvailable(contract.ProviderLodestone) || w.rateLimiter.IsAvailable(contract.ProviderTomestone)
 	default:
 		return true
@@ -240,7 +240,8 @@ func (w *Worker) runDispatcher(
 				if waitDuration <= 0 {
 					waitDuration = w.pollInterval
 				}
-				w.logger.WarnContext(ctx, "worker.all_providers_paused",
+				w.logger.WarnContext(
+					ctx, "worker.all_providers_paused",
 					slog.Duration("wait_duration", waitDuration),
 					slog.Time("earliest_available", earliest),
 				)

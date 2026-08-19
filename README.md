@@ -213,21 +213,30 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 
 ## Architecture & Event Pipeline
 
-The ingest pipeline is fully event-driven:
+The census ingest pipeline is durable and event-driven via the SQLite-backed work queue:
 
 ```text
-publish id-sweep ──────────► consume (all queues) ──► achievement-census
-publish character-census ──► consume (all queues) ──► achievement-census
-                                                  └──► fc-census
+publish id-sweep ──────────► consume (all queues) ──┬──► achievement-census
+                                                  └──► fc-census (if in FC)
+
+publish character-census ──► consume (all queues) ──┬──► achievement-census
+                                                  └──► fc-census (if in FC)
 ```
 
-| Event | Description | Downstream Chains |
-|---|---|---|
-| `id-sweep` | Probes ID ranges on Lodestone or Tomestone. Non-existent IDs are skipped. | `achievement-census` per discovered character |
-| `character-census` | Fetches full profile; marks character deleted if HTTP 404. | `achievement-census`, `fc-census` |
-| `achievement-census` | Fetches character achievements and updates registry milestones. | *None (leaf)* |
-| `fc-census` | Fetches Free Company profile and roster details. | *None (leaf)* |
+### Ingest Events
 
+| Event Name | Purpose | Payload Schema | Provider(s) | Downstream Event Cascading |
+|---|---|---|---|---|
+| `id-sweep` | Probes ranges of character IDs to discover and ingest newly created or active characters. Non-existent IDs are skipped without failing the chunk. | `{"from": 1, "to": 1000, "source": "auto"}` | **Dual-Source**: Lodestone (primary) + Tomestone.gg (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
+| `character-census` | Re-censuses a known character's profile, job levels, and affiliation. Confirmed 404 on both providers marks the character deleted. | `{"character_id": 12345}` | **Dual-Source**: Lodestone (primary) + Tomestone.gg (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
+| `achievement-census` | Fetches character achievements and updates registered expansion and milestone progression. | `{"character_id": 12345}` | **Lodestone-exclusive** | *None (leaf job)* |
+| `fc-census` | Fetches Free Company profile and roster details. | `{"fc_id": "9234567890123456789"}` | **Lodestone-exclusive** | *None (leaf job)* |
+
+### Provider Coordination & Automatic Queue Switching
+
+- **Dual-Source Queues (`id-sweep`, `character-census`)**: Use The Lodestone as the primary scraper. When Lodestone returns scrape errors, 429 rate limits, or 404s, workers automatically fall back to Tomestone.gg.
+- **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone encounters HTTP 429 or is paused, workers pause these queues and process dual-source queues via Tomestone.gg.
+- **Earliest Cooldown Sleep**: If all external providers are rate-limited simultaneously, workers sleep until the earliest cooldown expires without burning database transactions or CPU cycles.
 ---
 
 ## Build & Test Automation

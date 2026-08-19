@@ -24,25 +24,26 @@ Queue job payloads are JSON. Types are declared in `domain/census/handler/event.
 
 Handlers return the jobs they want published next; the worker persists them atomically with the current job's completion via `Queue.Complete(id, nextJobs...)` (same transaction). This is how downstream work is scheduled without losing atomicity.
 
-- `id-sweep` → `achievement-census` (one per discovered character)
-- `character-census` → `achievement-census` (+ `fc-census` when the character is in a free company)
+- `id-sweep` → `achievement-census` (+ `fc-census` when the character is affiliated with a free company)
+- `character-census` → `achievement-census` (+ `fc-census` when the character is affiliated with a free company)
 - `achievement-census` → (leaf)
 - `fc-census` → (leaf)
-
 Member-list re-census (`fc-census` → `character-census` for stale members) is deferred until `FetchFreeCompanyMembers` is exposed by the `LodestoneClient` contract.
 
 ## Loop safety
 
 The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an identical job is a no-op. Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs.
 
-## Dual-source ingest & 404 vs retry
+## Dual-source ingest, Fallback & Provider Rate-Limit Coordination
 
-In `auto` source mode, the `id-sweep` handler probes the Tomestone.gg REST API first when configured with an API token. On a Tomestone 404 (`contract.ErrCharacterNotFound`), it automatically falls back to probing The Lodestone scraping client. If both sources 404, the ID is recorded as missing and the chunk continues. Explicit `tomestone` or `lodestone` source modes skip the other client entirely.
+Both `id-sweep` and `character-census` are dual-source events. In `auto` source mode:
+1. Handlers use **The Lodestone** as the primary data provider.
+2. When Lodestone returns a 404 (`contract.ErrCharacterNotFound`), a scrape error, or encounters rate limits, handlers seamlessly fall back to **Tomestone.gg** if configured and available.
+3. A character is only marked deleted if confirmed missing across both providers (or when Tomestone is unconfigured).
+4. Downstream dependent jobs (`achievement-census`, plus `fc-census` when in an FC) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
+5. **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`, `fc-census`) and seamlessly process dual-source queues (`id-sweep`, `character-census`) via Tomestone. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting database claims or CPU cycles.
 
-Transient network/rate-limit errors return an error to trigger worker retry with exponential backoff.
-
-`domain/census/worker` runs N concurrent goroutines, each looping: claim one job of the event type → dispatch to the registered handler → on error `Retry`, on success `Complete(id, next...)`. It polls (1s) when the queue is empty and stops cleanly on context cancellation.
-
+Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other client entirely.
 ## CLI
 
 ```bash

@@ -1,15 +1,16 @@
 package container
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
 )
 
 func TestServiceContainer_Handlers(t *testing.T) {
-	t.Setenv("SQLITE_PATH", filepath.Join(t.TempDir(), "census.db"))
 	Load = NewServiceContainer()
+	if Load.Database() == nil {
+		t.Skip("postgres not available")
+	}
 
 	reg := Load.Handlers()
 	if _, ok := reg.Get(handler.EventIDSweep); !ok {

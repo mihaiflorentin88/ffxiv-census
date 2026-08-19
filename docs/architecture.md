@@ -56,10 +56,16 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 - Override via environment variables in CI/CD (`HTTP_PORT=8081 ./bin/ffxiv-census serve`).
 - For sensitive secrets, prefer external secret stores; never commit them to Git.
 
-## Queue
+## Queue & Ingest Event Pipeline
 
-Durable async work lives in the same SQLite datastore (`queue_jobs` table) with a claim-based lifecycle — see [docs/queue.md](queue.md) for the lifecycle, atomic claim semantics, dedup, and backoff. Resolve it via `container.Load.Queue()`.
+Durable async work lives in the SQLite datastore (`queue_jobs` table) with a claim-based lifecycle (see [docs/queue.md](queue.md) and [docs/events.md](events.md)). The ingest pipeline consists of four core events:
 
+1. **`id-sweep`**: Probes character ID ranges across Lodestone and Tomestone.gg. Discovered characters are upserted and chain downstream `achievement-census` (+ `fc-census` if affiliated with an FC) jobs.
+2. **`character-census`**: Re-censuses known character profiles. Confirmed 404 on both providers marks the character deleted; successful fetches chain `achievement-census` (+ `fc-census`).
+3. **`achievement-census`**: Fetches character achievements from The Lodestone and tracks expansion/milestone progression (*leaf job*).
+4. **`fc-census`**: Fetches Free Company details and membership info from The Lodestone (*leaf job*).
+
+The queue adapter is resolved via `container.Load.Queue()`.
 ## Future Hooks
 
 - Add domain service constructors under `container/domain.go` to keep wiring explicit.

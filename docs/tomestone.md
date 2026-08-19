@@ -56,13 +56,14 @@ Inspect live Tomestone character profiles directly via the CLI:
 ./bin/ffxiv-census tomestone character 36795950 --raw
 ```
 
-## Dual-Source ID Sweep Ingest
+## Dual-Source Ingest & Fallback
 
-Tomestone is used as the primary high-throughput data source for character discovery in `ffxiv-census publish id-sweep` and `consume id-sweep`.
+Tomestone.gg is used as the high-throughput fallback data provider for character discovery (`id-sweep`) and profile re-census (`character-census`).
 
-- When `--source auto` is set, `id-sweep` probes Tomestone first. If Tomestone returns 404 (`contract.ErrCharacterNotFound`), it seamlessly falls back to scraping The Lodestone.
-- Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into the achievement census.
-
+- When `--source auto` (default) is set, handlers query The Lodestone first. If Lodestone returns a 404, scrape error, or encounters rate limits, handlers seamlessly fall back to Tomestone.gg.
+- Explicit `--source tomestone` on `id-sweep` queries Tomestone.gg directly without querying Lodestone.
+- Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into downstream jobs (`achievement-census`, and `fc-census` when affiliated with a free company) via `BuildDependentCharacterJobs`.
+- When Lodestone is rate-limited, workers automatically switch dual-source queues (`id-sweep`, `character-census`) to Tomestone while pausing Lodestone-exclusive queues.
 ## Error Handling & Mapping
 
 - `401 Unauthorized` / `403 Forbidden` → maps to `contract.ErrTomestoneUnauthenticated`.
