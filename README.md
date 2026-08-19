@@ -149,21 +149,7 @@ Exports census data for characters, free companies, or achievements directly to 
 ./bin/ffxiv-census export achievements --format csv --output ./exports/achievements.csv
 ```
 
-### 6. `backup` — SQLite Snapshot & Google Drive Backup
-
-Performs a point-in-time `VACUUM INTO` snapshot of the SQLite database and saves locally or uploads to Google Drive. Supports both OAuth 2.0 (for personal Google accounts) and Service Accounts (for Workspace / Shared Drives).
-
-```bash
-# One-time OAuth authorization (personal Google accounts):
-./bin/ffxiv-census backup auth --client-secret-file client_secret_*.json
-
-# Upload snapshot to Google Drive using credentials in .env:
-./bin/ffxiv-census backup --target gdrive
-
-# Create local backup in ./backups with 14-day retention rotation:
-./bin/ffxiv-census backup --target local --output /var/backups/census --retention-days 14
-```
-### 7. `migrate` — Manual Schema Migrations
+### 6. `migrate` — Manual Schema Migrations
 
 Manage database schema versions manually with Goose.
 
@@ -175,7 +161,7 @@ Manage database schema versions manually with Goose.
 ./bin/ffxiv-census migrate --direction down
 ```
 
-### 8. `tomestone` — Direct Character Inspection
+### 7. `tomestone` — Direct Character Inspection
 
 Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 
@@ -202,12 +188,6 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 | `QUEUE_CLAIM_BATCH_SIZE` | Default number of jobs claimed per batch | `4` |
 | `QUEUE_MAX_ATTEMPTS` | Default retry attempts before dead-lettering (0 = infinite) | `5` |
 | `QUEUE_BACKOFF_BASE_SECONDS` | Initial backoff delay for retried jobs | `5` |
-| `BACKUP_GDRIVE_FOLDER_ID` | Default Google Drive destination folder ID (`[backup] gdrive_folder_id`) | `""` |
-| `BACKUP_OAUTH_CLIENT_ID` | Google OAuth2 Client ID (`[backup] oauth_client_id`) | `""` |
-| `BACKUP_OAUTH_CLIENT_SECRET` | Google OAuth2 Client Secret (`[backup] oauth_client_secret`) | `""` |
-| `BACKUP_OAUTH_REFRESH_TOKEN` | Google OAuth2 Refresh Token (`[backup] oauth_refresh_token`) | `""` |
-| `BACKUP_SERVICE_ACCOUNT_B64` | Base64-encoded Google service account JSON (`[backup] service_account_b64`) | `""` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google service account credentials file | `""` |
 
 ---
 
