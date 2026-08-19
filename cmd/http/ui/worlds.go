@@ -102,10 +102,14 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(regionList)
 
 	var dcList []string
-	for dc := range dcSet {
-		dcList = append(dcList, dc)
+	if selectedRegion != "" {
+		dcList = DCsForRegion(selectedRegion)
+	} else {
+		for dc := range dcSet {
+			dcList = append(dcList, dc)
+		}
+		sort.Strings(dcList)
 	}
-	sort.Strings(dcList)
 
 	c.render(w, "templates/worlds.html", PageData{
 		Title:     "Worlds Census",

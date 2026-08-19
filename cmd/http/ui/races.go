@@ -91,29 +91,41 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 		return raceRows[i].Total > raceRows[j].Total
 	})
 
-	// Collect list of all available DCs and Worlds for filter dropdowns
-	dcSet := make(map[string]bool)
-	worldSet := make(map[string]bool)
-	for w, dc := range worldDatacenter {
-		if dc != "" {
-			dcSet[dc] = true
-		}
-		if selectedDC == "" || strings.EqualFold(dc, selectedDC) {
-			worldSet[w] = true
-		}
-	}
-
+	// Build cascading filter lists: Region narrows DCs, DC narrows Worlds.
 	var dcList []string
-	for dc := range dcSet {
-		dcList = append(dcList, dc)
+	if selectedRegion != "" {
+		dcList = DCsForRegion(selectedRegion)
+	} else {
+		dcSet := make(map[string]bool)
+		for _, dc := range worldDatacenter {
+			if dc != "" {
+				dcSet[dc] = true
+			}
+		}
+		for dc := range dcSet {
+			dcList = append(dcList, dc)
+		}
+		sort.Strings(dcList)
 	}
-	sort.Strings(dcList)
 
 	var worldList []string
-	for world := range worldSet {
-		worldList = append(worldList, world)
+	if selectedDC != "" {
+		worldList = WorldsForDC(selectedDC)
+	} else if selectedRegion != "" {
+		for _, dc := range DCsForRegion(selectedRegion) {
+			worldList = append(worldList, WorldsForDC(dc)...)
+		}
+		sort.Strings(worldList)
+	} else {
+		worldSet := make(map[string]bool)
+		for w := range worldDatacenter {
+			worldSet[w] = true
+		}
+		for w := range worldSet {
+			worldList = append(worldList, w)
+		}
+		sort.Strings(worldList)
 	}
-	sort.Strings(worldList)
 
 	title := "Race Distribution"
 	if selectedWorld != "" {

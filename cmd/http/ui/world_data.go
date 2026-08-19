@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
@@ -114,6 +115,48 @@ var worldDatacenter = map[string]string{
 	"Sephirot": "Materia",
 	"Sophia":   "Materia",
 	"Zurvan":   "Materia",
+}
+
+// DCsForRegion returns sorted datacenter names belonging to the given region.
+// Returns nil for empty or unknown region input.
+func DCsForRegion(region string) []string {
+	if region == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for _, dc := range worldDatacenter {
+		if dc != "" && strings.EqualFold(census.RegionForDatacenter(dc), region) {
+			seen[dc] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(seen))
+	for dc := range seen {
+		result = append(result, dc)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// WorldsForDC returns sorted world names belonging to the given datacenter.
+// Returns nil for empty or unknown datacenter input.
+func WorldsForDC(dc string) []string {
+	if dc == "" {
+		return nil
+	}
+	var result []string
+	for world, worldDC := range worldDatacenter {
+		if strings.EqualFold(worldDC, dc) {
+			result = append(result, world)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	sort.Strings(result)
+	return result
 }
 
 // WorldToDC returns the logical datacenter for a world, or "Unknown" if not found.

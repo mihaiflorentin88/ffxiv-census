@@ -74,3 +74,72 @@ func TestRacesHandler(t *testing.T) {
 		t.Errorf("expected filtered body to exclude Miqo'te on Crystal DC")
 	}
 }
+
+func TestRacesCascadingFilters(t *testing.T) {
+	rig := newTestRig(t)
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID:          4001,
+		Name:        "EU Player",
+		World:       "Cerberus",
+		Datacenter:  "Chaos",
+		Region:      "EU",
+		Race:        "Hyur",
+		Tribe:       "Midlander",
+		FirstSeenAt: recent,
+	}, nil)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID:          4002,
+		Name:        "NA Player",
+		World:       "Gilgamesh",
+		Datacenter:  "Aether",
+		Region:      "NA",
+		Race:        "Elezen",
+		Tribe:       "Wildwood",
+		FirstSeenAt: recent,
+	}, nil)
+
+	// region=EU → DC dropdown should contain only Chaos & Light, not Aether/Crystal
+	reqEU := httptest.NewRequest(http.MethodGet, "/ui/races?region=EU", nil)
+	recEU := httptest.NewRecorder()
+	rig.ctrl.Races(recEU, reqEU)
+
+	if recEU.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recEU.Code)
+	}
+	bodyEU := recEU.Body.String()
+	if !strings.Contains(bodyEU, `<option value="Chaos"`) {
+		t.Error("region=EU: expected DC dropdown to contain Chaos")
+	}
+	if !strings.Contains(bodyEU, `<option value="Light"`) {
+		t.Error("region=EU: expected DC dropdown to contain Light")
+	}
+	if strings.Contains(bodyEU, `<option value="Aether"`) {
+		t.Error("region=EU: DC dropdown should NOT contain Aether")
+	}
+	if strings.Contains(bodyEU, `<option value="Crystal"`) {
+		t.Error("region=EU: DC dropdown should NOT contain Crystal")
+	}
+
+	// region=EU&dc=Chaos → World dropdown should contain Chaos worlds, not Light worlds
+	reqChaos := httptest.NewRequest(http.MethodGet, "/ui/races?region=EU&dc=Chaos", nil)
+	recChaos := httptest.NewRecorder()
+	rig.ctrl.Races(recChaos, reqChaos)
+
+	if recChaos.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recChaos.Code)
+	}
+	bodyChaos := recChaos.Body.String()
+	if !strings.Contains(bodyChaos, `<option value="Cerberus"`) {
+		t.Error("region=EU&dc=Chaos: expected World dropdown to contain Cerberus")
+	}
+	if strings.Contains(bodyChaos, `<option value="Alpha"`) {
+		t.Error("region=EU&dc=Chaos: World dropdown should NOT contain Light world Alpha")
+	}
+	if strings.Contains(bodyChaos, `<option value="Lich"`) {
+		t.Error("region=EU&dc=Chaos: World dropdown should NOT contain Light world Lich")
+	}
+}

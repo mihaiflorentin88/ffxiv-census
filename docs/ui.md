@@ -51,7 +51,7 @@ cmd/http/ui/
 ├── worlds.go               # Controller for /ui/worlds
 ├── expansions.go           # Controller for /ui/expansions
 ├── character.go            # Controller for /ui/characters/{id} & /ui/characters/search
-├── world_data.go           # World, Datacenter, and Region mapping utilities
+├── world_data.go           # World, Datacenter, and Region mapping + cascading filter helpers
 ├── template_helpers.go     # Template helper functions (formatting numbers, dates, job roles)
 └── ui_test.go              # Table-driven HTTP handler test suite
 ```
@@ -63,3 +63,26 @@ The custom dark theme (`styles.css`) is inspired by the FINAL FANTASY XIV UI aes
 - **Accents**: `#d4af37` (Eorzean Gold) and `#38bdf8` (Aether Cyan)
 - **Status Colors**: `#22c55e` (Active Green) and `#ef4444` (Inactive/Deleted Red)
 - **Role Colors**: Distinct color coding for Tank (`#3b82f6`), Healer (`#10b981`), Melee DPS (`#ef4444`), Physical Ranged (`#f97316`), Magic Ranged (`#a855f7`), Crafter (`#14b8a6`), and Gatherer (`#eab308`).
+
+## 5. Cascading Filters
+
+The `/ui/races` and `/ui/worlds` pages support cascading filter dropdowns that narrow
+options based on parent selections. The hierarchy is **Region → Datacenter → World**.
+
+### Races Page (`/ui/races`)
+
+Three `<select>` dropdowns in a single form. Selecting a region updates the Datacenter
+dropdown to show only DCs in that region; selecting a DC updates the World dropdown to
+show only worlds in that DC. When no parent filter is selected, all options are shown.
+
+### Worlds Page (`/ui/worlds`)
+
+Region is selected via button pills; the Datacenter `<select>` dropdown shows only DCs
+belonging to the selected region. When no region is selected, all DCs are shown.
+
+### Implementation
+
+Filter lists are derived server-side using `DCsForRegion()` and `WorldsForDC()` helper
+functions in `cmd/http/ui/world_data.go`, which map the static FFXIV world→datacenter→region
+hierarchy from the `worldDatacenter` map. Each filter change triggers a full page reload
+via `onchange="this.form.submit()"`.
