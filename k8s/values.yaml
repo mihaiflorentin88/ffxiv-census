@@ -28,19 +28,9 @@ persistence:
 
 postgresql:
   enabled: true
-  replicaCount: 2
-  image:
-    repository: postgres
-    tag: 16-alpine
-    pullPolicy: IfNotPresent
-  auth:
-    username: census
-    database: ffxiv_census
-  primary:
-    persistence:
-      enabled: true
-      size: 20Gi
-      storageClass: local-path
+  instances: 3
+  storageClass: local-path
+  storageSize: 20Gi
 
 vault:
   enabled: true

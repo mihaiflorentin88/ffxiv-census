@@ -55,13 +55,42 @@ spec:
             - name: http
               containerPort: {{ $web.containerPort | default 8080 }}
               protocol: TCP
-          {{- if .Values.vault.enabled }}
+          {{- if or .Values.vault.enabled .Values.postgresql.enabled }}
           envFrom:
+          {{- if .Values.vault.enabled }}
             - secretRef:
                 name: {{ $fullName }}-eso-secret
           {{- end }}
-          {{- with $web.env }}
+          {{- if .Values.postgresql.enabled }}
+            - secretRef:
+                name: {{ $fullName }}-pg-credentials
+          {{- end }}
+          {{- end }}
           env:
+          {{- if .Values.postgresql.enabled }}
+            - name: POSTGRES_HOST
+              value: {{ $fullName }}-postgresql-rw
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullName }}-pg-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullName }}-pg-credentials
+                  key: password
+            - name: POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullName }}-pg-credentials
+                  key: POSTGRES_DATABASE
+            - name: POSTGRES_DSN
+              value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DATABASE)?sslmode=disable"
+          {{- end }}
+          {{- with $web.env }}
 {{ toYaml . | nindent 12 }}
           {{- end }}
           {{- if $web.livenessProbe }}

@@ -1,0 +1,54 @@
+{{- if .Values.postgresql.enabled }}
+{{- $fullName := include "manifest.fullname" . }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $fullName }}-postgresql
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "manifest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.8
+  instances: {{ .Values.postgresql.instances | default 3 }}
+
+  bootstrap:
+    initdb:
+      database: ffxiv_census
+      owner: census
+      secret:
+        name: {{ $fullName }}-pg-credentials
+
+  managed:
+    roles:
+      - name: census
+        login: true
+        superuser: true
+        passwordSecret:
+          name: {{ $fullName }}-pg-credentials
+
+  storage:
+    size: {{ .Values.postgresql.storageSize | default "20Gi" }}
+    storageClass: {{ .Values.postgresql.storageClass | default "local-path" }}
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: preferred
+
+  postgresql:
+    parameters:
+      max_connections: "100"
+      shared_buffers: "128MB"
+
+  monitoring:
+    enablePodMonitor: {{ .Values.serviceMonitor.enabled | default false }}
+{{- end }}
