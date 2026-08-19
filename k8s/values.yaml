@@ -175,7 +175,7 @@ workers:
         - consume
         - all
         - -c
-        - "4"
+        - "30"
 
 cronjobs:
   defaults:
