@@ -37,6 +37,58 @@ Consumers (`ffxiv-census consume`) poll all registered event queues concurrently
 - **Dual-Source Queues (`id-sweep`, `character-census`)**: Use Lodestone as primary. When Lodestone is rate-limited (HTTP 429), workers automatically route requests through Tomestone.gg. If Tomestone is rate-limited, requests route through Lodestone.
 - **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone is rate-limited, these queues pause consumption until the cooldown expires while dual-source queues continue processing.
 - **Earliest Cooldown Sleep**: When all providers are paused, the worker sleeps until the earliest provider cooldown expires.
+
+## Dispatcher Algorithm
+
+The worker uses a **dynamic dispatcher with a dedicated retry goroutine** to prioritize retry jobs (attempts > 1) over new jobs.
+
+### Goroutine Allocation
+
+Concurrency is clamped to a minimum of `len(eventTypes) + 1` (1 retry goroutine + 1 goroutine per event type). The allocation formula:
+
+```
+minConcurrency = len(eventTypes) + 1
+retryWorkers   = 1
+newWorkers     = concurrency - retryWorkers
+workersPerEvent = newWorkers / len(eventTypes)   // always >= 1 due to clamping
+extraWorkers    = newWorkers - (workersPerEvent * len(eventTypes))  // distributed to first event types
+```
+
+**Example with concurrency=5 and 4 event types:**
+- WorkerID 0: retry goroutine (claims retries from any event type)
+- WorkerID 1: primary=id-sweep (new only)
+- WorkerID 2: primary=character-census (new only)
+- WorkerID 3: primary=achievement-census (new only)
+- WorkerID 4: primary=fc-census (new only)
+
+If `--concurrency 3` is passed, it is silently raised to 5. If `--concurrency 8`: 1 retry + 7 distributed (e.g. 2, 2, 2, 1).
+
+### 3-Step Claim Loop
+
+Each goroutine runs a 3-step claim loop on every poll cycle:
+
+1. **Primary queue (preferred mode):** Claim from the goroutine's dedicated event type using `ClaimModeRetriesOnly` (retry goroutine) or `ClaimModeNewOnly` (new-job goroutines).
+2. **Borrow from other queues (preferred mode):** If the primary queue is empty or paused, claim from other available event types using the same preferred mode via `ClaimMultiple`.
+3. **Fallback to `ClaimModeAny`:** If no jobs were found in the preferred mode, retry both primary and borrowed queues with `ClaimModeAny` to prevent starvation. This means:
+   - The retry goroutine can help with new jobs when no retries exist.
+   - New-job goroutines can help with retries when no new jobs exist.
+
+### ClaimMode Contract
+
+| Mode | Behavior | Used By |
+|---|---|---|
+| `ClaimModeAny` | Claims any pending job regardless of attempts | Fallback for all goroutines |
+| `ClaimModeNewOnly` | Claims only jobs with `attempts == 0` | New-job goroutines (workerID > 0) |
+| `ClaimModeRetriesOnly` | Claims only jobs with `attempts > 0` | Retry goroutine (workerID 0) |
+
+### Rate-Limit Integration
+
+`isEventTypeAvailable` gates claiming per provider availability. Dual-source queues (`id-sweep`, `character-census`) fall back to Tomestone when Lodestone is paused. Lodestone-exclusive queues (`achievement-census`, `fc-census`) pause consumption until cooldown.
+
+### Job Chaining
+
+Handlers return downstream jobs in the `next` slice. The worker's `Complete(id, next...)` publishes them atomically in the same SQLite transaction. No eager `Publish` calls are made from handlers — this prevents double-enqueue and ensures exactly-once downstream delivery.
+
 ```toml
 [queue]
 claim_batch_size = 4

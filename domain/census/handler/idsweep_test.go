@@ -15,7 +15,6 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
-	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	mocktomestone "github.com/mihaiflorentin88/ffxiv-census/mock/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -26,7 +25,7 @@ func newTestIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mockrepo.Char
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, nil, svc, nil, nil), ls, chars
+	return NewIDSweep(ls, nil, svc, nil), ls, chars
 }
 
 func newTestDualIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomestone.Fake, *mockrepo.CharacterRepository) {
@@ -35,7 +34,7 @@ func newTestDualIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomes
 	ts := mocktomestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, ts, svc, nil, nil), ls, ts, chars
+	return NewIDSweep(ls, ts, svc, nil), ls, ts, chars
 }
 
 func newTestDualIDSweepWithLimiter(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomestone.Fake, *mock.ProviderRateLimiter, *mockrepo.CharacterRepository) {
@@ -45,7 +44,7 @@ func newTestDualIDSweepWithLimiter(t *testing.T) (*IDSweep, *mocklodestone.Fake,
 	limiter := mock.NewProviderRateLimiter()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, ts, svc, nil, nil, limiter), ls, ts, limiter, chars
+	return NewIDSweep(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
 }
 
 func idsweepPayload(from, to uint32) []byte {
@@ -424,7 +423,7 @@ func TestIDSweep_NilTomestoneClient_ExplicitTomestoneSource(t *testing.T) {
 func TestIDSweep_NilClients_Error(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	h := NewIDSweep(nil, nil, svc, nil, nil)
+	h := NewIDSweep(nil, nil, svc, nil)
 
 	payload, _ := json.Marshal(IDSweepPayload{
 		From:   100,
@@ -442,7 +441,7 @@ func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	ts := mocktomestone.NewFake()
-	h := NewIDSweep(nil, ts, svc, nil, nil)
+	h := NewIDSweep(nil, ts, svc, nil)
 
 	payload, _ := json.Marshal(IDSweepPayload{
 		From:   100,
@@ -459,11 +458,10 @@ func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 	}
 }
 
-func TestIDSweep_PublishesDownstreamJobsImmediately(t *testing.T) {
+func TestIDSweep_ReturnsDownstreamJobsInNext(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	q := mockqueue.NewFake()
 
 	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
 		return &godestone.Character{
@@ -475,7 +473,7 @@ func TestIDSweep_PublishesDownstreamJobsImmediately(t *testing.T) {
 		}, nil
 	}
 
-	h := NewIDSweep(ls, nil, svc, q, nil)
+	h := NewIDSweep(ls, nil, svc, nil)
 
 	next, err := h.Handle(context.Background(), idsweepPayload(1, 2))
 	if err != nil {
@@ -484,10 +482,23 @@ func TestIDSweep_PublishesDownstreamJobsImmediately(t *testing.T) {
 	if len(next) != 4 {
 		t.Fatalf("expected 4 returned jobs (2 ach + 2 fc), got %d", len(next))
 	}
-
-	depth, _ := q.Depth(context.Background())
-	if depth[contract.QueueJobPending] != 4 {
-		t.Fatalf("expected 4 jobs immediately published to queue, got %d", depth[contract.QueueJobPending])
+	// Verify downstream jobs are returned (not published eagerly).
+	// The worker's Complete(id, next...) will publish them atomically.
+	achCount := 0
+	fcCount := 0
+	for _, j := range next {
+		switch j.Type {
+		case EventAchievementCensus:
+			achCount++
+		case EventFreeCompanyCensus:
+			fcCount++
+		}
+	}
+	if achCount != 2 {
+		t.Errorf("expected 2 achievement-census jobs, got %d", achCount)
+	}
+	if fcCount != 2 {
+		t.Errorf("expected 2 fc-census jobs, got %d", fcCount)
 	}
 }
 

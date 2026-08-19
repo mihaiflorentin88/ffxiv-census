@@ -15,31 +15,6 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-type jobCategory int
-
-const (
-	catRetries jobCategory = iota
-	catUpdates
-	catSecondary
-	catPrimary
-)
-
-func classifyJob(j contract.QueueJob) jobCategory {
-	if j.Attempts > 1 {
-		return catRetries
-	}
-	switch j.Type {
-	case handler.EventCharacterCensus:
-		return catUpdates
-	case handler.EventFreeCompanyCensus, handler.EventAchievementCensus:
-		return catSecondary
-	case handler.EventIDSweep:
-		return catPrimary
-	default:
-		return catPrimary
-	}
-}
-
 // Worker claims jobs from configured event types and dispatches them to registered
 // handlers using a dynamic Dispatcher and Worker Pool pattern.
 type Worker struct {
@@ -79,6 +54,10 @@ func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) err
 }
 
 // RunEvents runs dedicated concurrent worker pools for all configured event types simultaneously.
+// It reserves 1 goroutine (workerID 0) as a dedicated retry worker that preferentially
+// claims retry jobs (attempts > 1). All other goroutines preferentially claim new jobs.
+// Concurrency is clamped to len(eventTypes)+1 minimum to guarantee at least 1 goroutine
+// per event type plus 1 retry goroutine.
 func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = 4
@@ -98,6 +77,13 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 	}
 
+	// Clamp concurrency to guarantee at least 1 goroutine per event type + 1 retry goroutine.
+	minConcurrency := len(eventTypes) + 1
+	if concurrency < minConcurrency {
+		w.logger.InfoContext(ctx, "worker.concurrency_clamped", slog.Int("requested", concurrency), slog.Int("minimum", minConcurrency))
+		concurrency = minConcurrency
+	}
+
 	w.logger.InfoContext(ctx, "worker.start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 	for _, eventType := range eventTypes {
 		if n, err := w.queue.CountJobs(ctx, contract.QueueJobFilter{Type: eventType, Status: contract.QueueJobPending}); err == nil && n == 0 {
@@ -113,28 +99,48 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Calculate dedicated workers per event type so all events process simultaneously in parallel.
-	workersPerEvent := max(1, concurrency/len(eventTypes))
-	extraWorkers := concurrency - (workersPerEvent * len(eventTypes))
+	// Reserve 1 goroutine for retries, distribute the rest evenly across event types.
+	retryWorkers := 1
+	newWorkers := concurrency - retryWorkers
+	workersPerEvent := newWorkers / len(eventTypes) // always >= 1 due to clamping
+	extraWorkers := newWorkers - (workersPerEvent * len(eventTypes))
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
 
 	workerIDCounter := 0
+
+	// Spawn the retry goroutine first (workerID 0).
+	w.logger.InfoContext(ctx, "worker.pool_allocated", slog.String("event_type", "retry"), slog.Int("workers", retryWorkers), slog.String("mode", "retries_only"))
+	for range retryWorkers {
+		workerID := workerIDCounter
+		workerIDCounter++
+		wg.Add(1)
+		go func(allTypes []string, wid int) {
+			defer wg.Done()
+			if err := w.eventWorkerLoop(childCtx, allTypes[0], allTypes, wid, true); err != nil && !errors.Is(err, context.Canceled) {
+				w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", "retry"), slog.Int("worker_id", wid), slog.Any("error", err))
+				errCh <- err
+				cancel()
+			}
+		}(eventTypes, workerID)
+	}
+
+	// Spawn new-job goroutines for each event type.
 	for i, eventType := range eventTypes {
 		numWorkers := workersPerEvent
-		if i == 0 && extraWorkers > 0 {
-			numWorkers += extraWorkers
+		if i < extraWorkers {
+			numWorkers++
 		}
-		w.logger.InfoContext(ctx, "worker.pool_allocated", slog.String("event_type", eventType), slog.Int("workers", numWorkers))
+		w.logger.InfoContext(ctx, "worker.pool_allocated", slog.String("event_type", eventType), slog.Int("workers", numWorkers), slog.String("mode", "new_only"))
 
-		for j := 0; j < numWorkers; j++ {
+		for range numWorkers {
 			workerID := workerIDCounter
 			workerIDCounter++
 			wg.Add(1)
 			go func(primaryType string, allTypes []string, wid int) {
 				defer wg.Done()
-				if err := w.eventWorkerLoop(childCtx, primaryType, allTypes, wid); err != nil && !errors.Is(err, context.Canceled) {
+				if err := w.eventWorkerLoop(childCtx, primaryType, allTypes, wid, false); err != nil && !errors.Is(err, context.Canceled) {
 					w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", primaryType), slog.Int("worker_id", wid), slog.Any("error", err))
 					errCh <- err
 					cancel()
@@ -172,7 +178,15 @@ func (w *Worker) isEventTypeAvailable(eventType string) bool {
 	}
 }
 
-func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTypes []string, workerID int) error {
+func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTypes []string, workerID int, isRetryWorker bool) error {
+	// Determine the preferred claim mode based on worker role.
+	// Retry worker prefers retries; new workers prefer new jobs.
+	// Both fall back to ClaimModeAny when idle to prevent starvation.
+	preferredMode := contract.ClaimModeNewOnly
+	if isRetryWorker {
+		preferredMode = contract.ClaimModeRetriesOnly
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -181,8 +195,8 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 		// 1. Check provider availability for primary dedicated event type
 		primaryAvail := w.isEventTypeAvailable(primaryType)
 		if primaryAvail {
-			// Try to claim from primary dedicated queue first
-			jobs, err := w.queue.Claim(ctx, primaryType, 1, contract.ClaimModeAny)
+			// Try to claim from primary dedicated queue using preferred mode
+			jobs, err := w.queue.Claim(ctx, primaryType, 1, preferredMode)
 			if err != nil && ctx.Err() == nil {
 				w.logger.ErrorContext(ctx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
 			}
@@ -203,6 +217,35 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 		}
 
 		if len(otherAvailable) > 0 {
+			jobs, err := w.queue.ClaimMultiple(ctx, otherAvailable, 1, preferredMode)
+			if err != nil && ctx.Err() == nil {
+				w.logger.ErrorContext(ctx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
+			}
+			if len(jobs) > 0 {
+				for _, job := range jobs {
+					w.processJob(ctx, job, workerID)
+				}
+				continue
+			}
+		}
+
+		// 3. Fallback: try claiming with ClaimModeAny to prevent permanent starvation.
+		// This means the retry goroutine can help with new jobs when no retries exist,
+		// and new-job goroutines can help with retries when no new jobs exist.
+		if primaryAvail {
+			jobs, err := w.queue.Claim(ctx, primaryType, 1, contract.ClaimModeAny)
+			if err != nil && ctx.Err() == nil {
+				w.logger.ErrorContext(ctx, "worker.claim_error", slog.String("event_type", primaryType), slog.Int("worker_id", workerID), slog.Any("error", err))
+			}
+			if len(jobs) > 0 {
+				for _, job := range jobs {
+					w.processJob(ctx, job, workerID)
+				}
+				continue
+			}
+		}
+
+		if len(otherAvailable) > 0 {
 			jobs, err := w.queue.ClaimMultiple(ctx, otherAvailable, 1, contract.ClaimModeAny)
 			if err != nil && ctx.Err() == nil {
 				w.logger.ErrorContext(ctx, "worker.claim_multiple_error", slog.Any("event_types", otherAvailable), slog.Int("worker_id", workerID), slog.Any("error", err))
@@ -215,7 +258,7 @@ func (w *Worker) eventWorkerLoop(ctx context.Context, primaryType string, allTyp
 			}
 		}
 
-		// 3. If all queues are empty or paused, wait for poll interval or earliest rate limit cooldown
+		// 4. If all queues are empty or paused, wait for poll interval or earliest rate limit cooldown
 		if !primaryAvail && len(otherAvailable) == 0 && w.rateLimiter != nil {
 			earliest := w.rateLimiter.EarliestAvailable()
 			waitDuration := time.Until(earliest)

@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -52,7 +53,8 @@ func waitForCalls(t *testing.T, h *recordingHandler, want int) {
 
 func TestWorker_ProcessesClaimedJobs(t *testing.T) {
 	q := mockqueue.NewFake()
-	if _, err := q.Publish(context.Background(),
+	if _, err := q.Publish(
+		context.Background(),
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":2,"to":2}`)},
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":3,"to":3}`)},
@@ -87,7 +89,8 @@ func TestWorker_ProcessesClaimedJobs(t *testing.T) {
 
 func TestWorker_PublishesChainedJobs(t *testing.T) {
 	q := mockqueue.NewFake()
-	if _, err := q.Publish(context.Background(),
+	if _, err := q.Publish(
+		context.Background(),
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
 	); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -135,7 +138,8 @@ func TestWorker_LogsJobLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	q := mockqueue.NewFake()
-	if _, err := q.Publish(context.Background(),
+	if _, err := q.Publish(
+		context.Background(),
 		contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)},
 	); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -201,6 +205,7 @@ func TestWorker_ReclaimsClaimedOnStart(t *testing.T) {
 		t.Fatal("claimed job was not reclaimed and processed after restart")
 	}
 }
+
 func TestWorker_LogsQueueStatusWhenEmpty(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
@@ -257,5 +262,103 @@ func TestWorker_PanicIsolationAndErrorCapture(t *testing.T) {
 	}
 	if jobs[0].LastError == nil || !strings.Contains(*jobs[0].LastError, "panic") {
 		t.Fatalf("expected panic error captured on job, got %+v", jobs[0])
+	}
+}
+
+func TestWorker_RetryGoroutine_ProcessesAllJobs(t *testing.T) {
+	q := mockqueue.NewFake()
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+
+	// Publish 10 new jobs (unique payloads to avoid dedup).
+	for i := range 10 {
+		payload := fmt.Sprintf(`{"from":%d,"to":%d}`, i, i)
+		if _, err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(payload)}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+
+	// Publish 5 retry jobs with Attempts pre-set to 2.
+	for i := range 5 {
+		payload := fmt.Sprintf(`{"from":%d,"to":%d}`, 100+i, 100+i)
+		if _, err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(payload), Attempts: 2}); err != nil {
+			t.Fatalf("Publish retry: %v", err)
+		}
+	}
+
+	w := New(q, reg, nil)
+	w.pollInterval = 10 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, "id-sweep", 2) }()
+
+	waitForCalls(t, rh, 15)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("worker: %v", err)
+	}
+
+	if rh.calls != 15 {
+		t.Errorf("handler calls = %d, want 15 (10 new + 5 retry)", rh.calls)
+	}
+
+	// Verify all jobs are done.
+	depth, _ := q.Depth(context.Background())
+	if depth[contract.QueueJobDone] != 15 {
+		t.Errorf("done jobs = %d, want 15", depth[contract.QueueJobDone])
+	}
+}
+
+func TestWorker_ConcurrencyClampedToMinimum(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	q := mockqueue.NewFake()
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+
+	w := New(q, reg, logger)
+	w.pollInterval = 10 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	// Request concurrency=1, but minimum for 1 event type is 2 (1 retry + 1 new).
+	_ = w.Run(ctx, "id-sweep", 1)
+
+	logs := buf.String()
+	if !strings.Contains(logs, "worker.concurrency_clamped") {
+		t.Errorf("logs missing concurrency_clamped warning:\n%s", logs)
+	}
+}
+
+func TestWorker_RetryGoroutine_LogsRetriesOnlyMode(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	q := mockqueue.NewFake()
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+
+	w := New(q, reg, logger)
+	w.pollInterval = 10 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = w.Run(ctx, "id-sweep", 2)
+
+	logs := buf.String()
+	if !strings.Contains(logs, "retries_only") {
+		t.Errorf("logs missing retries_only mode:\n%s", logs)
+	}
+	if !strings.Contains(logs, "new_only") {
+		t.Errorf("logs missing new_only mode:\n%s", logs)
 	}
 }

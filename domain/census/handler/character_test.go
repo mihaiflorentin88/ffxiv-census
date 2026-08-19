@@ -12,7 +12,6 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
-	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	mocktomestone "github.com/mihaiflorentin88/ffxiv-census/mock/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -23,7 +22,7 @@ func newTestCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewCharacterCensus(ls, nil, svc, nil, nil), ls, chars
+	return NewCharacterCensus(ls, nil, svc, nil), ls, chars
 }
 
 func newTestDualCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake, *mocktomestone.Fake, *mock.ProviderRateLimiter, *mockrepo.CharacterRepository) {
@@ -33,7 +32,7 @@ func newTestDualCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.
 	limiter := mock.NewProviderRateLimiter()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewCharacterCensus(ls, ts, svc, nil, nil, limiter), ls, ts, limiter, chars
+	return NewCharacterCensus(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
 }
 
 func characterPayload(id uint32) []byte {
@@ -94,11 +93,10 @@ func TestCharacterCensus_NotFoundMarksDeleted(t *testing.T) {
 	}
 }
 
-func TestCharacterCensus_PublishesDownstreamJobsImmediately(t *testing.T) {
+func TestCharacterCensus_ReturnsDownstreamJobsInNext(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	q := mockqueue.NewFake()
 
 	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
 		return &godestone.Character{
@@ -110,7 +108,7 @@ func TestCharacterCensus_PublishesDownstreamJobsImmediately(t *testing.T) {
 		}, nil
 	}
 
-	h := NewCharacterCensus(ls, nil, svc, q, nil)
+	h := NewCharacterCensus(ls, nil, svc, nil)
 
 	next, err := h.Handle(context.Background(), characterPayload(42))
 	if err != nil {
@@ -119,10 +117,13 @@ func TestCharacterCensus_PublishesDownstreamJobsImmediately(t *testing.T) {
 	if len(next) != 2 {
 		t.Fatalf("expected 2 returned jobs (ach + fc), got %d", len(next))
 	}
-
-	depth, _ := q.Depth(context.Background())
-	if depth[contract.QueueJobPending] != 2 {
-		t.Fatalf("expected 2 jobs immediately published to queue, got %d", depth[contract.QueueJobPending])
+	// Verify downstream jobs are returned (not published eagerly).
+	// The worker's Complete(id, next...) will publish them atomically.
+	if next[0].Type != EventAchievementCensus {
+		t.Errorf("expected first job to be achievement-census, got %q", next[0].Type)
+	}
+	if next[1].Type != EventFreeCompanyCensus {
+		t.Errorf("expected second job to be fc-census, got %q", next[1].Type)
 	}
 }
 
