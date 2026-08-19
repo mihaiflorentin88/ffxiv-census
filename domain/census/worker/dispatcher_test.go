@@ -59,7 +59,8 @@ func TestWorker_DynamicDispatcher_CeilingEnforcement(t *testing.T) {
 
 	// Enqueue 20 jobs of each type with unique payloads
 	for i := 0; i < 20; i++ {
-		_, _ = q.Publish(ctx,
+		_, _ = q.Publish(
+			ctx,
 			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"sweep":%d}`, i))},
 			contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))},
 			contract.QueueJob{Type: handler.EventFreeCompanyCensus, Payload: []byte(fmt.Sprintf(`{"fc":%d}`, i))},
@@ -155,7 +156,8 @@ func TestWorker_DynamicDispatcher_LowConcurrencyRoundRobin(t *testing.T) {
 
 	// Enqueue 5 jobs of each type with unique payloads
 	for i := 0; i < 5; i++ {
-		_, _ = q.Publish(ctx,
+		_, _ = q.Publish(
+			ctx,
 			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"sweep":%d}`, i))},
 			contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))},
 		)
@@ -216,7 +218,8 @@ func TestWorker_DynamicDispatcher_RetriesCeiling(t *testing.T) {
 
 	// Enqueue 10 jobs that were already attempted (retries) and 10 new jobs
 	for i := 0; i < 10; i++ {
-		_, _ = q.Publish(ctx,
+		_, _ = q.Publish(
+			ctx,
 			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"retry":%d}`, i))},
 			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"new":%d}`, i))},
 		)
@@ -258,4 +261,66 @@ func (h *orderRecordingHandler) Handle(ctx context.Context, payload []byte) ([]c
 	*h.order = append(*h.order, h.eventType)
 	h.orderMu.Unlock()
 	return nil, nil
+}
+
+func TestWorker_DynamicDispatcher_NoStarvationWhenPrimaryAlreadyRunning(t *testing.T) {
+	q := mockqueue.NewFake()
+	reg := handler.NewRegistry()
+
+	// Primary (id-sweep) jobs take longer (e.g. 80ms)
+	hSweep := &concurrencyTrackingHandler{holdDuration: 80 * time.Millisecond}
+	// Updates and secondary jobs are fast (e.g. 5ms)
+	hChar := &concurrencyTrackingHandler{holdDuration: 5 * time.Millisecond}
+	hAch := &concurrencyTrackingHandler{holdDuration: 5 * time.Millisecond}
+
+	reg.Register(handler.EventIDSweep, hSweep)
+	reg.Register(handler.EventCharacterCensus, hChar)
+	reg.Register(handler.EventAchievementCensus, hAch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. Initially enqueue 100 id-sweep jobs (fill the entire queue with primary)
+	for i := 0; i < 100; i++ {
+		_, _ = q.Publish(ctx, contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"id":%d}`, i))})
+	}
+
+	w := worker.New(q, reg, nil)
+	w.SetPollInterval(5 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.RunEvents(ctx, []string{
+			handler.EventIDSweep,
+			handler.EventCharacterCensus,
+			handler.EventAchievementCensus,
+		}, 20)
+	}()
+
+	// 2. Wait for workers to saturate with id-sweep
+	time.Sleep(50 * time.Millisecond)
+
+	// 3. Now enqueue character-census and achievement-census jobs
+	for i := 0; i < 20; i++ {
+		_, _ = q.Publish(
+			ctx,
+			contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))},
+			contract.QueueJob{Type: handler.EventAchievementCensus, Payload: []byte(fmt.Sprintf(`{"ach":%d}`, i))},
+		)
+	}
+
+	// 4. Wait 200ms
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	_ = <-done
+
+	charHandled := atomic.LoadInt32(&hChar.totalHandled)
+	achHandled := atomic.LoadInt32(&hAch.totalHandled)
+
+	if charHandled == 0 {
+		t.Errorf("character-census was starved by id-sweep (handled 0 jobs)")
+	}
+	if achHandled == 0 {
+		t.Errorf("achievement-census was starved by id-sweep (handled 0 jobs)")
+	}
 }

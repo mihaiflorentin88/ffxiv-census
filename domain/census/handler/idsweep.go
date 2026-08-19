@@ -23,6 +23,7 @@ type IDSweep struct {
 	lodestone   contract.LodestoneClient
 	tomestone   contract.TomestoneClient
 	census      *census.Service
+	queue       contract.Queue
 	logger      contract.Logger
 	rateLimiter contract.ProviderRateLimiter
 }
@@ -31,6 +32,7 @@ func NewIDSweep(
 	lodestone contract.LodestoneClient,
 	tomestone contract.TomestoneClient,
 	svc *census.Service,
+	q contract.Queue,
 	logger contract.Logger,
 	rateLimiter ...contract.ProviderRateLimiter,
 ) *IDSweep {
@@ -42,6 +44,7 @@ func NewIDSweep(
 		lodestone:   lodestone,
 		tomestone:   tomestone,
 		census:      svc,
+		queue:       q,
 		logger:      loggerOrDiscard(logger),
 		rateLimiter: rl,
 	}
@@ -82,7 +85,13 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				if tChar.FreeCompanyID != nil {
 					fcID = *tChar.FreeCompanyID
 				}
-				next = append(next, BuildDependentCharacterJobs(tChar.ID, fcID)...)
+				jobs := BuildDependentCharacterJobs(tChar.ID, fcID)
+				if h.queue != nil && len(jobs) > 0 {
+					if _, qerr := h.queue.Publish(ctx, jobs...); qerr != nil {
+						h.logger.ErrorContext(ctx, "handler.id_sweep.publish_downstream_error", slog.Uint64("character_id", uint64(id)), slog.Any("error", qerr))
+					}
+				}
+				next = append(next, jobs...)
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
 				return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, err)
@@ -97,7 +106,13 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 				}
 				h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-				next = append(next, BuildDependentCharacterJobs(lChar.ID, lChar.FreeCompanyID)...)
+				jobs := BuildDependentCharacterJobs(lChar.ID, lChar.FreeCompanyID)
+				if h.queue != nil && len(jobs) > 0 {
+					if _, qerr := h.queue.Publish(ctx, jobs...); qerr != nil {
+						h.logger.ErrorContext(ctx, "handler.id_sweep.publish_downstream_error", slog.Uint64("character_id", uint64(id)), slog.Any("error", qerr))
+					}
+				}
+				next = append(next, jobs...)
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", err))
 				return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, err)
@@ -121,7 +136,13 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 					}
 					h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-					next = append(next, BuildDependentCharacterJobs(lChar.ID, lChar.FreeCompanyID)...)
+					jobs := BuildDependentCharacterJobs(lChar.ID, lChar.FreeCompanyID)
+					if h.queue != nil && len(jobs) > 0 {
+						if _, qerr := h.queue.Publish(ctx, jobs...); qerr != nil {
+							h.logger.ErrorContext(ctx, "handler.id_sweep.publish_downstream_error", slog.Uint64("character_id", uint64(id)), slog.Any("error", qerr))
+						}
+					}
+					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
 					if tomestoneAvail {
 						tChar, terr := h.tomestone.FetchCharacterProfile(ctx, id, false)
@@ -135,7 +156,13 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 							if tChar.FreeCompanyID != nil {
 								fcID = *tChar.FreeCompanyID
 							}
-							next = append(next, BuildDependentCharacterJobs(tChar.ID, fcID)...)
+							jobs := BuildDependentCharacterJobs(tChar.ID, fcID)
+							if h.queue != nil && len(jobs) > 0 {
+								if _, qerr := h.queue.Publish(ctx, jobs...); qerr != nil {
+									h.logger.ErrorContext(ctx, "handler.id_sweep.publish_downstream_error", slog.Uint64("character_id", uint64(id)), slog.Any("error", qerr))
+								}
+							}
+							next = append(next, jobs...)
 						} else if errors.Is(terr, contract.ErrCharacterNotFound) {
 							h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.String("status", "not_found"))
 						} else {
@@ -159,7 +186,13 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 							if tChar.FreeCompanyID != nil {
 								fcID = *tChar.FreeCompanyID
 							}
-							next = append(next, BuildDependentCharacterJobs(tChar.ID, fcID)...)
+							jobs := BuildDependentCharacterJobs(tChar.ID, fcID)
+							if h.queue != nil && len(jobs) > 0 {
+								if _, qerr := h.queue.Publish(ctx, jobs...); qerr != nil {
+									h.logger.ErrorContext(ctx, "handler.id_sweep.publish_downstream_error", slog.Uint64("character_id", uint64(id)), slog.Any("error", qerr))
+								}
+							}
+							next = append(next, jobs...)
 						} else if errors.Is(terr, contract.ErrCharacterNotFound) {
 							h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)), slog.Any("lodestone_error", err))
 							return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone error (%v), retrying on lodestone", id, err)
@@ -185,7 +218,13 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					if tChar.FreeCompanyID != nil {
 						fcID = *tChar.FreeCompanyID
 					}
-					next = append(next, BuildDependentCharacterJobs(tChar.ID, fcID)...)
+					jobs := BuildDependentCharacterJobs(tChar.ID, fcID)
+					if h.queue != nil && len(jobs) > 0 {
+						if _, qerr := h.queue.Publish(ctx, jobs...); qerr != nil {
+							h.logger.ErrorContext(ctx, "handler.id_sweep.publish_downstream_error", slog.Uint64("character_id", uint64(id)), slog.Any("error", qerr))
+						}
+					}
+					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
 					h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)))
 					return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone currently paused/unavailable, retrying on lodestone", id)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
+	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	mocktomestone "github.com/mihaiflorentin88/ffxiv-census/mock/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -24,7 +26,7 @@ func newTestIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mockrepo.Char
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, nil, svc, nil), ls, chars
+	return NewIDSweep(ls, nil, svc, nil, nil), ls, chars
 }
 
 func newTestDualIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomestone.Fake, *mockrepo.CharacterRepository) {
@@ -33,7 +35,7 @@ func newTestDualIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomes
 	ts := mocktomestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, ts, svc, nil), ls, ts, chars
+	return NewIDSweep(ls, ts, svc, nil, nil), ls, ts, chars
 }
 
 func newTestDualIDSweepWithLimiter(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomestone.Fake, *mock.ProviderRateLimiter, *mockrepo.CharacterRepository) {
@@ -43,7 +45,7 @@ func newTestDualIDSweepWithLimiter(t *testing.T) (*IDSweep, *mocklodestone.Fake,
 	limiter := mock.NewProviderRateLimiter()
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	return NewIDSweep(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
+	return NewIDSweep(ls, ts, svc, nil, nil, limiter), ls, ts, limiter, chars
 }
 
 func idsweepPayload(from, to uint32) []byte {
@@ -422,7 +424,7 @@ func TestIDSweep_NilTomestoneClient_ExplicitTomestoneSource(t *testing.T) {
 func TestIDSweep_NilClients_Error(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
-	h := NewIDSweep(nil, nil, svc, nil)
+	h := NewIDSweep(nil, nil, svc, nil, nil)
 
 	payload, _ := json.Marshal(IDSweepPayload{
 		From:   100,
@@ -440,7 +442,7 @@ func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	ts := mocktomestone.NewFake()
-	h := NewIDSweep(nil, ts, svc, nil)
+	h := NewIDSweep(nil, ts, svc, nil, nil)
 
 	payload, _ := json.Marshal(IDSweepPayload{
 		From:   100,
@@ -454,6 +456,38 @@ func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "lodestone client unconfigured") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestIDSweep_PublishesDownstreamJobsImmediately(t *testing.T) {
+	ls := mocklodestone.NewFake()
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	q := mockqueue.NewFake()
+
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return &godestone.Character{
+			ID:            id,
+			Name:          "Immediate Hero",
+			World:         "Ultros",
+			DC:            "Primal",
+			FreeCompanyID: fmt.Sprintf("fc-%d", id),
+		}, nil
+	}
+
+	h := NewIDSweep(ls, nil, svc, q, nil)
+
+	next, err := h.Handle(context.Background(), idsweepPayload(1, 2))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 4 {
+		t.Fatalf("expected 4 returned jobs (2 ach + 2 fc), got %d", len(next))
+	}
+
+	depth, _ := q.Depth(context.Background())
+	if depth[contract.QueueJobPending] != 4 {
+		t.Fatalf("expected 4 jobs immediately published to queue, got %d", depth[contract.QueueJobPending])
 	}
 }
 

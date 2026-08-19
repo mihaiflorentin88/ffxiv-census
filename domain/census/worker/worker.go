@@ -165,11 +165,9 @@ func (w *Worker) runDispatcher(
 	defer close(jobCh)
 
 	// Calculate category ceilings
-	maxPrimary := concurrency
 	maxRetries := max(1, concurrency/4)
 	maxUpdates := max(1, concurrency/4)
 	maxSecondary := max(1, concurrency/4)
-
 	var primaryInFlight, updatesInFlight, retriesInFlight, secondaryInFlight int
 	lastCategoryIndex := 0
 
@@ -264,6 +262,18 @@ func (w *Worker) runDispatcher(
 			continue
 		}
 
+		hasOtherTypes := contains(availableTypes, handler.EventCharacterCensus) ||
+			contains(availableTypes, handler.EventAchievementCensus) ||
+			contains(availableTypes, handler.EventFreeCompanyCensus)
+
+		maxPrimary := concurrency
+		if hasOtherTypes {
+			maxPrimary = max(1, concurrency-maxUpdates-maxSecondary)
+			if updatesInFlight == 0 && secondaryInFlight == 0 {
+				maxPrimary = concurrency
+			}
+		}
+
 		claimedTotal := 0
 		categories := []jobCategory{catRetries, catUpdates, catSecondary, catPrimary}
 
@@ -274,22 +284,32 @@ func (w *Worker) runDispatcher(
 			case catRetries:
 				allowed := min(freeCapacity, maxRetries-retriesInFlight)
 				if allowed > 0 && len(availableTypes) > 0 {
-					jobs, err := w.queue.ClaimMultiple(ctx, availableTypes, allowed, contract.ClaimModeRetriesOnly)
-					if err != nil && ctx.Err() == nil {
-						w.logger.ErrorContext(ctx, "worker.claim_retries_error", slog.Any("error", err))
+					retryTypes := availableTypes
+					if primaryInFlight >= maxPrimary {
+						retryTypes = filterMatching(availableTypes, []string{
+							handler.EventCharacterCensus,
+							handler.EventFreeCompanyCensus,
+							handler.EventAchievementCensus,
+						})
 					}
-					for _, j := range jobs {
-						retriesInFlight++
-						freeCapacity--
-						claimedTotal++
-						select {
-						case jobCh <- j:
-						case <-ctx.Done():
-							return nil
+					if len(retryTypes) > 0 {
+						jobs, err := w.queue.ClaimMultiple(ctx, retryTypes, allowed, contract.ClaimModeRetriesOnly)
+						if err != nil && ctx.Err() == nil {
+							w.logger.ErrorContext(ctx, "worker.claim_retries_error", slog.Any("error", err))
 						}
-					}
-					if len(jobs) > 0 {
-						lastCategoryIndex = (lastCategoryIndex + step + 1) % len(categories)
+						for _, j := range jobs {
+							retriesInFlight++
+							freeCapacity--
+							claimedTotal++
+							select {
+							case jobCh <- j:
+							case <-ctx.Done():
+								return nil
+							}
+						}
+						if len(jobs) > 0 {
+							lastCategoryIndex = (lastCategoryIndex + step + 1) % len(categories)
+						}
 					}
 				}
 

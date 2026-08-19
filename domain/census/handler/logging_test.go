@@ -121,7 +121,7 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	var buf bytes.Buffer
-	h := NewIDSweep(ls, nil, svc, newBufLogger(&buf))
+	h := NewIDSweep(ls, nil, svc, nil, newBufLogger(&buf))
 
 	payload, _ := json.Marshal(IDSweepPayload{From: 9, To: 11})
 	if _, err := h.Handle(context.Background(), payload); err != nil {
