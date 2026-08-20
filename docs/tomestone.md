@@ -67,9 +67,14 @@ Tomestone.gg serves as the **primary provider for `id-sweep`** (character discov
 - When Lodestone is rate-limited, workers automatically switch dual-source queues (`id-sweep`, `character-census`) to Tomestone while pausing Lodestone-exclusive queues.
 ### Proxy-Aware Client
 
-`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a TomestoneClient that routes all requests through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`). Builds a proxy-aware HTTP transport (HTTP via `Transport.Proxy`, SOCKS via `Transport.DialContext`).
+`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a TomestoneClient that routes all requests through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`).
 
-Used by `consume --proxy` — each worker goroutine creates its own proxy-aware client instance.
+**Protocol support:**
+- **HTTP/HTTPS**: Uses `http.Transport.Proxy` for standard HTTP proxy tunneling
+- **SOCKS4**: Uses `golang.org/x/net/proxy` to create a SOCKS dialer (same as SOCKS5 — the library handles the protocol difference)
+- **SOCKS5**: Uses `golang.org/x/net/proxy` to create a SOCKS dialer, wrapped in `http.Transport.DialContext`
+
+Used by `consume --proxy` — each worker goroutine creates its own proxy-aware client instance. The proxy consumer config `[proxy.consumer].request_timeout` overrides the base `[tomestone].timeout` for proxy-mode clients.
 
 ## Error Handling & Mapping
 

@@ -72,6 +72,18 @@ godestone hardcodes its user-agent (colly's `UserAgent(s.meta.UserAgentDesktop)`
 
 Used by `consume --proxy` — each worker goroutine creates its own proxy-aware client instance.
 
+### Godestone Fork
+
+The upstream godestone library doesn't support proxies. Our fork (`github.com/mihaiflorentin88/godestone/v2`) adds:
+
+- **`WithProxy(proxyURL)`** — functional option on `NewScraper` that stores the proxy URL
+- **`setCollectorProxy(c, proxyURL)`** — protocol-aware proxy injection:
+  - HTTP/HTTPS: uses colly's `SetProxy(proxyURL)`
+  - SOCKS4/SOCKS5: creates a dialer via `golang.org/x/net/proxy.FromURL()` and sets `http.Transport.DialContext`
+- **`AllowURLRevisit()`** on achievement, character, and classjob collectors — fixes a colly race condition where `URL already visited` errors occur when a scraper call times out and the caller retries with a fresh collector. Each `FetchCharacterAchievements` call creates a new collector, but colly's async mode can cause the first collector's goroutine to still be running when the retry starts, leading to URL hash collisions in the store.
+
+**Why AllowURLRevisit:** Colly tracks visited URLs in a per-collector store. When a request times out (10s), the caller creates a new collector for the retry. But the first collector's async goroutine may still be running — if it visits the same URL after the retry's collector has already visited it, colly returns `ErrAlreadyVisited`. Since each `FetchCharacterAchievements` call creates a fresh collector with no shared state, `AllowURLRevisit` is safe and prevents this race.
+
 ## Container wiring
 
 `container.Load.LodestoneClient()` lazily builds the adapter from `[lodestone]` config (which has defaults, so the accessor always works) and caches it. Like the other accessors, it degrades to a logged `nil` only if config is missing or construction fails.

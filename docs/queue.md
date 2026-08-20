@@ -150,6 +150,38 @@ CLI commands are available under `ffxiv-census queue`:
 - `ffxiv-census queue stats [--event-type TYPE] [--sample-limit N]` — prints ASCII table of queue status and lists sampled active, upcoming, and failed jobs.
 - `ffxiv-census queue retry-failed [--event-type TYPE] [--limit N]` — replays dead-letter failed jobs back to pending.
 - `ffxiv-census queue purge [--status done|failed|pending|claimed|all] [--older-than 24h] [--all]` — purges old or all jobs immediately.
+## Graceful Shutdown & Job Recovery
+
+### Shutdown Sequence
+
+On SIGTERM, the worker shutdown sequence is:
+
+1. **Stop claiming** — a `stopClaiming` context is canceled, causing all worker goroutines to stop claiming new jobs
+2. **Finish in-flight jobs** — the `childCtx` (used for handler execution) stays alive, so in-flight jobs continue processing
+3. **Retry/Complete with background context** — `queue.Retry` and `queue.Complete` use `context.Background()` to ensure jobs always return to the queue, even if the process context is canceled
+4. **Wait for all goroutines** — `wg.Wait()` blocks until all worker goroutines have finished their current jobs
+5. **Cleanup** — `defer cancel()` cleans up the childCtx
+
+**Why background context for retry/complete:** During shutdown, the process context is canceled. If retry/complete used the canceled context, the database call would fail and the job would stay stuck in `claimed` status — requiring the next pod startup's `ReclaimClaimed` to recover it. Using `context.Background()` ensures jobs always return to the queue immediately.
+
+**Why worker errors don't cancel other workers:** Previously, one failing worker goroutine would cancel the shared `childCtx`, killing ALL other workers' in-flight jobs. Now each worker exits independently and the WaitGroup waits for all to finish naturally.
+
+### ReclaimClaimed — Stuck Job Recovery
+
+When a worker starts (both `RunEvents` and `RunEventsWithProxy`), it calls `ReclaimClaimed` for each event type. This resets all `claimed` jobs back to `pending` status:
+
+```sql
+UPDATE queue_jobs SET status = 'pending', run_at = NOW(), claimed_at = NULL
+WHERE type = $1 AND status = 'claimed'
+```
+
+This handles the case where a pod crashes or is killed without graceful shutdown — jobs that were `claimed` by the dead pod are recovered and made available for other workers.
+
+**Why reclaim all claimed jobs, not just the dead pod's:** The reclaim doesn't filter by `claimed_at` or owner because the queue doesn't track which pod claimed which job. Reclaiming all claimed jobs is safe because:
+- If a job was claimed by a live pod, that pod will complete it normally (the reclaim only affects jobs that are still `claimed` when the new pod starts)
+- If a job was claimed by a dead pod, the reclaim recovers it
+- The `UNIQUE(type, payload_hash)` constraint prevents duplicate jobs from being created
+
 ## Container wiring
 
 `container.Load.Queue()` lazily builds the adapter on top of the PostgreSQL driver (which self-migrates on first use) and caches it. Like `Postgres()`, it degrades to a logged `nil` if the driver or `[queue]` config is unavailable.

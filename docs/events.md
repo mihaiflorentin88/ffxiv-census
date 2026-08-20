@@ -70,6 +70,16 @@ Both `id-sweep` and `character-census` are dual-source events, but they use diff
 One worker goroutine blocks during the wait. With the default `concurrency=4`, the other 3 goroutines continue processing. Kubernetes' 180s termination grace period covers extended Lodestone cooldowns.
 
 Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other client entirely.
+
+### Proxy Mode Behavior
+
+When `consume --proxy` is used, the event pipeline runs through proxy-aware clients:
+
+- **`id-sweep` in proxy mode**: Lodestone is the primary provider (not Tomestone). Proxies bypass Lodestone's per-IP rate limit, so the faster Tomestone-first strategy is unnecessary. Tomestone is used only as a fallback when Lodestone returns an error.
+- **`achievement-census` / `fc-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting.
+- **Proxy rotation on failure**: If a proxy fails during any request (connection refused, timeout, host unreachable), the worker immediately marks it as failed and acquires a fresh proxy from the pool. This ensures workers quickly rotate through bad proxies.
+- **Per-goroutine isolation**: Each goroutine has its own proxy, its own LodestoneClient, its own TomestoneClient, and its own rate limiter. No shared state between goroutines.
+
 ## CLI
 
 ```bash

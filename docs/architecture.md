@@ -67,7 +67,9 @@ Durable async work lives in the PostgreSQL datastore (`queue_jobs` table) with a
 
 The queue adapter is resolved via `container.Load.Queue()`.
 
-**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. If a proxy's ownership changes (`CanUse()` returns false), the goroutine acquires a new proxy and retries the job in-place. See [docs/proxy.md](proxy.md) for details.
+**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy. This ensures workers quickly rotate through bad proxies until they find working ones from the scan pool. See [docs/proxy.md](proxy.md) for the full design.
+
+**Graceful Shutdown:** On SIGTERM, workers stop claiming new jobs but in-flight jobs continue processing with a live context. Failed jobs during shutdown are retried via `context.Background()` to prevent them from staying stuck in `claimed` status. Worker errors don't cancel other workers' in-flight jobs — each goroutine exits independently.
 ## Future Hooks
 
 - Add domain service constructors under `container/domain.go` to keep wiring explicit.

@@ -25,4 +25,9 @@ container.Load = serviceContainer
 
 Previous versions used MySQL, then SQLite. The project now runs on PostgreSQL. The container exposes both `Postgres()` and a `SQLite()` compatibility alias that delegates to `Database()`. The PostgreSQL driver handles migrations automatically on first access — see [docs/external-postgres.md](external-postgres.md) for details.
 
-**Proxy accessors:** `ProxyRepository()` returns the proxy persistence layer. `ProxyHub(owner)` creates a per-goroutine proxy acquisition hub. `ProxyScrapeProvider()` and `GeonodeProvider()` return proxy discovery providers. `ProxyChecker()` returns the proxy health checker.
+**Proxy accessors:**
+- `ProxyRepository()` — proxy persistence layer (`contract.ProxyRepository`)
+- `ProxyHub(owner)` — creates a per-goroutine proxy acquisition hub. Reads lock TTL from `[proxy.consumer].lock_ttl` config. Each call creates a new instance (not cached) since different owners need different hubs
+- `ProxyCensusHandlers(lodestone, tomestone, rateLimiter)` — handler registry wired to proxy-aware clients. Used by `consume --proxy` — each goroutine creates its own handlers with its own proxy-aware clients
+- `ProxyScrapeProvider()` / `GeonodeProvider()` — proxy discovery providers
+- `ProxyChecker()` — proxy health checker (HTTP/SOCKS GET to Lodestone)
