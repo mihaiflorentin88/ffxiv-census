@@ -185,7 +185,7 @@ workers:
         - -c
         - "30"
     - name: census-proxy
-      replicaCount: 3
+      replicaCount: 2
       command:
         - /app/ffxiv-census
         - consume
@@ -260,7 +260,7 @@ cronjobs:
         - proxy
         - discover
     - name: proxy-scan
-      schedule: "*/10 * * * *"
+      schedule: "*/20 * * * *"
       command:
         - /app/ffxiv-census
         - proxy
