@@ -144,16 +144,28 @@ type ProxyConsumerConfig struct {
 }
 
 type ProxyProviderConfig struct {
-	ProxyScrape    bool   `mapstructure:"proxyscrape"`
-	ProxyScrapeURL string `mapstructure:"proxyscrape_url"`
-	Geonode        bool   `mapstructure:"geonode"`
-	GeonodeURL     string `mapstructure:"geonode_url"`
-	PubProxy       bool   `mapstructure:"pubproxy"`
-	PubProxyURL    string `mapstructure:"pubproxy_url"`
-	Proxifly       bool   `mapstructure:"proxifly"`
-	ProxiflyURL    string `mapstructure:"proxifly_url"`
-	TheSpeedX      bool   `mapstructure:"thespeedx"`
-	TheSpeedXURL   string `mapstructure:"thespeedx_url"`
+	ProxyScrape      bool   `mapstructure:"proxyscrape"`
+	ProxyScrapeURL   string `mapstructure:"proxyscrape_url"`
+	Geonode          bool   `mapstructure:"geonode"`
+	GeonodeURL       string `mapstructure:"geonode_url"`
+	PubProxy         bool   `mapstructure:"pubproxy"`
+	PubProxyURL      string `mapstructure:"pubproxy_url"`
+	Proxifly         bool   `mapstructure:"proxifly"`
+	ProxiflyURL      string `mapstructure:"proxifly_url"`
+	TheSpeedX        bool   `mapstructure:"thespeedx"`
+	TheSpeedXURL     string `mapstructure:"thespeedx_url"`
+	Monosans         bool   `mapstructure:"monosans"`
+	MonosansURL      string `mapstructure:"monosans_url"`
+	Gfpcom           bool   `mapstructure:"gfpcom"`
+	GfpcomURL        string `mapstructure:"gfpcom_url"`
+	Thordata         bool   `mapstructure:"thordata"`
+	ThordataURL      string `mapstructure:"thordata_url"`
+	Hproxy           bool   `mapstructure:"hproxy"`
+	HproxyURL        string `mapstructure:"hproxy_url"`
+	Sage520          bool   `mapstructure:"sage520"`
+	Sage520URL       string `mapstructure:"sage520_url"`
+	ErcinDedeoglu    bool   `mapstructure:"ercindedeoglu"`
+	ErcinDedeogluURL string `mapstructure:"ercindedeoglu_url"`
 }
 
 func loadDotEnv() {

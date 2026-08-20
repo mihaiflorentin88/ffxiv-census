@@ -185,7 +185,7 @@ workers:
         - -c
         - "30"
     - name: census-proxy
-      replicaCount: 2
+      replicaCount: 3
       command:
         - /app/ffxiv-census
         - consume

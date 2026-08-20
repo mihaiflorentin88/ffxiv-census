@@ -109,6 +109,24 @@ func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 	if p := s.TheSpeedXProvider(); p != nil {
 		providers = append(providers, p)
 	}
+	if p := s.MonosansProvider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.GfpcomProvider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.ThordataProvider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.HproxyProvider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.Sage520Provider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.ErcinDedeogluProvider(); p != nil {
+		providers = append(providers, p)
+	}
 	if len(providers) == 0 {
 		logging.Warn("container.proxy_service", "no proxy providers configured")
 	}

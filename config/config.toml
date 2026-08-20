@@ -68,6 +68,18 @@ proxifly         = true
 proxifly_url     = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols"
 thespeedx        = true
 thespeedx_url    = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master"
+monosans         = true
+monosans_url     = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies"
+gfpcom           = true
+gfpcom_url       = "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists"
+thordata         = true
+thordata_url     = "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies"
+hproxy           = true
+hproxy_url       = "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main"
+sage520          = true
+sage520_url      = "https://raw.githubusercontent.com/Sage520/Proxy-List/main"
+ercindedeoglu    = true
+ercindedeoglu_url = "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies"
 
 [proxy.consumer]
 lock_ttl              = "5m"

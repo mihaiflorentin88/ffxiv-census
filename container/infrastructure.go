@@ -45,6 +45,12 @@ type InfrastructureContainer struct {
 	pubProxyProvider      contract.ProxyProvider
 	proxiflyProvider      contract.ProxyProvider
 	theSpeedXProvider     contract.ProxyProvider
+	monosansProvider      contract.ProxyProvider
+	gfpcomProvider        contract.ProxyProvider
+	thordataProvider      contract.ProxyProvider
+	hproxyProvider        contract.ProxyProvider
+	sage520Provider       contract.ProxyProvider
+	ercindedeogluProvider contract.ProxyProvider
 }
 
 // Logger returns the process-wide structured logger (infrastructure/logging.Logger)
@@ -391,6 +397,117 @@ func (s *ServiceContainer) TheSpeedXProvider() contract.ProxyProvider {
 		"socks5": base + "/socks5.txt",
 	})
 	return s.infrastructure.theSpeedXProvider
+}
+
+func (s *ServiceContainer) MonosansProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.monosansProvider != nil {
+		return s.infrastructure.monosansProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Monosans {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.MonosansURL, "/")
+	s.infrastructure.monosansProvider = textproxy.New(s.HTTPClient(), "monosans", map[string]string{
+		"http":   base + "/http.txt",
+		"socks4": base + "/socks4.txt",
+		"socks5": base + "/socks5.txt",
+	})
+	return s.infrastructure.monosansProvider
+}
+
+func (s *ServiceContainer) GfpcomProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.gfpcomProvider != nil {
+		return s.infrastructure.gfpcomProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Gfpcom {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.GfpcomURL, "/")
+	s.infrastructure.gfpcomProvider = textproxy.New(s.HTTPClient(), "gfpcom", map[string]string{
+		"http":   base + "/http.txt",
+		"socks4": base + "/socks4.txt",
+		"socks5": base + "/socks5.txt",
+	})
+	return s.infrastructure.gfpcomProvider
+}
+
+func (s *ServiceContainer) ThordataProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.thordataProvider != nil {
+		return s.infrastructure.thordataProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Thordata {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.ThordataURL, "/")
+	s.infrastructure.thordataProvider = textproxy.New(s.HTTPClient(), "thordata", map[string]string{
+		"http": base + "/http.txt",
+	})
+	return s.infrastructure.thordataProvider
+}
+
+func (s *ServiceContainer) HproxyProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.hproxyProvider != nil {
+		return s.infrastructure.hproxyProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Hproxy {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.HproxyURL, "/")
+	s.infrastructure.hproxyProvider = textproxy.New(s.HTTPClient(), "hproxy", map[string]string{
+		"http":   base + "/http.txt",
+		"socks4": base + "/socks4.txt",
+		"socks5": base + "/socks5.txt",
+	})
+	return s.infrastructure.hproxyProvider
+}
+
+func (s *ServiceContainer) Sage520Provider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.sage520Provider != nil {
+		return s.infrastructure.sage520Provider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Sage520 {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.Sage520URL, "/")
+	s.infrastructure.sage520Provider = textproxy.New(s.HTTPClient(), "sage520", map[string]string{
+		"http":   base + "/http.txt",
+		"socks4": base + "/socks4.txt",
+		"socks5": base + "/socks5.txt",
+	})
+	return s.infrastructure.sage520Provider
+}
+
+func (s *ServiceContainer) ErcinDedeogluProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.ercindedeogluProvider != nil {
+		return s.infrastructure.ercindedeogluProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.ErcinDedeoglu {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.ErcinDedeogluURL, "/")
+	s.infrastructure.ercindedeogluProvider = textproxy.New(s.HTTPClient(), "ercindedeoglu", map[string]string{
+		"http":   base + "/http.txt",
+		"socks5": base + "/socks5.txt",
+	})
+	return s.infrastructure.ercindedeogluProvider
 }
 
 // ProxyHub creates a ProxyHub for the given owner (process name + goroutine ID).
