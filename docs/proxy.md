@@ -177,7 +177,8 @@ The `consume` command supports a `--proxy` flag for per-goroutine proxy isolatio
 1. **Recently alive** — proxies confirmed alive within the last hour (`last_alive_at >= NOW() - 1h`) are preferred
 2. **Highest uptime** — ordered by `uptime_percent DESC NULLS LAST`
 3. **Lowest latency** — tiebreaker by `latency_ms ASC NULLS LAST`
-4. **Fallback** — if no recently-scanned proxy is available, any active proxy is returned
+4. **Lowest failure count** — final tiebreaker by `fail_count ASC`
+5. **Fallback** — if no recently-scanned proxy is available, any active proxy is returned
 
 This ensures workers get the most reliable proxies from the scan pool. The scan (`proxy scan`) tests proxies against the Lodestone URL and updates `last_alive_at`, `latency_ms`, and `status` — so the ClaimProxy query always has fresh data.
 

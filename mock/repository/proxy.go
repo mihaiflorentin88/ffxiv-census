@@ -219,6 +219,11 @@ func (f *FakeProxyRepository) ClaimProxy(_ context.Context, owner string, lockTT
 		// Same uptime: prefer lower latency
 		if latencyOrMax(p) < latencyOrMax(*best) {
 			best = &p
+			continue
+		}
+		// Same latency: prefer lower fail count
+		if latencyOrMax(p) == latencyOrMax(*best) && p.FailCount < best.FailCount {
+			best = &p
 		}
 	}
 	if best == nil {
