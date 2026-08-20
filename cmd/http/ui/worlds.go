@@ -50,10 +50,13 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 		} else {
 			for _, row := range breakdown {
 				wName := row.Key
+				if wName == "" {
+					continue // skip characters with no world assigned
+				}
 				wDC := WorldToDC(wName)
 				wReg := census.RegionForDatacenter(wDC)
 				if wReg == "" {
-					wReg = "Unknown"
+					continue // skip worlds not mapped to a known region
 				}
 
 				regionSet[wReg] = true
