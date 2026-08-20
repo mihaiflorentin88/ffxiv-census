@@ -21,7 +21,7 @@ make fmt                     # gofmt
 
 ## Architecture
 
-**Hexagonal (ports & adapters) with service locator:**
+**Hexagonal (ports &amp; adapters) with service locator:**
 
 - `port/contract` — all interfaces (MySQLDriver, Queue, LodestoneClient, etc.)
 - `domain/` — pure business logic, tech-agnostic, never imports infrastructure
@@ -58,13 +58,14 @@ Manual ops: `./bin/ffxiv-census migrate --direction down` rolls back all migrati
 ## Documentation
 
 Detailed architecture and operational guides are maintained under `docs/`:
-- Overview & Quickstart: `README.md` and `docs/getting-started.md`
-- System Architecture & Locator: `docs/architecture.md` and `docs/container.md`
-- Database & Migrations: `docs/sqlite.md` and `docs/census.md`
-- Queue & Worker Engine: `docs/queue.md` and `docs/events.md`
+
+- Overview &amp; Quickstart: `README.md` and `docs/getting-started.md`
+- System Architecture &amp; Locator: `docs/architecture.md` and `docs/container.md`
+- Database &amp; Migrations: `docs/sqlite.md` and `docs/census.md`
+- Queue &amp; Worker Engine: `docs/queue.md` and `docs/events.md`
 - Point-in-Time Backups: `docs/backup.md`
 - External Adapters: `docs/lodestone.md` and `docs/tomestone.md`
-- HTTP REST APIs & Metrics: `docs/http-api.md`, `docs/metrics.md`, and `docs/logging-and-middleware.md`
+- HTTP REST APIs &amp; Metrics: `docs/http-api.md`, `docs/metrics.md`, and `docs/logging-and-middleware.md`
 - Web Interface: `docs/ui.md`
 
 Specs and implementation plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/`. When adding features or changing behavior, always keep documentation in sync with code.
@@ -77,7 +78,5 @@ Server-rendered Go templates + HTMX in `cmd/http/ui/` (embedded via `//go:embed`
 - **Specs/plans live in `docs/superpowers/`** — always create the plan file in `docs/superpowers/plans/` (design spec → implementation plan → code)
 - **Commit and push** — always commit all changes (code, tests, plans, specs) and push to remote on completion
 - **Commit skills artifacts** (`.agents/`, `.claude/`, `skills-lock.json`) — they're project-local skill installs
-## Subagent Delegation
-
-- **Always delegate data-gathering** — file reading, broad codebase exploration, web searches, and MCP queries must be delegated to `scout` / `librarian` subagents running a tiny LM Studio model via `task` to conserve main model tokens.
 - **Main model responsibilities** — code edits, mechanical formatting, architectural decisions, planning, implementation, and test suites are handled directly by the main model.
+
