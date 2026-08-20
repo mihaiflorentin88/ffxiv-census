@@ -10,6 +10,7 @@ import (
 
 	xproxy "golang.org/x/net/proxy"
 
+	_ "github.com/bdandy/go-socks4" // register socks4 scheme with golang.org/x/net/proxy
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 

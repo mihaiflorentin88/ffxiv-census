@@ -18,6 +18,7 @@ import (
 	xproxy "golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 
+	_ "github.com/bdandy/go-socks4" // register socks4 scheme with golang.org/x/net/proxy
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -137,13 +138,13 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		}
 		transport = &http.Transport{DialContext: ctxDialer.DialContext}
 	case "socks4":
-		// socks4 uses the same dialer as socks5 via golang.org/x/net/proxy.
 		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
 		if derr != nil {
 			return nil, fmt.Errorf("create socks4 dialer: %w", derr)
 		}
 		ctxDialer, ok := dialer.(xproxy.ContextDialer)
 		if !ok {
+			// go-socks4 dialer doesn't implement ContextDialer; wrap plain Dialer.
 			transport = &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 					return dialer.Dial(network, addr)

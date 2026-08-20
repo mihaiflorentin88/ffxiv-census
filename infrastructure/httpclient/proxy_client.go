@@ -10,6 +10,7 @@ import (
 
 	xproxy "golang.org/x/net/proxy"
 
+	_ "github.com/bdandy/go-socks4" // register socks4 scheme with golang.org/x/net/proxy
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -45,9 +46,21 @@ func NewProxyClient(proxyAddr string, timeout time.Duration) (contract.HTTPClien
 			DialContext: ctxDialer.DialContext,
 		}
 	case "socks4":
-		// SOCKS4 is not supported by golang.org/x/net/proxy.
-		// Use SOCKS5 or HTTP/HTTPS proxies instead.
-		return nil, fmt.Errorf("socks4 proxy not supported (use socks5 or http/https)")
+		dialer, err := xproxy.FromURL(u, xproxy.Direct)
+		if err != nil {
+			return nil, fmt.Errorf("create socks4 dialer: %w", err)
+		}
+		ctxDialer, ok := dialer.(xproxy.ContextDialer)
+		if !ok {
+			// go-socks4 dialer doesn't implement ContextDialer; wrap plain Dialer.
+			transport = &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				},
+			}
+		} else {
+			transport = &http.Transport{DialContext: ctxDialer.DialContext}
+		}
 	default:
 		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
 	}

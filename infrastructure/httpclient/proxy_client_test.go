@@ -36,9 +36,12 @@ func TestNewProxyClient_SOCKS5Proxy(t *testing.T) {
 }
 
 func TestNewProxyClient_SOCKS4Proxy(t *testing.T) {
-	_, err := NewProxyClient("socks4://1.2.3.4:1080", 10*time.Second)
-	if err == nil {
-		t.Fatal("expected error for socks4 (not supported by golang.org/x/net/proxy)")
+	c, err := NewProxyClient("socks4://1.2.3.4:1080", 10*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected client, got nil")
 	}
 }
 
