@@ -1,6 +1,6 @@
-# SQLite-backed Work Queue
+# PostgreSQL-backed Work Queue
 
-ffxiv-census runs its durable async work queue in the **same SQLite datastore** as application data. There is no separate queue process: the `queue_jobs` table (applied by goose migration `00002`) holds jobs, and consumers claim them with a single atomic `UPDATE`.
+ffxiv-census runs its durable async work queue in the **same PostgreSQL datastore** as application data. There is no separate queue process: the `queue_jobs` table (applied by goose migration `00002`) holds jobs, and consumers claim them with a single atomic `UPDATE`.
 
 ## Lifecycle
 
@@ -20,7 +20,7 @@ pending -> claimed -> done (completed_at set)
 - **PurgeJobs** deletes completed or failed jobs older than a specified duration.
 ## Atomic claim (multi-pod safe)
 
-Claiming is a single `UPDATE ... WHERE id IN (SELECT ... WHERE status = 'pending') ... RETURNING`. SQLite serialises writers with a file-level lock, and the subquery re-evaluates `status = 'pending'` under that lock, so concurrent consumers (multiple processes, multiple goroutines) can never double-deliver the same job. The driver's `busy_timeout` pragma absorbs contention while waiting for the write lock. Claim order is `run_at, id`, so older due jobs win.
+Claiming is a single `UPDATE ... WHERE id IN (SELECT ... WHERE status = 'pending') ... RETURNING`. PostgreSQL serialises writers with row-level locks, and the subquery re-evaluates `status = 'pending'` under that lock, so concurrent consumers (multiple processes, multiple goroutines) can never double-deliver the same job. PostgreSQL's lock queue handles contention while waiting for the write lock. Claim order is `run_at, id`, so older due jobs win.
 
 ## Deduplication
 
@@ -29,7 +29,7 @@ Claiming is a single `UPDATE ... WHERE id IN (SELECT ... WHERE status = 'pending
 ## Jittered Exponential Backoff & Infinite Retries
 
 - **Exponential Backoff with Jitter**: When a job is retried, its `run_at` delay is computed as `backoff = min(base * 2^(attempts-1), max_cap) * jitter`, where `jitter` is `[0.9, 1.2]`. This prevents thundering herds when external services recover.
-- **Infinite Retry (`max_attempts = 0`)**: For critical tasks like `id-sweep`, setting `MaxAttempts = 0` configures infinite retries—jobs will back off slower on failure, record incrementing attempts and error messages in SQLite, and never transition to `failed`.
+- **Infinite Retry (`max_attempts = 0`)**: For critical tasks like `id-sweep`, setting `MaxAttempts = 0` configures infinite retries—jobs will back off slower on failure, record incrementing attempts and error messages in PostgreSQL, and never transition to `failed`.
 
 ## Multi-Queue Consumption & Rate-Limit Pausing
 
@@ -87,7 +87,7 @@ Each goroutine runs a 3-step claim loop on every poll cycle:
 
 ### Job Chaining
 
-Handlers return downstream jobs in the `next` slice. The worker's `Complete(id, next...)` publishes them atomically in the same SQLite transaction. No eager `Publish` calls are made from handlers — this prevents double-enqueue and ensures exactly-once downstream delivery.
+Handlers return downstream jobs in the `next` slice. The worker's `Complete(id, next...)` publishes them atomically in the same PostgreSQL transaction. No eager `Publish` calls are made from handlers — this prevents double-enqueue and ensures exactly-once downstream delivery.
 
 ```toml
 [queue]
@@ -102,11 +102,11 @@ backoff_base_seconds = 5
 | `max_attempts`       | Default for jobs published without an explicit `MaxAttempts`.  |
 | `backoff_base_seconds` | Base duration for the exponential retry backoff.             |
 
-Environment overrides work like `[sqlite]`: dots become underscores and the section name is the prefix — e.g. `QUEUE_MAX_ATTEMPTS=3`, `QUEUE_CLAIM_BATCH_SIZE=10`, `QUEUE_BACKOFF_BASE_SECONDS=30`.
+Environment overrides work like `[postgres]`: dots become underscores and the section name is the prefix — e.g. `QUEUE_MAX_ATTEMPTS=3`, `QUEUE_CLAIM_BATCH_SIZE=10`, `QUEUE_BACKOFF_BASE_SECONDS=30`.
 
 ## Contract
 
-`port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/queue` (SQLite) and `mock/queue` (in-memory fake for tests). The job type lives in `contract` because Go's internal-package rule would block `port/contract`, `infrastructure/queue`, and `mock/queue` from importing `port/dto/internal`.
+`port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/queue` (PostgreSQL) and `mock/queue` (in-memory fake for tests). The job type lives in `contract` because Go's internal-package rule would block `port/contract`, `infrastructure/queue`, and `mock/queue` from importing `port/dto/internal`.
 
 ## Consumer pattern
 
@@ -152,7 +152,7 @@ CLI commands are available under `ffxiv-census queue`:
 - `ffxiv-census queue purge [--status done|failed|pending|claimed|all] [--older-than 24h] [--all]` — purges old or all jobs immediately.
 ## Container wiring
 
-`container.Load.Queue()` lazily builds the adapter on top of the SQLite driver (which self-migrates on first use) and caches it. Like `SQLite()`, it degrades to a logged `nil` if the driver or `[queue]` config is unavailable.
+`container.Load.Queue()` lazily builds the adapter on top of the PostgreSQL driver (which self-migrates on first use) and caches it. Like `Postgres()`, it degrades to a logged `nil` if the driver or `[queue]` config is unavailable.
 
 ## Event Types
 

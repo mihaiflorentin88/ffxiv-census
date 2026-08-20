@@ -134,6 +134,13 @@ type ProxyConfig struct {
 	DeadScanIntervalDays int                 `mapstructure:"dead_scan_interval_days"`
 	FailCountThreshold   int                 `mapstructure:"fail_count_threshold"`
 	Providers            ProxyProviderConfig `mapstructure:"providers"`
+	Consumer             ProxyConsumerConfig `mapstructure:"consumer"`
+}
+
+type ProxyConsumerConfig struct {
+	LockTTL            string  `mapstructure:"lock_ttl"`
+	LodestoneRateLimit float64 `mapstructure:"lodestone_rate_limit"`
+	RequestTimeout     string  `mapstructure:"request_timeout"`
 }
 
 type ProxyProviderConfig struct {

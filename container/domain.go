@@ -25,7 +25,7 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	}
 	achievements := s.AchievementRepository()
 	if achievements == nil {
-		logging.Warn("container.census", "sqlite driver unavailable, census service disabled")
+		logging.Warn("container.census", "database driver unavailable, census service disabled")
 		return nil
 	}
 	svc := census.NewService(
@@ -63,7 +63,7 @@ func (s *ServiceContainer) CensusService() *census.Service {
 
 // Handlers returns a registry of ingest handlers, each wired to its
 // dependencies. Handlers are stateless, so a fresh registry per call is fine.
-// When the census service is unavailable (no SQLite), an empty registry is
+// When the census service is unavailable (no database), an empty registry is
 // returned and the worker reports "no handler registered" rather than panicking.
 func (s *ServiceContainer) Handlers() *handler.Registry {
 	reg := handler.NewRegistry()
@@ -129,5 +129,21 @@ func (s *ServiceContainer) ProxyHandlers() *proxyhandler.Registry {
 	}
 	reg.Register(proxyhandler.EventNewProxy, proxyhandler.NewNewProxy(svc, s.Logger()))
 	reg.Register(proxyhandler.EventScanProxy, proxyhandler.NewScanProxy(svc, s.Logger()))
+	return reg
+}
+
+// ProxyCensusHandlers returns a handler registry wired to proxy-aware Lodestone/Tomestone
+// clients. Used by proxy-mode consumer goroutines. The provided clients must route
+// ALL requests through a proxy.
+func (s *ServiceContainer) ProxyCensusHandlers(lodestoneClient contract.LodestoneClient, tomestoneClient contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry {
+	reg := handler.NewRegistry()
+	svc := s.CensusService()
+	if svc == nil {
+		return reg
+	}
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter).WithProxyMode())
+	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(lodestoneClient, svc, s.Logger(), rateLimiter))
+	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter))
+	reg.Register(handler.EventFreeCompanyCensus, handler.NewFreeCompanyCensus(lodestoneClient, svc, s.Logger(), rateLimiter))
 	return reg
 }

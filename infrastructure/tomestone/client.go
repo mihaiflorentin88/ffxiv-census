@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	xproxy "golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
@@ -70,6 +71,80 @@ func NewClient(cfg *config.TomestoneConfig, logger contract.Logger, rateLimiter 
 		baseURL:        baseURL,
 		apiToken:       strings.TrimSpace(cfg.APIToken),
 		httpClient:     &http.Client{Timeout: timeout},
+		limiter:        rate.NewLimiter(rate.Limit(r), 1),
+		configuredRate: r,
+		logger:         logger,
+		rateLimiter:    rl,
+	}, nil
+}
+
+// NewClientWithProxy creates a TomestoneClient that routes all requests
+// through the given proxy URL. The proxyURL must include the protocol
+// (http://, socks4://, socks5://).
+func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+	if cfg == nil {
+		return nil, errors.New("tomestone config is nil")
+	}
+	if proxyURL == "" {
+		return nil, errors.New("proxy URL is empty")
+	}
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
+	}
+	baseURL := strings.TrimRight(cfg.BaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://tomestone.gg"
+	}
+
+	timeout := 10 * time.Second
+	if cfg.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Timeout); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+
+	r := cfg.RateLimit
+	if r <= 0 {
+		r = 10.0
+	}
+	if r > maxSafeRate {
+		r = maxSafeRate
+	}
+
+	// Build proxy-aware HTTP transport.
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse proxy URL: %w", err)
+	}
+
+	var transport *http.Transport
+	switch u.Scheme {
+	case "http", "https":
+		transport = &http.Transport{Proxy: http.ProxyURL(u)}
+	case "socks5":
+		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
+		if derr != nil {
+			return nil, fmt.Errorf("create socks dialer: %w", derr)
+		}
+		ctxDialer, ok := dialer.(xproxy.ContextDialer)
+		if !ok {
+			return nil, fmt.Errorf("socks dialer does not support context")
+		}
+		transport = &http.Transport{DialContext: ctxDialer.DialContext}
+	case "socks4":
+		return nil, fmt.Errorf("socks4 proxy not supported (use socks5 or http/https)")
+	default:
+		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
+	}
+
+	return &Client{
+		baseURL:        baseURL,
+		apiToken:       strings.TrimSpace(cfg.APIToken),
+		httpClient:     &http.Client{Transport: transport, Timeout: timeout},
 		limiter:        rate.NewLimiter(rate.Limit(r), 1),
 		configuredRate: r,
 		logger:         logger,

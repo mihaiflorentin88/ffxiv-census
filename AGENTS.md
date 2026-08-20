@@ -23,7 +23,7 @@ make fmt                     # gofmt
 
 **Hexagonal (ports &amp; adapters) with service locator:**
 
-- `port/contract` — all interfaces (MySQLDriver, Queue, LodestoneClient, etc.)
+- `port/contract` — all interfaces (DatabaseDriver, Queue, LodestoneClient, etc.)
 - `domain/` — pure business logic, tech-agnostic, never imports infrastructure
 - `infrastructure/` — concrete adapters implementing port contracts
 - `container/` — service locator with global `container.Load`; lazy accessor pattern
@@ -31,18 +31,18 @@ make fmt                     # gofmt
 
 **Key patterns:**
 
-- Service locator resolves adapters via `container.Load.MySQL()`, `container.Load.Queue()`, etc. — not DI
+- Service locator resolves adapters via `container.Load.Postgres()`, `container.Load.Queue()`, etc. — not DI
 - Adapters implement interfaces from `port/contract`; domain depends only on contracts
 - `cmd/` constructs domain objects directly; everything else stays decoupled
-- Config embedded via `//go:embed config.toml` + Viper; env overrides: `SQLITE_PATH`, `LODESTONE_RATE_LIMIT` (dots and hyphens → underscores)
+- Config embedded via `//go:embed config.toml` + Viper; env overrides: `POSTGRES_DSN`, `LODESTONE_RATE_LIMIT` (dots and hyphens → underscores)
 
 ## Build Constraints
 
-Cross-compile targets use `CGO_ENABLED=0` (Makefile build-linux-amd64, etc.). **Do not use CGO-dependent libraries** (e.g., mattn/go-sqlite3). Use pure-Go alternatives (modernc.org/sqlite).
+Cross-compile targets use `CGO_ENABLED=0` (Makefile build-linux-amd64, etc.). **Do not use CGO-dependent libraries.** Use pure-Go alternatives where needed.
 
 ## Migrations
 
-**Runtime migrations:** `infrastructure/sqlite` driver runs `goose.Up()` on first `SQLite()` use. Every binary (server, workers) self-migrates at boot. No separate migration step needed.
+**Runtime migrations:** `infrastructure/postgres` driver runs `goose.Up()` on first `Postgres()` use. Every binary (server, workers) self-migrates at boot. No separate migration step needed.
 
 Manual ops: `./bin/ffxiv-census migrate --direction down` rolls back all migrations (destructive).
 
@@ -51,7 +51,7 @@ Manual ops: `./bin/ffxiv-census migrate --direction down` rolls back all migrati
 **Strict TDD required:** write failing test first, watch it fail, then minimal code to pass. No production code without a failing test. User will enforce this in reviews.
 
 - Every port gets a fake in `mock/` (two adapters per port rule)
-- SQLite tests use temp-file DBs (real SQL, not mocks)
+- Postgres tests use temp databases (real SQL, not mocks)
 - Worker pool tests: `go test -race`
 - Table-driven tests for handlers/domain services
 
@@ -61,9 +61,8 @@ Detailed architecture and operational guides are maintained under `docs/`:
 
 - Overview &amp; Quickstart: `README.md` and `docs/getting-started.md`
 - System Architecture &amp; Locator: `docs/architecture.md` and `docs/container.md`
-- Database &amp; Migrations: `docs/sqlite.md` and `docs/census.md`
+- Database &amp; Migrations: `docs/postgres.md`, `docs/external-postgres.md`, and `docs/census.md`
 - Queue &amp; Worker Engine: `docs/queue.md` and `docs/events.md`
-- Point-in-Time Backups: `docs/backup.md`
 - External Adapters: `docs/lodestone.md` and `docs/tomestone.md`
 - HTTP REST APIs &amp; Metrics: `docs/http-api.md`, `docs/metrics.md`, and `docs/logging-and-middleware.md`
 - Web Interface: `docs/ui.md`

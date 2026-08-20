@@ -63,6 +63,11 @@ proxyscrape_url = "https://api.proxyscrape.com/v4/free-proxy-list/get"
 geonode         = true
 geonode_url     = "https://proxylist.geonode.com/api/proxy-list"
 
+[proxy.consumer]
+lock_ttl              = "5m"
+lodestone_rate_limit  = 1.0
+request_timeout       = "30s"
+
 [census]
 activity_window_days = 30
 max_level = 100

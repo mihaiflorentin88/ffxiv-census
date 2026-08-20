@@ -1,6 +1,6 @@
 # Census Domain Model
 
-This document describes the census data model and the persistence layer that stores it. The census ingests FINAL FANTASY XIV character data scraped from The Lodestone and stores it in SQLite (the same single datastore that backs the queue — see `docs/sqlite.md` and `docs/queue.md`).
+This document describes the census data model and the persistence layer that stores it. The census ingests FINAL FANTASY XIV character data scraped from The Lodestone and stores it in PostgreSQL (the same single datastore that backs the queue — see `docs/external-postgres.md` and `docs/queue.md`).
 
 ## Tables
 
@@ -68,14 +68,14 @@ Default entries:
 | expansion_msq | 3496 | Dawntrail | In the Glow of a New Dawn |
 ## Repositories
 
-Four contracts in `port/contract`, each with a SQLite implementation in `infrastructure/sqlite/repository/` and an in-memory fake in `mock/repository/`:
+Four contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
 
 - **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `UpsertGear`, `GetGear`, `FindIDGaps`, `MarkDeleted`, `UpdateAchievementSummary`, `SetAchievementsPrivate`, `ListStale`, `List`, `Count`, `CountActive`, `Breakdown`, `NewPerDay`, `MaxID`. The complete persistence and query contract for character data.
 - **`FreeCompanyRepository`** — `Upsert`, `Get`.
 - **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones`, `ListCharacterMilestones`, `CountExpansions`, `CountExpansionsFiltered`, `NewCharactersPerDay`, `CountChocoboMilestones`.
 - **`CensusRunRepository`** — `Start`, `Finish`.
 
-Repositories are resolved via the service locator (`container.Load.CharacterRepository()`, etc.), which builds them from the shared `SQLiteDriver`.
+Repositories are resolved via the service locator (`container.Load.CharacterRepository()`, etc.), which builds them from the shared `DatabaseDriver`.
 
 ### CharacterFilter
 

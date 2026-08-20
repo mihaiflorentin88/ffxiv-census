@@ -130,3 +130,43 @@ The `proxy scan` command queries the database with priority ordering:
 3. **Dead** proxies not scanned in 3 days
 
 All matching proxies are published as individual `scan-proxy` events, processed FIFO by the consumer.
+
+## Census Consumer Integration
+
+The `consume` command supports a `--proxy` flag for per-goroutine proxy isolation:
+
+```bash
+# Standard mode (direct requests)
+./bin/ffxiv-census consume --concurrency 8
+
+# Proxy mode (each goroutine acquires its own proxy)
+./bin/ffxiv-census consume --proxy --concurrency 8
+```
+
+### How It Works
+
+1. Each worker goroutine calls `ProxyHub.NewProxy()` to acquire an available proxy from the database
+2. The proxy is locked to that goroutine (process name + goroutine ID)
+3. Proxy-aware Lodestone and Tomestone clients are created for that goroutine
+4. ALL requests route through the proxy — no direct requests
+5. If `CanUse()` returns false (ownership changed), the goroutine acquires a new proxy and retries the job in-place
+
+### Container Accessors
+
+- `container.Load.ProxyHub(owner)` — creates a ProxyHub for the given owner
+- `container.Load.ProxyCensusHandlers(lodestone, tomestone, rateLimiter)` — handler registry wired to proxy-aware clients
+
+### Configuration
+
+```toml
+[proxy.consumer]
+lock_ttl              = "5m"     # How long a goroutine holds a proxy lock
+lodestone_rate_limit  = 1.0     # Override Lodestone rate limit (req/s) in proxy mode
+request_timeout       = "30s"   # Override HTTP timeout for proxy-aware clients
+```
+
+| Field | Default | Env Override | Description |
+|-------|---------|-------------|-------------|
+| `lock_ttl` | `5m` | `PROXY_CONSUMER_LOCK_TTL` | Duration a goroutine holds exclusive proxy lock |
+| `lodestone_rate_limit` | `1.0` | `PROXY_CONSUMER_LODESTONE_RATE_LIMIT` | Lodestone rate limit override (req/s) |
+| `request_timeout` | `30s` | `PROXY_CONSUMER_REQUEST_TIMEOUT` | HTTP client timeout override |

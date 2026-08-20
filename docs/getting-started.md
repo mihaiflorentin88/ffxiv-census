@@ -8,7 +8,7 @@ Welcome! This guide walks through local development, configuration, and deployme
 - Make (optional but recommended)
 - Docker (for containerized builds)
 
-No external database is required. SQLite is embedded and the `data/` directory is created automatically on first run.
+A PostgreSQL database is required. See [External PostgreSQL](external-postgres.md) for setup instructions.
 
 ## Bootstrap
 
@@ -44,25 +44,27 @@ Override via environment variables using Viper's uppercase-dotted syntax:
 
 ```bash
 ./bin/ffxiv-census server --start --port 9090
-SQLITE_PATH=/var/lib/ffxiv-census/prod.db ./bin/ffxiv-census server --start
+POSTGRES_DSN=postgres://census:secret@localhost:5432/census?sslmode=disable ./bin/ffxiv-census server --start
 ```
 
 Clone or fork the repository at https://github.com/mihaiflorentin88/ffxiv-census.git before making changes.
 
-When you need infrastructure dependencies, resolve them through the service container instead of constructing adapters inline. HTTP handlers and CLI commands should ask for `container.Load.SQLite()` and pass the returned `port/contract` interfaces into domain code. See [docs/sqlite.md](sqlite.md) for details on the storage layer.
+When you need infrastructure dependencies, resolve them through the service container instead of constructing adapters inline. HTTP handlers and CLI commands should ask for `container.Load.Postgres()` and pass the returned `port/contract` interfaces into domain code. See [docs/external-postgres.md](external-postgres.md) for details on the storage layer.
 
 ## Project Layout
 
 ```
 ├── cmd
-│   ├── cli          # Cobra commands (server, migrate)
+│   ├── cli          # Cobra commands (server, migrate, export, queue, publish, tomestone, proxy, consume)
 │   └── http         # HTTP server, routes, middleware
 ├── config           # Viper-powered config loader + embedded defaults
 ├── container        # Service locator wiring (infrastructure + domain)
-├── data             # SQLite database (auto-created at runtime)
+├── data             # Runtime data directory
 ├── domain           # Business logic (behaviour-rich types)
+│   ├── census/      # Census bounded context (characters, achievements, FCs)
+│   └── proxy/       # Proxy pool bounded context (discovery, scanning, lifecycle)
 ├── docs             # Living documentation (update frequently!)
-├── infrastructure   # Adapters (logging, sqlite, metrics)
+├── infrastructure   # Adapters (logging, postgres, queue, lodestone, tomestone, proxy, metrics)
 ├── mock             # Test doubles for contracts
 ├── port             # Contracts and DTO definitions
 └── main.go          # Thin entrypoint bootstrapping the container then running the CLI
@@ -91,6 +93,16 @@ To produce a runtime image:
 make docker-image
 docker run --rm -p 8080:8080 ffxiv-census:latest
 ```
+
+### Proxy Mode
+
+The `consume` command supports a `--proxy` flag for per-goroutine proxy isolation:
+
+```bash
+./bin/ffxiv-census consume --proxy --concurrency 8
+```
+
+Each worker goroutine acquires its own proxy from the database pool and routes ALL requests through it. See [docs/proxy.md](proxy.md) for configuration.
 
 ## Next Steps
 

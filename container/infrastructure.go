@@ -18,6 +18,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxyscrape"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
+	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -332,4 +333,20 @@ func (s *ServiceContainer) GeonodeProvider() contract.ProxyProvider {
 	}
 	s.infrastructure.geonodeProvider = geonode.New(s.HTTPClient(), cfg.Providers.GeonodeURL)
 	return s.infrastructure.geonodeProvider
+}
+
+// ProxyHub creates a ProxyHub for the given owner (process name + goroutine ID).
+// The lock TTL is read from [proxy.consumer] config.
+func (s *ServiceContainer) ProxyHub(owner string) *proxydomain.ProxyHub {
+	repo := s.ProxyRepository()
+	if repo == nil {
+		return nil
+	}
+	lockTTL := 5 * time.Minute
+	if cfg := s.Config().Proxy; cfg != nil && cfg.Consumer.LockTTL != "" {
+		if d, err := time.ParseDuration(cfg.Consumer.LockTTL); err == nil && d > 0 {
+			lockTTL = d
+		}
+	}
+	return proxydomain.NewProxyHub(repo, lockTTL)
 }

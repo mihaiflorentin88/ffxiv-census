@@ -7,11 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"runtime/debug"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
+	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -364,4 +366,224 @@ func filterNotMatching(slice []string, excluded []string) []string {
 		}
 	}
 	return out
+}
+
+// RunEventsWithProxy runs the worker pool with per-goroutine proxy lifecycle.
+// Each goroutine acquires its own proxy from the ProxyHub, creates proxy-aware
+// clients, and uses them for all requests. If a proxy's ownership changes
+// (CanUse returns false), the goroutine acquires a new proxy and retries the
+// job in-place.
+func (w *Worker) RunEventsWithProxy(
+	ctx context.Context,
+	eventTypes []string,
+	concurrency int,
+	proxyHub *proxydomain.ProxyHub,
+	newHandlers func(lodestone contract.LodestoneClient, tomestone contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry,
+	newLodestoneClient func(proxyURL string) (contract.LodestoneClient, error),
+	newTomestoneClient func(proxyURL string) (contract.TomestoneClient, error),
+	newRateLimiter func() contract.ProviderRateLimiter,
+) error {
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+	if len(eventTypes) == 0 {
+		eventTypes = []string{
+			handler.EventIDSweep,
+			handler.EventCharacterCensus,
+			handler.EventAchievementCensus,
+			handler.EventFreeCompanyCensus,
+		}
+	}
+
+	w.logger.InfoContext(ctx, "worker.proxy_start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
+
+	childCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stopClaiming, stopClaimingCancel := context.WithCancel(context.Background())
+	defer stopClaimingCancel()
+
+	go func() {
+		<-ctx.Done()
+		w.logger.InfoContext(ctx, "worker.proxy_draining", slog.String("signal", "stop claiming new jobs, waiting for in-flight jobs to complete"))
+		stopClaimingCancel()
+	}()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, concurrency)
+
+	for i := range concurrency {
+		workerID := i
+		wg.Add(1)
+		go func(wid int) {
+			defer wg.Done()
+			if err := w.proxyWorkerLoop(stopClaiming, childCtx, eventTypes, wid, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter); err != nil && !errors.Is(err, context.Canceled) {
+				w.logger.ErrorContext(childCtx, "worker.proxy_loop_error", slog.Int("worker_id", wid), slog.Any("error", err))
+				errCh <- err
+				cancel()
+			}
+		}(workerID)
+	}
+
+	wg.Wait()
+	close(errCh)
+	w.logger.InfoContext(ctx, "worker.proxy_stop", slog.Any("event_types", eventTypes))
+
+	var errs []error
+	for err := range errCh {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+// proxyWorkerLoop is the main loop for a single proxy-mode worker goroutine.
+func (w *Worker) proxyWorkerLoop(
+	claimCtx context.Context,
+	processCtx context.Context,
+	eventTypes []string,
+	workerID int,
+	proxyHub *proxydomain.ProxyHub,
+	newHandlers func(lodestone contract.LodestoneClient, tomestone contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry,
+	newLodestoneClient func(proxyURL string) (contract.LodestoneClient, error),
+	newTomestoneClient func(proxyURL string) (contract.TomestoneClient, error),
+	newRateLimiter func() contract.ProviderRateLimiter,
+) error {
+	owner := fmt.Sprintf("census-consume-g%d-p%d", workerID, runtime.NumGoroutine())
+
+	// Acquire initial proxy.
+	proxy, err := proxyHub.NewProxy(claimCtx, owner)
+	if err != nil {
+		return fmt.Errorf("proxy acquire: %w", err)
+	}
+	if proxy == nil {
+		return fmt.Errorf("no proxy available for worker %d", workerID)
+	}
+	w.logger.InfoContext(claimCtx, "worker.proxy_acquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+
+	// Create proxy-aware clients and handlers.
+	proxyLimiter := newRateLimiter()
+	lodestoneClient, err := newLodestoneClient(proxy.Address())
+	if err != nil {
+		return fmt.Errorf("create lodestone client: %w", err)
+	}
+	tomestoneClient, err := newTomestoneClient(proxy.Address())
+	if err != nil {
+		return fmt.Errorf("create tomestone client: %w", err)
+	}
+	handlers := newHandlers(lodestoneClient, tomestoneClient, proxyLimiter)
+
+	for {
+		if claimCtx.Err() != nil {
+			// Release proxy on shutdown.
+			_ = proxy.Release(context.Background(), owner)
+			return nil
+		}
+
+		// Check proxy ownership before claiming.
+		if !proxy.CanUse(owner) {
+			w.logger.InfoContext(claimCtx, "worker.proxy_lost", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+			// Acquire new proxy.
+			newProxy, perr := proxyHub.NewProxy(claimCtx, owner)
+			if perr != nil {
+				return fmt.Errorf("proxy re-acquire: %w", perr)
+			}
+			if newProxy == nil {
+				// No proxy available, wait and retry.
+				select {
+				case <-claimCtx.Done():
+					return nil
+				case <-time.After(w.pollInterval):
+					continue
+				}
+			}
+			// Release old proxy (best effort).
+			_ = proxy.Release(context.Background(), owner)
+			proxy = newProxy
+			w.logger.InfoContext(claimCtx, "worker.proxy_reacquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+
+			// Recreate clients with new proxy.
+			proxyLimiter = newRateLimiter()
+			lodestoneClient, err = newLodestoneClient(proxy.Address())
+			if err != nil {
+				return fmt.Errorf("create lodestone client: %w", err)
+			}
+			tomestoneClient, err = newTomestoneClient(proxy.Address())
+			if err != nil {
+				return fmt.Errorf("create tomestone client: %w", err)
+			}
+			handlers = newHandlers(lodestoneClient, tomestoneClient, proxyLimiter)
+		}
+
+		// Try to claim a job from any available event type.
+		jobs, err := w.queue.ClaimMultiple(claimCtx, eventTypes, 1, contract.ClaimModeAny)
+		if err != nil && claimCtx.Err() == nil {
+			w.logger.ErrorContext(claimCtx, "worker.proxy_claim_error", slog.Int("worker_id", workerID), slog.Any("error", err))
+		}
+
+		if len(jobs) > 0 {
+			for _, job := range jobs {
+				// Process with proxy-aware handlers.
+				w.processJobWithHandlers(processCtx, job, workerID, handlers, proxy, owner, proxyHub)
+			}
+			continue
+		}
+
+		// No jobs available, wait.
+		select {
+		case <-claimCtx.Done():
+			_ = proxy.Release(context.Background(), owner)
+			return nil
+		case <-time.After(w.pollInterval):
+			continue
+		}
+	}
+}
+
+// processJobWithHandlers processes a job using the provided handlers, with proxy re-acquisition on ownership change.
+func (w *Worker) processJobWithHandlers(ctx context.Context, job contract.QueueJob, workerID int, handlers *handler.Registry, proxy *proxydomain.Proxy, owner string, proxyHub *proxydomain.ProxyHub) {
+	h, ok := handlers.Get(job.Type)
+	if !ok {
+		w.logger.ErrorContext(ctx, "worker.missing_handler", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID))
+		_ = w.queue.Fail(ctx, job.ID, fmt.Sprintf("no handler registered for event %s", job.Type))
+		return
+	}
+
+	start := time.Now()
+	w.logger.InfoContext(ctx, "worker.job_start", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts))
+	var next []contract.QueueJob
+	var err error
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("worker panic: %v\nstack: %s", r, debug.Stack())
+			}
+		}()
+		next, err = h.Handle(ctx, job.Payload)
+	}()
+
+	if err != nil {
+		w.logger.WarnContext(ctx, "worker.job_retry", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Any("error", err))
+		if rerr := w.queue.Retry(ctx, job.ID, err.Error()); rerr != nil {
+			w.logger.ErrorContext(ctx, "worker.retry_error", slog.Int64("job_id", job.ID), slog.Any("error", rerr))
+		}
+		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		return
+	}
+
+	w.logger.InfoContext(ctx, "worker.job_done", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Int("chained", len(next)))
+	if err := w.queue.Complete(ctx, job.ID, next...); err != nil {
+		w.logger.ErrorContext(ctx, "worker.complete_error", slog.Int64("job_id", job.ID), slog.Any("error", err))
+	}
 }

@@ -1,6 +1,6 @@
 # ffxiv-census
 
-**ffxiv-census** is a high-performance, single-binary FFXIV census engine and data crawler built with Go and pure-Go SQLite (`modernc.org/sqlite`). It follows a hexagonal (ports & adapters) architecture, featuring an embedded HTMX Web UI, REST APIs, OpenAPI/Swagger specifications, Prometheus metrics, and a durable, multi-queue consumer with jittered exponential backoff and provider rate-limiting pause controls.
+**ffxiv-census** is a high-performance, single-binary FFXIV census engine and data crawler built with Go and PostgreSQL. It follows a hexagonal (ports & adapters) architecture, featuring an embedded HTMX Web UI, REST APIs, OpenAPI/Swagger specifications, Prometheus metrics, and a durable, multi-queue consumer with jittered exponential backoff and provider rate-limiting pause controls.
 
 ---
 
@@ -23,9 +23,10 @@ Detailed architectural and subsystem documentation lives under `docs/`:
 - `docs/getting-started.md` — Setup, building, dependencies, and environment notes.
 - `docs/architecture.md` — High-level system design, ports & adapters layout, and conventions.
 - `docs/container.md` — Explains the Service Locator pattern and dependency wiring.
-- `docs/sqlite.md` — SQLite storage, WAL mode, pure-Go driver, and automatic Goose migrations.
-- `docs/queue.md` — SQLite-backed durable multi-queue, atomic claims, jittered backoff, and infinite retries.
-- `docs/backup.md` — Point-in-time SQLite `VACUUM INTO` snapshots, retention, and Google Drive backups.
+- `docs/postgres.md` — PostgreSQL storage layer, connection pooling, migrations, and DatabaseDriver contract.
+- `docs/external-postgres.md` — External PostgreSQL cluster (pgres-chart), CNPG HA, and Vault integration.
+- `docs/queue.md` — PostgreSQL-backed durable multi-queue, atomic claims, jittered backoff, and infinite retries.
+- `docs/proxy.md` — Proxy pool discovery, scanning, health checking, and census consumer integration.
 - `docs/lodestone.md` — The Lodestone scraper adapter (rate limiting, Cloudflare protection, retries).
 - `docs/tomestone.md` — Tomestone.gg integration for fast character lookups and dual-source census.
 - `docs/census.md` — Domain models, milestones, active character metrics, and repositories.
@@ -74,6 +75,9 @@ When an external provider (Lodestone or Tomestone) returns HTTP 429 (rate limit 
 
 # Adjust polling interval for idle queues
 ./bin/ffxiv-census consume --poll-interval 250ms
+
+# Proxy mode: each goroutine acquires its own proxy from the pool
+./bin/ffxiv-census consume --proxy --concurrency 8
 ```
 
 ### 3. `publish` — Enqueue Census Operations
@@ -180,7 +184,7 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 `ffxiv-census` embeds `config.toml` by default and uses Viper with `strings.NewReplacer("-", "_", ".", "_")` and `AutomaticEnv()`. Any configuration key can be overridden using uppercase environment variables (both nested keys with `.` and hyphenated keys with `-` map to underscores `_`).
 | Environment Variable | Description | Default |
 |---|---|---|
-| `SQLITE_PATH` | Path to SQLite database file | `data/ffxiv-census.db` |
+| `POSTGRES_DSN` | PostgreSQL connection DSN | `postgres://census:secret@localhost:5432/census?sslmode=disable` |
 | `LOGGING_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 | `LODESTONE_RATE_LIMIT` | Lodestone scraper rate limit (requests/sec, max 1.0) | `1.0` |
 | `TOMESTONE_API_TOKEN` | Bearer API token for Tomestone.gg | `""` |
@@ -193,7 +197,7 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 
 ## Architecture & Event Pipeline
 
-The census ingest pipeline is durable and event-driven via the SQLite-backed work queue:
+The census ingest pipeline is durable and event-driven via the PostgreSQL-backed work queue:
 
 ```text
 publish id-sweep ──────────► consume (all queues) ──┬──► achievement-census

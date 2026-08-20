@@ -46,7 +46,7 @@ Times are RFC 3339 UTC (Go `time.Time` marshaling). The exception is `NewCharact
 activity_window_days = 30
 ```
 
-Environment override uses the same rule as `[sqlite]`/`[queue]` (dots become underscores, section name is the prefix — see `docs/queue.md`): `CENSUS_ACTIVITY_WINDOW_DAYS=45`.
+Environment override uses the same rule as `[postgres]`/`[queue]` (dots become underscores, section name is the prefix — see `docs/queue.md`): `CENSUS_ACTIVITY_WINDOW_DAYS=45`.
 
 The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/latest` and the `active` count on `GET /api/v1/stats/breakdown`.
 
@@ -58,6 +58,7 @@ The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/late
 | GET | `/api/v1/census/latest` | — | `CensusSummary` | 500 |
 | GET | `/api/v1/census/characters` | `limit` (int, default 100, max 500), `offset` (int, default 0), `world` (string), `datacenter` (string), `region` (string), `race` (string), `name` (string) | `PaginatedCharacters` | 400 (invalid `limit`/`offset`), 500 |
 | GET | `/api/v1/census/characters/{id}` | `id` (path, uint32 Lodestone character id) | `CharacterDetail` | 400 (invalid id), 404 (not found), 500 |
+| GET | `/api/v1/census/export` | Streaming data export (CSV/JSON/NDJSON, optional Gzip) | query: `format`, `gzip`, `world`, `datacenter`, `region`, `race`, `name` | |
 | GET | `/api/v1/stats/breakdown` | `by` (required, `race`\|`world`\|`datacenter`\|`region`) | `[BreakdownGroup]` | 400 (missing/unknown `by`), 500 |
 | GET | `/api/v1/stats/new-characters` | `since` (required, `YYYY-MM-DD`), `until` (optional, `YYYY-MM-DD`, default now) | `[NewCharactersDay]` | 400 (missing/invalid `since`/`until`), 500 |
 | GET | `/api/v1/stats/expansion` | `name` (optional, exact match) | `[ExpansionStat]` | 500 |

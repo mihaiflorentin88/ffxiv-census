@@ -1,6 +1,6 @@
 # Event Model & Ingest Pipeline
 
-The census ingests Lodestone data through a durable, event-driven pipeline. Publishers enqueue jobs into the SQLite-backed queue (`docs/queue.md`); consumers claim jobs of one event type, run a handler, and chain downstream events. See the design spec (`docs/superpowers/specs/2026-08-16-lodestone-census-design.md`) for the full picture.
+The census ingests Lodestone data through a durable, event-driven pipeline. Publishers enqueue jobs into the PostgreSQL-backed queue (`docs/queue.md`); consumers claim jobs of one event type, run a handler, and chain downstream events. See the design spec (`docs/superpowers/specs/2026-08-16-lodestone-census-design.md`) for the full picture.
 
 ## Events
 
@@ -75,6 +75,8 @@ Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other cl
 ```bash
 # Long-running consumer (one per event type; k8s deployment per consumer).
 ./bin/ffxiv-census consume id-sweep --concurrency 4
+# Proxy mode: each goroutine acquires its own proxy
+./bin/ffxiv-census consume --proxy --concurrency 8
 
 # One-shot auto-discovery publisher (queries MaxID in DB, sweeps next 1000 IDs).
 ./bin/ffxiv-census publish id-sweep --count 1000 --chunk-size 100 --source auto

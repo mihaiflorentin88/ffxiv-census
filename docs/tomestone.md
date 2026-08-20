@@ -65,6 +65,12 @@ Tomestone.gg serves as the **primary provider for `id-sweep`** (character discov
 - Explicit `--source tomestone` on `id-sweep` queries Tomestone.gg directly without querying Lodestone.
 - Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into downstream jobs (`achievement-census`, and `fc-census` when affiliated with a free company) via `BuildDependentCharacterJobs`.
 - When Lodestone is rate-limited, workers automatically switch dual-source queues (`id-sweep`, `character-census`) to Tomestone while pausing Lodestone-exclusive queues.
+### Proxy-Aware Client
+
+`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a TomestoneClient that routes all requests through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`). Builds a proxy-aware HTTP transport (HTTP via `Transport.Proxy`, SOCKS via `Transport.DialContext`).
+
+Used by `consume --proxy` — each worker goroutine creates its own proxy-aware client instance.
+
 ## Error Handling & Mapping
 
 - `401 Unauthorized` / `403 Forbidden` → maps to `contract.ErrTomestoneUnauthenticated`.

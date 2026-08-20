@@ -4,7 +4,7 @@ The Lodestone client reads character, achievement, and free-company data from **
 
 ## Contract
 
-`port/contract.LodestoneClient` (see `port/contract/lodestone.go`) is implemented by `infrastructure/lodestone` (real godestone adapter) and `mock/lodestone` (in-memory fake for tests). Returned types are godestone's model types — the adapter wraps godestone directly, mirroring how `SQLiteDriver` exposes `*sql.DB`.
+`port/contract.LodestoneClient` (see `port/contract/lodestone.go`) is implemented by `infrastructure/lodestone` (real godestone adapter) and `mock/lodestone` (in-memory fake for tests). Returned types are godestone's model types — the adapter wraps godestone directly, mirroring how `DatabaseDriver` exposes `*sql.DB`.
 
 | Method | Signature | Notes |
 | ------ | --------- | ----- |
@@ -65,6 +65,12 @@ godestone's methods take no `ctx` and its colly collectors expose no HTTP timeou
 ## Why no `user_agent` / `timeout` config keys
 
 godestone hardcodes its user-agent (colly's `UserAgent(s.meta.UserAgentDesktop)` from the embedded `meta.json`) and exposes no HTTP timeout through its public API. Neither key is implementable without a godestone fork/patch, so `rate_limit` and `max_retries` are the only cleanly configurable knobs.
+
+### Proxy-Aware Client
+
+`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a LodestoneClient that routes ALL requests (including godestone scraper calls) through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`). Uses the forked godestone with protocol-aware proxy support (`godestone.WithProxy`).
+
+Used by `consume --proxy` — each worker goroutine creates its own proxy-aware client instance.
 
 ## Container wiring
 

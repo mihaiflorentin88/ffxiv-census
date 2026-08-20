@@ -184,6 +184,15 @@ workers:
         - consume
         - -c
         - "30"
+    - name: census-proxy
+      replicaCount: 2
+      command:
+        - /app/ffxiv-census
+        - consume
+        - all
+        - --proxy
+        - -c
+        - "30"
 
 cronjobs:
   defaults:

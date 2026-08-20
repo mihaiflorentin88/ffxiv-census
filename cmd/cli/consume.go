@@ -14,6 +14,10 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/container"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/worker"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/provider"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 var consumeCmd = &cobra.Command{
@@ -35,6 +39,7 @@ pause affected provider queues while letting others continue.`,
 		eventsFlag, _ := cmd.Flags().GetString("events")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		pollIntervalStr, _ := cmd.Flags().GetString("poll-interval")
+		proxyMode, _ := cmd.Flags().GetBool("proxy")
 
 		var eventTypes []string
 		if len(args) > 0 && args[0] != "" && args[0] != "all" {
@@ -70,6 +75,11 @@ pause affected provider queues while letting others continue.`,
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
+
+		if proxyMode {
+			return runProxyConsumer(ctx, q, eventTypes, concurrency, pollInterval)
+		}
+
 		w := worker.New(q, container.Load.Handlers(), container.Load.Logger(), container.Load.ProviderRateLimiter())
 		w.SetPollInterval(pollInterval)
 		return w.RunEvents(ctx, eventTypes, concurrency)
@@ -81,4 +91,63 @@ func init() {
 	consumeCmd.Flags().StringP("events", "e", "all", "comma-separated event types to consume (e.g. id-sweep,character-census or 'all')")
 	consumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 	consumeCmd.Flags().String("poll-interval", "500ms", "idle queue polling interval (e.g. 500ms, 1s)")
+	consumeCmd.Flags().Bool("proxy", false, "run in proxy mode: each goroutine acquires its own proxy from the pool")
+}
+
+// runProxyConsumer starts the census consumer in proxy mode. Each worker goroutine
+// acquires its own proxy from the ProxyHub and routes ALL requests through it.
+func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string, concurrency int, pollInterval time.Duration) error {
+	logger := container.Load.Logger()
+
+	// Read proxy consumer config overrides.
+	var proxyLodestoneRate float64
+	var proxyRequestTimeout string
+	if pcfg := container.Load.Config().Proxy; pcfg != nil {
+		proxyLodestoneRate = pcfg.Consumer.LodestoneRateLimit
+		proxyRequestTimeout = pcfg.Consumer.RequestTimeout
+	}
+
+	// Create proxy-aware client factories.
+	newLodestoneClient := func(proxyURL string) (contract.LodestoneClient, error) {
+		cfg := container.Load.Config().Lodestone
+		if cfg == nil {
+			return nil, fmt.Errorf("lodestone config missing")
+		}
+		// Override rate limit from proxy consumer config if set.
+		if proxyLodestoneRate > 0 {
+			override := *cfg
+			override.RateLimit = proxyLodestoneRate
+			return lodestone.NewClientWithProxy(&override, proxyURL, logger)
+		}
+		return lodestone.NewClientWithProxy(cfg, proxyURL, logger)
+	}
+	newTomestoneClient := func(proxyURL string) (contract.TomestoneClient, error) {
+		cfg := container.Load.Config().Tomestone
+		if cfg == nil {
+			return nil, fmt.Errorf("tomestone config missing")
+		}
+		// Override timeout from proxy consumer config if set.
+		if proxyRequestTimeout != "" {
+			override := *cfg
+			override.Timeout = proxyRequestTimeout
+			return tomestone.NewClientWithProxy(&override, proxyURL, logger)
+		}
+		return tomestone.NewClientWithProxy(cfg, proxyURL, logger)
+	}
+	newRateLimiter := func() contract.ProviderRateLimiter {
+		return provider.NewProxyRateLimiter()
+	}
+	newHandlers := func(lodestoneClient contract.LodestoneClient, tomestoneClient contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry {
+		return container.Load.ProxyCensusHandlers(lodestoneClient, tomestoneClient, rateLimiter)
+	}
+
+	// Get ProxyHub for this process.
+	proxyHub := container.Load.ProxyHub("census-consume")
+	if proxyHub == nil {
+		return fmt.Errorf("proxy hub not initialised (database unavailable?)")
+	}
+
+	w := worker.New(q, container.Load.Handlers(), logger)
+	w.SetPollInterval(pollInterval)
+	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
 }

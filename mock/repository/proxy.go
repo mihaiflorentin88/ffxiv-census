@@ -34,6 +34,15 @@ func (f *FakeProxyRepository) Upsert(_ context.Context, rec contract.ProxyRecord
 				p.UptimePercent = rec.UptimePercent
 			}
 			p.Source = rec.Source
+			if rec.Status != "" {
+				p.Status = rec.Status
+			}
+			if rec.LockedBy != nil {
+				p.LockedBy = rec.LockedBy
+			}
+			if rec.LockedAt != nil {
+				p.LockedAt = rec.LockedAt
+			}
 			p.UpdatedAt = time.Now().UTC()
 			f.proxies[p.ID] = p
 			return p.ID, true, nil
@@ -162,6 +171,76 @@ func (f *FakeProxyRepository) CountByStatus(_ context.Context) (map[string]int64
 		counts[p.Status]++
 	}
 	return counts, nil
+}
+
+func (f *FakeProxyRepository) ClaimProxy(_ context.Context, owner string, lockTTL time.Duration) (*contract.ProxyRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	expireThreshold := now.Add(-lockTTL)
+
+	// Find best available proxy (lowest latency, active, not locked or lock expired).
+	var best *contract.ProxyRecord
+	for _, p := range f.proxies {
+		if p.Status != contract.ProxyStatusActive {
+			continue
+		}
+		if p.Protocol != "http" && p.Protocol != "https" && p.Protocol != "socks4" && p.Protocol != "socks5" {
+			continue
+		}
+		if p.LockedAt != nil && p.LockedAt.After(expireThreshold) {
+			continue
+		}
+		if best == nil || latencyOrMax(p) < latencyOrMax(*best) {
+			best = &p
+		}
+	}
+	if best == nil {
+		return nil, nil
+	}
+	best.LockedBy = &owner
+	best.LockedAt = &now
+	best.UpdatedAt = now
+	f.proxies[best.ID] = *best
+	return best, nil
+}
+
+func (f *FakeProxyRepository) ExtendLock(_ context.Context, id int64, owner string, lockTTL time.Duration) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.proxies[id]
+	if !ok {
+		return false, nil
+	}
+	if p.LockedBy == nil || *p.LockedBy != owner {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	expireThreshold := now.Add(-lockTTL)
+	if p.LockedAt != nil && p.LockedAt.Before(expireThreshold) {
+		return false, nil // lock expired
+	}
+	p.LockedAt = &now
+	p.UpdatedAt = now
+	f.proxies[id] = p
+	return true, nil
+}
+
+func (f *FakeProxyRepository) ReleaseProxy(_ context.Context, id int64, owner string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.proxies[id]
+	if !ok {
+		return nil
+	}
+	if p.LockedBy == nil || *p.LockedBy != owner {
+		return nil
+	}
+	p.LockedBy = nil
+	p.LockedAt = nil
+	p.UpdatedAt = time.Now().UTC()
+	f.proxies[id] = p
+	return nil
 }
 
 func priority(p contract.ProxyRecord) int {

@@ -28,6 +28,8 @@ type ProxyRecord struct {
 	FirstSeenAt   time.Time
 	Source        string // provider name: "proxyscrape", "geonode", etc.
 	FailCount     int
+	LockedBy      *string    // process name + goroutine ID (e.g. "census-consume-g3")
+	LockedAt      *time.Time // lock acquisition time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -62,4 +64,14 @@ type ProxyRepository interface {
 	Count(ctx context.Context) (int64, error)
 	// CountByStatus returns proxy counts grouped by status.
 	CountByStatus(ctx context.Context) (map[string]int64, error)
+	// ClaimProxy atomically claims an available proxy for the given owner using
+	// FOR UPDATE SKIP LOCKED. Returns nil (no error) if no proxy is available.
+	// The proxy must be active, not currently locked, or locked past its TTL.
+	// Only proxies with protocols http, https, socks4, socks5 are considered.
+	ClaimProxy(ctx context.Context, owner string, lockTTL time.Duration) (*ProxyRecord, error)
+	// ExtendLock extends the lock TTL for a proxy owned by the given owner.
+	// Returns false if the proxy is not owned by the caller.
+	ExtendLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (bool, error)
+	// ReleaseProxy releases the lock on a proxy owned by the given owner.
+	ReleaseProxy(ctx context.Context, id int64, owner string) error
 }

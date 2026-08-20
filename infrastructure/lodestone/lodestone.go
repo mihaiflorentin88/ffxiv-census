@@ -63,6 +63,19 @@ func NewClient(cfg *config.LodestoneConfig, logger contract.Logger, rateLimiter 
 	return newClient(godestone.NewScraper(bingode.New(), godestone.EN), cfg, logger, rl)
 }
 
+// NewClientWithProxy creates a LodestoneClient that routes ALL requests
+// (including godestone scraper calls) through the given proxy URL.
+// The proxyURL must include the protocol (http://, socks5://).
+// Uses the forked godestone with protocol-aware proxy support.
+func NewClientWithProxy(cfg *config.LodestoneConfig, proxyURL string, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
+	}
+	sc := godestone.NewScraper(bingode.New(), godestone.EN, godestone.WithProxy(proxyURL))
+	return newClient(sc, cfg, logger, rl)
+}
+
 func newClient(sc scraper, cfg *config.LodestoneConfig, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (*Client, error) {
 	if sc == nil {
 		return nil, errors.New("lodestone scraper is nil")

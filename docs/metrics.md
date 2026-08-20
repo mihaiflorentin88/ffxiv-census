@@ -15,9 +15,9 @@ Prometheus metrics are exposed at `http://<host>:8080/metrics` and scraped autom
 | `http_requests_total` | Counter | Total processed HTTP requests (`method`, `path`, `status`). |
 | `http_request_duration_seconds` | Histogram | Request latency distribution (`method`, `path`, `le`). |
 | `process_uptime_seconds` | Gauge | Total process uptime in seconds. |
-| `sqlite_open_connections` | Gauge | Established open SQLite connections in the pool. |
-| `sqlite_in_use_connections` | Gauge | SQLite connections currently in use. |
-| `sqlite_idle_connections` | Gauge | Idle SQLite connections in the pool. |
+| `sqlite_open_connections` | Gauge | Established open database connections in the pool. |
+| `sqlite_in_use_connections` | Gauge | Database connections currently in use. |
+| `sqlite_idle_connections` | Gauge | Idle database connections in the pool. |
 | `queue_jobs_depth` | Gauge | Current count of pending/claimed queue jobs. |
 
 ---

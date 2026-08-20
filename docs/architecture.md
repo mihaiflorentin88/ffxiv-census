@@ -20,9 +20,9 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 - `cmd/cli`: Cobra-based control surface. `main.go` forwards execution here to keep the root tidy.
 - `cmd/http`: HTTP server wiring. The server reads configuration via the container, attaches standard middleware (logging, recovery, request ID), and mounts route groups. APIs must accept request DTOs and return response DTOs; convert them to internal DTOs before passing work into the domain.
 - `config`: Configuration loader powered by Viper with an embedded `config.toml`. Environment variables override file values using the `APP_`, `HTTP_`, and feature-specific prefixes.
-- `container`: Simple service locator that bootstraps configuration, logging, and optional infrastructure clients (SQLite, queue, StatsD, outbound HTTP, system helpers, UI assets). Generated code resolves these adapters through `ServiceContainer` accessors instead of constructing them inside handlers or domain services.
+- `container`: Simple service locator that bootstraps configuration, logging, and optional infrastructure clients (PostgreSQL, queue, StatsD, outbound HTTP, LodestoneClient, TomestoneClient, ProxyRepository, ProxyHub). Generated code resolves these adapters through `ServiceContainer` accessors instead of constructing them inside handlers or domain services.
 - `domain`: Reserved for pure business logic. Keep this folder clean; avoid direct references to HTTP or CLI packages. Domain objects can be instantiated from `cmd/` but they interact with infrastructure solely via contracts and DTOs.
-- `infrastructure`: Adapters that speak to the outside world (logging, SQLite, metrics, etc.). Code here implements interfaces defined in `port/contract` to honour dependency inversion.
+- `infrastructure`: Adapters that speak to the outside world (logging, PostgreSQL, metrics, etc.). Code here implements interfaces defined in `port/contract` to honour dependency inversion.
 - `docs`: Living documentation. Extend these markdown files alongside code changes so future-you knows how to operate the system.
 - `cmd/` never talks to infrastructure directly. Resolve adapters through the container accessors exposed by the generated project and keep the core flow in the domain layer.
 
@@ -38,7 +38,7 @@ High-level modules (application/domain) depend on abstractions, never concrete i
                                    ▼
                              ┌──────────────┐
                              │ infrastructure│
-                             │ (sqlite, etc.)│
+                             │ (postgres, etc.)│
                              └──────────────┘
 ```
 
@@ -58,7 +58,7 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 
 ## Queue & Ingest Event Pipeline
 
-Durable async work lives in the SQLite datastore (`queue_jobs` table) with a claim-based lifecycle (see [docs/queue.md](queue.md) and [docs/events.md](events.md)). The ingest pipeline consists of four core events:
+Durable async work lives in the PostgreSQL datastore (`queue_jobs` table) with a claim-based lifecycle (see [docs/queue.md](queue.md) and [docs/events.md](events.md)). The ingest pipeline consists of four core events:
 
 1. **`id-sweep`**: Probes character ID ranges across Lodestone and Tomestone.gg. Discovered characters are upserted and chain downstream `achievement-census` (+ `fc-census` if affiliated with an FC) jobs.
 2. **`character-census`**: Re-censuses known character profiles. Confirmed 404 on both providers marks the character deleted; successful fetches chain `achievement-census` (+ `fc-census`).
@@ -66,6 +66,8 @@ Durable async work lives in the SQLite datastore (`queue_jobs` table) with a cla
 4. **`fc-census`**: Fetches Free Company details and membership info from The Lodestone (*leaf job*).
 
 The queue adapter is resolved via `container.Load.Queue()`.
+
+**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. If a proxy's ownership changes (`CanUse()` returns false), the goroutine acquires a new proxy and retries the job in-place. See [docs/proxy.md](proxy.md) for details.
 ## Future Hooks
 
 - Add domain service constructors under `container/domain.go` to keep wiring explicit.

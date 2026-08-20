@@ -19,20 +19,21 @@ func NewProxyRepository(driver contract.DatabaseDriver) contract.ProxyRepository
 }
 
 const proxyColumns = `id, protocol, ip, port, country, anonymity, latency_ms, uptime_percent,
-	status, last_scanned_at, last_alive_at, first_seen_at, source, fail_count, created_at, updated_at`
+	status, last_scanned_at, last_alive_at, first_seen_at, source, fail_count, locked_by, locked_at, created_at, updated_at`
 
 func scanProxy(row rowScanner) (*contract.ProxyRecord, error) {
 	var p contract.ProxyRecord
-	var country, anonymity sql.NullString
+	var country, anonymity, lockedBy sql.NullString
 	var latencyMS sql.NullInt64
 	var uptimePercent sql.NullFloat64
-	var lastScannedAt, lastAliveAt sql.NullTime
+	var lastScannedAt, lastAliveAt, lockedAt sql.NullTime
 
 	err := row.Scan(
 		&p.ID, &p.Protocol, &p.IP, &p.Port,
 		&country, &anonymity, &latencyMS, &uptimePercent,
 		&p.Status, &lastScannedAt, &lastAliveAt, &p.FirstSeenAt,
-		&p.Source, &p.FailCount, &p.CreatedAt, &p.UpdatedAt,
+		&p.Source, &p.FailCount, &lockedBy, &lockedAt,
+		&p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -44,6 +45,8 @@ func scanProxy(row rowScanner) (*contract.ProxyRecord, error) {
 	p.UptimePercent = sqlFloat64Ptr(uptimePercent)
 	p.LastScannedAt = sqlTimePtr(lastScannedAt)
 	p.LastAliveAt = sqlTimePtr(lastAliveAt)
+	p.LockedBy = sqlStringPtr(lockedBy)
+	p.LockedAt = sqlTimePtr(lockedAt)
 	return &p, nil
 }
 
@@ -255,4 +258,89 @@ func (r *ProxyRepository) CountByStatus(ctx context.Context) (map[string]int64, 
 		counts[status] = count
 	}
 	return counts, rows.Err()
+}
+
+func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL time.Duration) (*contract.ProxyRecord, error) {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("proxy claim begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is a no-op after commit
+
+	now := time.Now().UTC()
+	expireThreshold := now.Add(-lockTTL)
+
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+proxyColumns+` FROM proxies
+		WHERE status = 'active'
+			AND protocol IN ('http', 'https', 'socks4', 'socks5')
+			AND (locked_at IS NULL OR locked_at < $1)
+		ORDER BY latency_ms ASC NULLS LAST
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED`, expireThreshold)
+
+	p, err := scanProxy(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("proxy claim: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE proxies SET locked_by = $1, locked_at = $2, updated_at = $3 WHERE id = $4`,
+		owner, now, now, p.ID)
+	if err != nil {
+		return nil, fmt.Errorf("proxy claim lock: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("proxy claim commit: %w", err)
+	}
+
+	p.LockedBy = &owner
+	p.LockedAt = &now
+	return p, nil
+}
+
+func (r *ProxyRepository) ExtendLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (bool, error) {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	now := time.Now().UTC()
+	expireThreshold := now.Add(-lockTTL)
+	result, err := db.ExecContext(ctx,
+		`UPDATE proxies SET locked_at = $1, updated_at = $2
+		WHERE id = $3 AND locked_by = $4 AND locked_at >= $5`,
+		now, now, id, owner, expireThreshold)
+	if err != nil {
+		return false, fmt.Errorf("proxy extend lock: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("proxy extend lock rows: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func (r *ProxyRepository) ReleaseProxy(ctx context.Context, id int64, owner string) error {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	_, err = db.ExecContext(ctx,
+		`UPDATE proxies SET locked_by = NULL, locked_at = NULL, updated_at = $1
+		WHERE id = $2 AND locked_by = $3`,
+		now, id, owner)
+	if err != nil {
+		return fmt.Errorf("proxy release: %w", err)
+	}
+	return nil
 }
