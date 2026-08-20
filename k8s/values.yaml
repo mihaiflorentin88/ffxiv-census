@@ -260,7 +260,7 @@ cronjobs:
         - proxy
         - discover
     - name: proxy-scan
-      schedule: "*/20 * * * *"
+      schedule: "*/10 * * * *"
       command:
         - /app/ffxiv-census
         - proxy

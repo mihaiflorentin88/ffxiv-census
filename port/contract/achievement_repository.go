@@ -26,6 +26,6 @@ type AchievementRepository interface {
 	// based on the Chocobo milestone (achievement ID 590).
 	NewCharactersPerDay(ctx context.Context, since, until time.Time, filter CharacterFilter) ([]DailyCount, error)
 	// CountChocoboMilestones returns the count of characters who obtained
-	// Milestone 590 (or first seen) at or after since.
+	// Milestone 590 at or after since.
 	CountChocoboMilestones(ctx context.Context, since time.Time, filter CharacterFilter) (int64, error)
 }
