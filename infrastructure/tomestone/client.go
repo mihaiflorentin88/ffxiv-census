@@ -378,6 +378,18 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		charData = res.Character
 	}
 
+	// Validate that the response contains meaningful character data.
+	// Tomestone may return 200 OK with an ID but no name/server for
+	// characters that don't exist or are hidden — treat those as not found.
+	server := charData.Server
+	if server == "" {
+		server = charData.World
+	}
+	if charData.Name == "" && server == "" {
+		c.logger.DebugContext(ctx, "tomestone.empty_character", slog.Uint64("character_id", uint64(charData.ID)))
+		return nil, contract.ErrCharacterNotFound
+	}
+
 	return toContractCharacter(charData), nil
 }
 

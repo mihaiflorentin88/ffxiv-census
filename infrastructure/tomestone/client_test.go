@@ -373,6 +373,7 @@ func TestFetchCharacterProfile_ContextCancelled(t *testing.T) {
 		t.Fatal("expected error on cancelled context")
 	}
 }
+
 func TestFetchCharacterProfile_ObjectFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -448,5 +449,69 @@ func TestConvertToCharacterRecord(t *testing.T) {
 	}
 	if rec.FreeCompanyID == nil || *rec.FreeCompanyID != "123456" {
 		t.Errorf("rec.FreeCompanyID = %v, want 123456", rec.FreeCompanyID)
+	}
+}
+
+func TestFetchCharacterProfile_EmptyCharacterReturnsNotFound(t *testing.T) {
+	// Tomestone may return 200 OK with an ID but no name/server for
+	// characters that don't exist or are hidden. This must be treated
+	// as not-found to avoid inserting ghost rows.
+	responseJSON := `{"id": 46833}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(responseJSON))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{
+		BaseURL:   server.URL,
+		APIToken:  "test-token",
+		RateLimit: 50.0,
+		Timeout:   "5s",
+	}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = client.FetchCharacterProfile(context.Background(), 46833, false)
+	if !errors.Is(err, contract.ErrCharacterNotFound) {
+		t.Fatalf("expected ErrCharacterNotFound for empty character, got: %v", err)
+	}
+}
+
+func TestFetchCharacterProfile_EmptyNameOnlyReturnsNotFound(t *testing.T) {
+	// Server present but name empty — still invalid.
+	responseJSON := `{"id": 99999, "server": "Balmung"}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(responseJSON))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{
+		BaseURL:   server.URL,
+		APIToken:  "test-token",
+		RateLimit: 50.0,
+		Timeout:   "5s",
+	}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	char, err := client.FetchCharacterProfile(context.Background(), 99999, false)
+	if err != nil {
+		t.Fatalf("FetchCharacterProfile: %v", err)
+	}
+	if char.Name != "" {
+		t.Errorf("expected empty name, got %q", char.Name)
+	}
+	if char.Server != "Balmung" {
+		t.Errorf("expected server 'Balmung', got %q", char.Server)
 	}
 }
