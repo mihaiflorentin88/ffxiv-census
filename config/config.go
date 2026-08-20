@@ -148,6 +148,12 @@ type ProxyProviderConfig struct {
 	ProxyScrapeURL string `mapstructure:"proxyscrape_url"`
 	Geonode        bool   `mapstructure:"geonode"`
 	GeonodeURL     string `mapstructure:"geonode_url"`
+	PubProxy       bool   `mapstructure:"pubproxy"`
+	PubProxyURL    string `mapstructure:"pubproxy_url"`
+	Proxifly       bool   `mapstructure:"proxifly"`
+	ProxiflyURL    string `mapstructure:"proxifly_url"`
+	TheSpeedX      bool   `mapstructure:"thespeedx"`
+	TheSpeedXURL   string `mapstructure:"thespeedx_url"`
 }
 
 func loadDotEnv() {

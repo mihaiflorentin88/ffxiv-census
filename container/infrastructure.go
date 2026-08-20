@@ -3,8 +3,10 @@ package container
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/geonode"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
@@ -16,9 +18,10 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/provider"
 	proxyinfra "github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxyscrape"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/pubproxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/textproxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
-	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -39,6 +42,9 @@ type InfrastructureContainer struct {
 	proxyChecker          *proxyinfra.Checker
 	proxyScrapeProvider   contract.ProxyProvider
 	geonodeProvider       contract.ProxyProvider
+	pubProxyProvider      contract.ProxyProvider
+	proxiflyProvider      contract.ProxyProvider
+	theSpeedXProvider     contract.ProxyProvider
 }
 
 // Logger returns the process-wide structured logger (infrastructure/logging.Logger)
@@ -333,6 +339,58 @@ func (s *ServiceContainer) GeonodeProvider() contract.ProxyProvider {
 	}
 	s.infrastructure.geonodeProvider = geonode.New(s.HTTPClient(), cfg.Providers.GeonodeURL)
 	return s.infrastructure.geonodeProvider
+}
+
+func (s *ServiceContainer) PubProxyProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.pubProxyProvider != nil {
+		return s.infrastructure.pubProxyProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.PubProxy {
+		return nil
+	}
+	s.infrastructure.pubProxyProvider = pubproxy.New(s.HTTPClient(), cfg.Providers.PubProxyURL)
+	return s.infrastructure.pubProxyProvider
+}
+
+func (s *ServiceContainer) ProxiflyProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.proxiflyProvider != nil {
+		return s.infrastructure.proxiflyProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Proxifly {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.ProxiflyURL, "/")
+	s.infrastructure.proxiflyProvider = textproxy.New(s.HTTPClient(), "proxifly", map[string]string{
+		"http":   base + "/http/data.txt",
+		"socks4": base + "/socks4/data.txt",
+		"socks5": base + "/socks5/data.txt",
+	})
+	return s.infrastructure.proxiflyProvider
+}
+
+func (s *ServiceContainer) TheSpeedXProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.theSpeedXProvider != nil {
+		return s.infrastructure.theSpeedXProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.TheSpeedX {
+		return nil
+	}
+	base := strings.TrimRight(cfg.Providers.TheSpeedXURL, "/")
+	s.infrastructure.theSpeedXProvider = textproxy.New(s.HTTPClient(), "thespeedx", map[string]string{
+		"http":   base + "/http.txt",
+		"socks4": base + "/socks4.txt",
+		"socks5": base + "/socks5.txt",
+	})
+	return s.infrastructure.theSpeedXProvider
 }
 
 // ProxyHub creates a ProxyHub for the given owner (process name + goroutine ID).

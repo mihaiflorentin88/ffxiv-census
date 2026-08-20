@@ -285,7 +285,7 @@ func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL 
 			AND protocol IN ('http', 'https', 'socks4', 'socks5')
 			AND (locked_at IS NULL OR locked_at < $1)
 			AND last_alive_at >= $2
-		ORDER BY uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST
+		ORDER BY fail_count DESC, uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`, expireThreshold, recentThreshold)
 
@@ -297,7 +297,7 @@ func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL 
 			WHERE status = 'active'
 				AND protocol IN ('http', 'https', 'socks4', 'socks5')
 				AND (locked_at IS NULL OR locked_at < $1)
-			ORDER BY uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST
+			ORDER BY fail_count DESC, uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED`, expireThreshold)
 		p, err = scanProxy(row)

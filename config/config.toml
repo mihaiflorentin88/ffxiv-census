@@ -62,6 +62,12 @@ proxyscrape     = true
 proxyscrape_url = "https://api.proxyscrape.com/v4/free-proxy-list/get"
 geonode         = true
 geonode_url     = "https://proxylist.geonode.com/api/proxy-list"
+pubproxy        = true
+pubproxy_url    = "http://pubproxy.com/api/proxy"
+proxifly         = true
+proxifly_url     = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols"
+thespeedx        = true
+thespeedx_url    = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master"
 
 [proxy.consumer]
 lock_ttl              = "5m"

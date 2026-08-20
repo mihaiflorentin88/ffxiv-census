@@ -100,6 +100,15 @@ func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 	if p := s.GeonodeProvider(); p != nil {
 		providers = append(providers, p)
 	}
+	if p := s.PubProxyProvider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.ProxiflyProvider(); p != nil {
+		providers = append(providers, p)
+	}
+	if p := s.TheSpeedXProvider(); p != nil {
+		providers = append(providers, p)
+	}
 	if len(providers) == 0 {
 		logging.Warn("container.proxy_service", "no proxy providers configured")
 	}
