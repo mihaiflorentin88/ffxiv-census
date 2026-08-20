@@ -3,6 +3,7 @@ package census
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,9 @@ func (s *Service) UpsertCharacter(ctx context.Context, char *godestone.Character
 	if char == nil {
 		return errors.New("cannot upsert nil character")
 	}
+	if strings.TrimSpace(char.Name) == "" {
+		return fmt.Errorf("cannot upsert character %d: name is empty", char.ID)
+	}
 	rec := toCharacterRecord(char)
 	jobs := toJobRecords(char)
 	return s.characters.Upsert(ctx, rec, jobs)
@@ -99,6 +103,9 @@ func (s *Service) UpsertCharacter(ctx context.Context, char *godestone.Character
 func (s *Service) UpsertTomestoneCharacter(ctx context.Context, char *contract.TomestoneCharacter) error {
 	if char == nil {
 		return errors.New("cannot upsert nil tomestone character")
+	}
+	if strings.TrimSpace(char.Name) == "" {
+		return fmt.Errorf("cannot upsert character %d: name is empty", char.ID)
 	}
 	rec := toTomestoneCharacterRecord(char)
 	jobs := toTomestoneJobRecords(char)
