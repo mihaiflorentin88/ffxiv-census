@@ -135,7 +135,6 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 			if err := w.eventWorkerLoop(stopClaiming, childCtx, allTypes[0], allTypes, wid, true); err != nil && !errors.Is(err, context.Canceled) {
 				w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", "retry"), slog.Int("worker_id", wid), slog.Any("error", err))
 				errCh <- err
-				cancel()
 			}
 		}(eventTypes, workerID)
 	}
@@ -157,7 +156,6 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 				if err := w.eventWorkerLoop(stopClaiming, childCtx, primaryType, allTypes, wid, false); err != nil && !errors.Is(err, context.Canceled) {
 					w.logger.ErrorContext(childCtx, "worker.loop_error", slog.String("event_type", primaryType), slog.Int("worker_id", wid), slog.Any("error", err))
 					errCh <- err
-					cancel()
 				}
 			}(eventType, eventTypes, workerID)
 		}
@@ -466,7 +464,7 @@ func (w *Worker) RunEventsWithProxy(
 			if err := w.proxyWorkerLoop(stopClaiming, childCtx, eventTypes, wid, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter); err != nil && !errors.Is(err, context.Canceled) {
 				w.logger.ErrorContext(childCtx, "worker.proxy_loop_error", slog.Int("worker_id", wid), slog.Any("error", err))
 				errCh <- err
-				cancel()
+				// Don't cancel childCtx — let other workers finish their in-flight jobs gracefully.
 			}
 		}(workerID)
 	}
