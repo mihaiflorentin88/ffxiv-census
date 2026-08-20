@@ -510,8 +510,6 @@ func (w *Worker) proxyWorkerLoop(
 	}
 	w.logger.InfoContext(claimCtx, "worker.proxy_acquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 
-	proxyFailures := 0 // consecutive proxy failures; triggers re-acquisition after threshold
-
 	// Create proxy-aware clients and handlers.
 	proxyLimiter := newRateLimiter()
 	lodestoneClient, err := newLodestoneClient(proxy.Address())
@@ -577,39 +575,33 @@ func (w *Worker) proxyWorkerLoop(
 				// Process with proxy-aware handlers.
 				badProxy := w.processJobWithHandlers(processCtx, job, workerID, handlers, proxy, owner, proxyHub)
 				if badProxy {
-					proxyFailures++
-					if proxyFailures >= 3 {
-						w.logger.InfoContext(claimCtx, "worker.proxy_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.Int("consecutive_failures", proxyFailures))
-						// Release bad proxy and acquire a new one.
-						_ = proxy.Release(context.Background(), owner)
-						newProxy, perr := proxyHub.NewProxy(claimCtx, owner)
-						if perr != nil {
-							return fmt.Errorf("proxy re-acquire after failures: %w", perr)
-						}
-						if newProxy == nil {
-							select {
-							case <-claimCtx.Done():
-								return nil
-							case <-time.After(w.pollInterval):
-								continue
-							}
-						}
-						proxy = newProxy
-						proxyFailures = 0
-						w.logger.InfoContext(claimCtx, "worker.proxy_reacquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
-						proxyLimiter = newRateLimiter()
-						lodestoneClient, err = newLodestoneClient(proxy.Address())
-						if err != nil {
-							return fmt.Errorf("create lodestone client: %w", err)
-						}
-						tomestoneClient, err = newTomestoneClient(proxy.Address())
-						if err != nil {
-							return fmt.Errorf("create tomestone client: %w", err)
-						}
-						handlers = newHandlers(lodestoneClient, tomestoneClient, proxyLimiter)
+					w.logger.InfoContext(claimCtx, "worker.proxy_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
+					// Release bad proxy and acquire a new one immediately.
+					_ = proxy.Release(context.Background(), owner)
+					newProxy, perr := proxyHub.NewProxy(claimCtx, owner)
+					if perr != nil {
+						return fmt.Errorf("proxy re-acquire after failure: %w", perr)
 					}
-				} else {
-					proxyFailures = 0
+					if newProxy == nil {
+						select {
+						case <-claimCtx.Done():
+							return nil
+						case <-time.After(w.pollInterval):
+							continue
+						}
+					}
+					proxy = newProxy
+					w.logger.InfoContext(claimCtx, "worker.proxy_reacquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+					proxyLimiter = newRateLimiter()
+					lodestoneClient, err = newLodestoneClient(proxy.Address())
+					if err != nil {
+						return fmt.Errorf("create lodestone client: %w", err)
+					}
+					tomestoneClient, err = newTomestoneClient(proxy.Address())
+					if err != nil {
+						return fmt.Errorf("create tomestone client: %w", err)
+					}
+					handlers = newHandlers(lodestoneClient, tomestoneClient, proxyLimiter)
 				}
 			}
 			continue

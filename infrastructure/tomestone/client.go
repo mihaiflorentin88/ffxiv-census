@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -136,7 +137,21 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		}
 		transport = &http.Transport{DialContext: ctxDialer.DialContext}
 	case "socks4":
-		return nil, fmt.Errorf("socks4 proxy not supported (use socks5 or http/https)")
+		// socks4 uses the same dialer as socks5 via golang.org/x/net/proxy.
+		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
+		if derr != nil {
+			return nil, fmt.Errorf("create socks4 dialer: %w", derr)
+		}
+		ctxDialer, ok := dialer.(xproxy.ContextDialer)
+		if !ok {
+			transport = &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				},
+			}
+		} else {
+			transport = &http.Transport{DialContext: ctxDialer.DialContext}
+		}
 	default:
 		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
 	}
@@ -168,7 +183,8 @@ func (c *Client) FetchCharacterProfile(ctx context.Context, id uint32, update bo
 
 // FetchCharacterProfileByName fetches a character's profile by server and character name.
 func (c *Client) FetchCharacterProfileByName(ctx context.Context, server, name string, update bool) (*contract.TomestoneCharacter, error) {
-	endpoint := fmt.Sprintf("%s/api/character/profile/%s/%s",
+	endpoint := fmt.Sprintf(
+		"%s/api/character/profile/%s/%s",
 		c.baseURL,
 		url.PathEscape(server),
 		url.PathEscape(name),
@@ -281,7 +297,8 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 				}
 			}
 			c.limiter.SetLimit(rate.Limit(newRate))
-			c.logger.InfoContext(ctx, "tomestone.rate_recovery",
+			c.logger.InfoContext(
+				ctx, "tomestone.rate_recovery",
 				slog.Int("consecutive_429s", c.consecutive429s),
 				slog.Float64("recovered_rate", newRate),
 			)
@@ -326,7 +343,8 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 			c.rateLimiter.Pause(contract.ProviderTomestone, pauseDuration, "tomestone 429")
 		}
 
-		c.logger.WarnContext(ctx, "tomestone.rate_limited",
+		c.logger.WarnContext(
+			ctx, "tomestone.rate_limited",
 			slog.Int("status", resp.StatusCode),
 			slog.Int("consecutive_429s", consecutive),
 			slog.Float64("adjusted_rate", newRate),
@@ -482,6 +500,7 @@ func parseTime(val any) time.Time {
 	}
 	return time.Time{}
 }
+
 func parseStringOrObject(val any) string {
 	if val == nil {
 		return ""
