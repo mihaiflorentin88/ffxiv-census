@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"runtime/debug"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -305,7 +305,15 @@ func (w *Worker) processJob(ctx context.Context, job contract.QueueJob, workerID
 	}
 
 	start := time.Now()
-	w.logger.InfoContext(ctx, "worker.job_start", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts))
+	w.logger.InfoContext(
+		ctx, "worker.job_start",
+		slog.String("event_type", job.Type),
+		slog.Int64("job_id", job.ID),
+		slog.Int("attempts", job.Attempts),
+		slog.Int("worker_id", workerID),
+		slog.Int("goroutine_id", goroutineID()),
+		slog.String("handler", fmt.Sprintf("%p", h)),
+	)
 	var next []contract.QueueJob
 	var err error
 
@@ -337,6 +345,20 @@ func (w *Worker) processJob(ctx context.Context, job contract.QueueJob, workerID
 	if err := w.queue.Complete(ctx, job.ID, next...); err != nil {
 		w.logger.ErrorContext(ctx, "worker.complete_error", slog.Int64("job_id", job.ID), slog.Any("error", err))
 	}
+}
+
+// goroutineID returns the current goroutine's ID for diagnostic logging.
+func goroutineID() int {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	id := 0
+	for i := len("goroutine "); i < n; i++ {
+		if buf[i] < '0' || buf[i] > '9' {
+			break
+		}
+		id = id*10 + int(buf[i]-'0')
+	}
+	return id
 }
 
 func contains(slice []string, val string) bool {
@@ -554,7 +576,17 @@ func (w *Worker) processJobWithHandlers(ctx context.Context, job contract.QueueJ
 	}
 
 	start := time.Now()
-	w.logger.InfoContext(ctx, "worker.job_start", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts))
+	w.logger.InfoContext(
+		ctx, "worker.job_start",
+		slog.String("event_type", job.Type),
+		slog.Int64("job_id", job.ID),
+		slog.Int("attempts", job.Attempts),
+		slog.Int("worker_id", workerID),
+		slog.Int("goroutine_id", goroutineID()),
+		slog.String("handler", fmt.Sprintf("%p", h)),
+		slog.String("proxy", proxy.Address()),
+		slog.String("owner", owner),
+	)
 	var next []contract.QueueJob
 	var err error
 

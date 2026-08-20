@@ -47,6 +47,7 @@ type Client struct {
 	backoffBase time.Duration
 	logger      contract.Logger
 	rateLimiter contract.ProviderRateLimiter
+	proxyURL    string // empty for direct clients; set for proxy-aware clients
 }
 
 // per second). Lodestone is Cloudflare-fronted; 1 req/s is the established safe
@@ -73,7 +74,12 @@ func NewClientWithProxy(cfg *config.LodestoneConfig, proxyURL string, logger con
 		rl = rateLimiter[0]
 	}
 	sc := godestone.NewScraper(bingode.New(), godestone.EN, godestone.WithProxy(proxyURL))
-	return newClient(sc, cfg, logger, rl)
+	c, err := newClient(sc, cfg, logger, rl)
+	if err != nil {
+		return nil, err
+	}
+	c.proxyURL = proxyURL
+	return c, nil
 }
 
 func newClient(sc scraper, cfg *config.LodestoneConfig, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (*Client, error) {
@@ -131,6 +137,13 @@ func (c *Client) FetchCharacter(ctx context.Context, id uint32) (*godestone.Char
 		if err := c.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
+		c.logger.DebugContext(
+			ctx, "lodestone.fetch_character.attempt",
+			slog.Uint64("id", uint64(id)),
+			slog.Int("attempt", attempt+1),
+			slog.String("proxy", c.proxyURL),
+			slog.String("scraper", fmt.Sprintf("%p", c.scraper)),
+		)
 		char, err := c.scraper.FetchCharacter(id)
 		if err == nil {
 			c.logger.DebugContext(ctx, "lodestone.fetch_character.success", slog.Uint64("id", uint64(id)), slog.Int("attempt", attempt+1))
@@ -158,6 +171,8 @@ func (c *Client) FetchCharacter(ctx context.Context, id uint32) (*godestone.Char
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_attempts", c.maxRetries+1),
 				slog.Duration("backoff", backoff),
+				slog.String("proxy", c.proxyURL),
+				slog.String("scraper", fmt.Sprintf("%p", c.scraper)),
 				slog.String("error", err.Error()))
 		}
 		if attempt < c.maxRetries {
@@ -183,6 +198,13 @@ func (c *Client) FetchAchievements(ctx context.Context, id uint32) ([]*godestone
 		if err := c.limiter.Wait(ctx); err != nil {
 			return nil, nil, err
 		}
+		c.logger.DebugContext(
+			ctx, "lodestone.fetch_achievements.attempt",
+			slog.Uint64("id", uint64(id)),
+			slog.Int("attempt", attempt+1),
+			slog.String("proxy", c.proxyURL),
+			slog.String("scraper", fmt.Sprintf("%p", c.scraper)),
+		)
 		list, all, err := c.scraper.FetchCharacterAchievements(id)
 		if err == nil {
 			c.logger.DebugContext(ctx, "lodestone.fetch_achievements.success", slog.Uint64("id", uint64(id)), slog.Int("attempt", attempt+1))
@@ -210,6 +232,8 @@ func (c *Client) FetchAchievements(ctx context.Context, id uint32) ([]*godestone
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_attempts", c.maxRetries+1),
 				slog.Duration("backoff", backoff),
+				slog.String("proxy", c.proxyURL),
+				slog.String("scraper", fmt.Sprintf("%p", c.scraper)),
 				slog.String("error", err.Error()))
 		}
 		if attempt < c.maxRetries {

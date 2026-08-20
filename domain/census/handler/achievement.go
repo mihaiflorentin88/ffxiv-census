@@ -34,7 +34,11 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return nil, fmt.Errorf("achievement-census payload: %w", err)
 	}
-	h.logger.InfoContext(ctx, "handler.achievement_census", slog.Uint64("character_id", uint64(p.CharacterID)))
+	h.logger.InfoContext(
+		ctx, "handler.achievement_census",
+		slog.Uint64("character_id", uint64(p.CharacterID)),
+		slog.String("lodestone_client", fmt.Sprintf("%p", h.lodestone)),
+	)
 
 	// Wait for Lodestone if rate-limited (blocks until cooldown expires).
 	if h.rateLimiter != nil && !h.rateLimiter.IsAvailable(contract.ProviderLodestone) {
