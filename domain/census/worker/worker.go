@@ -328,7 +328,8 @@ func (w *Worker) processJob(ctx context.Context, job contract.QueueJob, workerID
 
 	if err != nil {
 		w.logger.WarnContext(ctx, "worker.job_retry", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Any("error", err))
-		if rerr := w.queue.Retry(ctx, job.ID, err.Error()); rerr != nil {
+		// Use background context — job must return to queue even during shutdown.
+		if rerr := w.queue.Retry(context.Background(), job.ID, err.Error()); rerr != nil {
 			w.logger.ErrorContext(ctx, "worker.retry_error", slog.Int64("job_id", job.ID), slog.Any("error", rerr))
 		}
 		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
@@ -654,7 +655,8 @@ func (w *Worker) processJobWithHandlers(ctx context.Context, job contract.QueueJ
 
 	if err != nil {
 		w.logger.WarnContext(ctx, "worker.job_retry", slog.String("event_type", job.Type), slog.Int64("job_id", job.ID), slog.Int("attempts", job.Attempts), slog.Duration("duration", time.Since(start)), slog.Any("error", err))
-		if rerr := w.queue.Retry(ctx, job.ID, err.Error()); rerr != nil {
+		// Use background context — job must return to queue even during shutdown.
+		if rerr := w.queue.Retry(context.Background(), job.ID, err.Error()); rerr != nil {
 			w.logger.ErrorContext(ctx, "worker.retry_error", slog.Int64("job_id", job.ID), slog.Any("error", rerr))
 		}
 		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
