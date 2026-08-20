@@ -25,6 +25,10 @@ var proxyDiscoverCmd = &cobra.Command{
 	Short: "Fetch proxies from providers and publish new-proxy events",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+		logger := container.Load.Logger()
+
+		logger.InfoContext(ctx, "proxy.discover.start")
+
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
@@ -38,19 +42,27 @@ var proxyDiscoverCmd = &cobra.Command{
 		if len(providers) == 0 {
 			return fmt.Errorf("no proxy providers configured")
 		}
+		logger.InfoContext(ctx, "proxy.discover.providers", "count", len(providers))
 
 		totalDiscovered := 0
 		totalPublished := 0
 		totalSkipped := 0
+		totalErrors := 0
 
 		for _, p := range providers {
+			logger.InfoContext(ctx, "proxy.discover.fetching", "provider", p.Name())
+			start := time.Now()
 			proxies, err := p.FetchProxies(ctx)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: provider %s failed: %v\n", p.Name(), err)
+				logger.ErrorContext(ctx, "proxy.discover.provider_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+				totalErrors++
 				continue
 			}
+			logger.InfoContext(ctx, "proxy.discover.provider_done", "provider", p.Name(), "fetched", len(proxies), "duration", time.Since(start))
 			totalDiscovered += len(proxies)
 
+			providerPublished := 0
+			providerSkipped := 0
 			for _, rec := range proxies {
 				job := handler.NewProxyJob(handler.NewProxyPayload{
 					Protocol:      rec.Protocol,
@@ -63,17 +75,22 @@ var proxyDiscoverCmd = &cobra.Command{
 				})
 				n, err := q.Publish(ctx, job)
 				if err != nil {
-					return fmt.Errorf("publish new-proxy event: %w", err)
+					logger.ErrorContext(ctx, "proxy.discover.publish_failed", "provider", p.Name(), "ip", rec.IP, "port", rec.Port, "protocol", rec.Protocol, "error", err)
+					totalErrors++
+					continue
 				}
 				if n > 0 {
 					totalPublished++
+					providerPublished++
 				} else {
 					totalSkipped++
+					providerSkipped++
 				}
 			}
+			logger.InfoContext(ctx, "proxy.discover.provider_published", "provider", p.Name(), "published", providerPublished, "skipped_dedup", providerSkipped)
 		}
 
-		fmt.Printf("discovered=%d published=%d skipped_dedup=%d\n", totalDiscovered, totalPublished, totalSkipped)
+		logger.InfoContext(ctx, "proxy.discover.complete", "discovered", totalDiscovered, "published", totalPublished, "skipped_dedup", totalSkipped, "errors", totalErrors)
 		return nil
 	},
 }
@@ -83,6 +100,10 @@ var proxyScanCmd = &cobra.Command{
 	Short: "Publish scan-proxy events for proxies needing verification",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+		logger := container.Load.Logger()
+
+		logger.InfoContext(ctx, "proxy.scan.start")
+
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
@@ -91,6 +112,10 @@ var proxyScanCmd = &cobra.Command{
 		if repo == nil {
 			return fmt.Errorf("proxy repository not initialised")
 		}
+
+		// Get current proxy stats for logging.
+		counts, _ := repo.CountByStatus(ctx)
+		logger.InfoContext(ctx, "proxy.scan.db_stats", "active", counts["active"], "inactive", counts["inactive"], "dead", counts["dead"], "total", counts["active"]+counts["inactive"]+counts["dead"])
 
 		limit, _ := cmd.Flags().GetInt("limit")
 		if limit <= 0 {
@@ -101,25 +126,50 @@ var proxyScanCmd = &cobra.Command{
 				limit = 50
 			}
 		}
+		logger.InfoContext(ctx, "proxy.scan.querying", "limit", limit)
 
+		start := time.Now()
 		proxies, err := repo.ListForScan(ctx, limit)
 		if err != nil {
 			return fmt.Errorf("list proxies for scan: %w", err)
 		}
+		logger.InfoContext(ctx, "proxy.scan.found", "scannable", len(proxies), "duration", time.Since(start))
+
+		if len(proxies) == 0 {
+			logger.InfoContext(ctx, "proxy.scan.complete", "published", 0, "reason", "no proxies need scanning")
+			return nil
+		}
+
+		// Log priority breakdown.
+		var inactive, active, dead int
+		for _, p := range proxies {
+			switch p.Status {
+			case "inactive":
+				inactive++
+			case "active":
+				active++
+			case "dead":
+				dead++
+			}
+		}
+		logger.InfoContext(ctx, "proxy.scan.priority_breakdown", "inactive", inactive, "active_stale", active, "dead_rescan", dead)
 
 		published := 0
+		publishErrors := 0
 		for _, p := range proxies {
 			job := handler.ScanProxyJob(p.ID)
 			n, err := q.Publish(ctx, job)
 			if err != nil {
-				return fmt.Errorf("publish scan-proxy event: %w", err)
+				logger.ErrorContext(ctx, "proxy.scan.publish_failed", "proxy_id", p.ID, "ip", p.IP, "port", p.Port, "status", p.Status, "error", err)
+				publishErrors++
+				continue
 			}
 			if n > 0 {
 				published++
 			}
 		}
 
-		fmt.Printf("scannable=%d published=%d\n", len(proxies), published)
+		logger.InfoContext(ctx, "proxy.scan.complete", "scannable", len(proxies), "published", published, "deduplicated", len(proxies)-published, "errors", publishErrors)
 		return nil
 	},
 }

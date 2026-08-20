@@ -45,6 +45,8 @@ func (s *Service) Providers() []contract.ProxyProvider {
 // ProcessNewProxy inserts a discovered proxy and tests it.
 // Returns nil if the proxy already exists (dedup).
 func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port int, country, anonymity *string, source string, uptimePercent *float64) error {
+	s.logger.InfoContext(ctx, "proxy.process_new.start", "protocol", protocol, "ip", ip, "port", port, "source", source)
+
 	rec := contract.ProxyRecord{
 		Protocol:      protocol,
 		IP:            ip,
@@ -57,11 +59,15 @@ func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port
 
 	id, exists, err := s.repo.Upsert(ctx, rec)
 	if err != nil {
+		s.logger.ErrorContext(ctx, "proxy.process_new.upsert_failed", "ip", ip, "port", port, "error", err)
 		return err
 	}
 	if exists {
+		s.logger.InfoContext(ctx, "proxy.process_new.skipped_exists", "proxy_id", id, "ip", ip, "port", port)
 		return nil
 	}
+
+	s.logger.InfoContext(ctx, "proxy.process_new.inserted", "proxy_id", id, "ip", ip, "port", port, "testing", true)
 
 	// Fetch the newly inserted proxy by ID.
 	p, err := s.repo.Get(ctx, id)
@@ -79,11 +85,15 @@ func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port
 func (s *Service) ProcessScanProxy(ctx context.Context, proxyID int64) error {
 	p, err := s.repo.Get(ctx, proxyID)
 	if err != nil {
+		s.logger.ErrorContext(ctx, "proxy.process_scan.get_failed", "proxy_id", proxyID, "error", err)
 		return err
 	}
 	if p == nil {
+		s.logger.WarnContext(ctx, "proxy.process_scan.not_found", "proxy_id", proxyID)
 		return nil // proxy deleted between queue and processing
 	}
+
+	s.logger.InfoContext(ctx, "proxy.process_scan.start", "proxy_id", p.ID, "ip", p.IP, "port", p.Port, "protocol", p.Protocol, "current_status", p.Status, "fail_count", p.FailCount)
 
 	return s.processProxyCheck(ctx, p)
 }
@@ -115,8 +125,9 @@ func (s *Service) processProxyCheck(ctx context.Context, p *contract.ProxyRecord
 			return err
 		}
 		s.logger.InfoContext(ctx, "proxy.check_failed",
-			"proxy_id", p.ID, "ip", p.IP, "port", p.Port,
-			"new_status", newStatus, "fail_count", newFailCount, "error", err)
+			"proxy_id", p.ID, "protocol", p.Protocol, "ip", p.IP, "port", p.Port, "source", p.Source,
+			"previous_status", p.Status, "new_status", newStatus, "fail_count", newFailCount,
+			"last_alive_at", p.LastAliveAt, "error", err)
 		return nil
 	}
 
@@ -125,7 +136,7 @@ func (s *Service) processProxyCheck(ctx context.Context, p *contract.ProxyRecord
 		return err
 	}
 	s.logger.InfoContext(ctx, "proxy.check_passed",
-		"proxy_id", p.ID, "ip", p.IP, "port", p.Port,
-		"latency_ms", latency)
+		"proxy_id", p.ID, "protocol", p.Protocol, "ip", p.IP, "port", p.Port, "source", p.Source,
+		"previous_status", p.Status, "latency_ms", latency)
 	return nil
 }
