@@ -179,7 +179,8 @@ func (f *FakeProxyRepository) ClaimProxy(_ context.Context, owner string, lockTT
 	now := time.Now().UTC()
 	expireThreshold := now.Add(-lockTTL)
 
-	// Find best available proxy (lowest latency, active, not locked or lock expired).
+	// Find best available proxy: prefer recently alive (last hour), then highest uptime, then lowest latency.
+	recentThreshold := now.Add(-1 * time.Hour)
 	var best *contract.ProxyRecord
 	for _, p := range f.proxies {
 		if p.Status != contract.ProxyStatusActive {
@@ -191,7 +192,32 @@ func (f *FakeProxyRepository) ClaimProxy(_ context.Context, owner string, lockTT
 		if p.LockedAt != nil && p.LockedAt.After(expireThreshold) {
 			continue
 		}
-		if best == nil || latencyOrMax(p) < latencyOrMax(*best) {
+		if best == nil {
+			best = &p
+			continue
+		}
+		// Prefer recently alive
+		pRecent := p.LastAliveAt != nil && p.LastAliveAt.After(recentThreshold)
+		bRecent := best.LastAliveAt != nil && best.LastAliveAt.After(recentThreshold)
+		if pRecent && !bRecent {
+			best = &p
+			continue
+		}
+		if !pRecent && bRecent {
+			continue
+		}
+		// Both recent or both stale: prefer higher uptime
+		pUptime := uptimeOrZero(p)
+		bUptime := uptimeOrZero(*best)
+		if pUptime > bUptime {
+			best = &p
+			continue
+		}
+		if pUptime < bUptime {
+			continue
+		}
+		// Same uptime: prefer lower latency
+		if latencyOrMax(p) < latencyOrMax(*best) {
 			best = &p
 		}
 	}
@@ -267,6 +293,13 @@ func scannedBefore(a, b contract.ProxyRecord) bool {
 		return false
 	}
 	return a.LastScannedAt.Before(*b.LastScannedAt)
+}
+
+func uptimeOrZero(p contract.ProxyRecord) float64 {
+	if p.UptimePercent != nil {
+		return *p.UptimePercent
+	}
+	return 0
 }
 
 func latencyOrMax(p contract.ProxyRecord) int {

@@ -275,16 +275,40 @@ func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL 
 	now := time.Now().UTC()
 	expireThreshold := now.Add(-lockTTL)
 
+	// Prefer proxies confirmed alive within the last hour, ordered by uptime (highest)
+	// then latency (lowest). Fall back to any active proxy if none are recently scanned.
+	recentThreshold := now.Add(-1 * time.Hour)
+
 	row := tx.QueryRowContext(ctx,
 		`SELECT `+proxyColumns+` FROM proxies
 		WHERE status = 'active'
 			AND protocol IN ('http', 'https', 'socks4', 'socks5')
 			AND (locked_at IS NULL OR locked_at < $1)
-		ORDER BY latency_ms ASC NULLS LAST
+			AND last_alive_at >= $2
+		ORDER BY uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`, expireThreshold)
+		FOR UPDATE SKIP LOCKED`, expireThreshold, recentThreshold)
 
 	p, err := scanProxy(row)
+	if err == sql.ErrNoRows {
+		// Fallback: any active proxy (not recently scanned)
+		row = tx.QueryRowContext(ctx,
+			`SELECT `+proxyColumns+` FROM proxies
+			WHERE status = 'active'
+				AND protocol IN ('http', 'https', 'socks4', 'socks5')
+				AND (locked_at IS NULL OR locked_at < $1)
+			ORDER BY uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED`, expireThreshold)
+		p, err = scanProxy(row)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("proxy claim fallback: %w", err)
+		}
+	}
+
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
