@@ -223,8 +223,6 @@ cronjobs:
         - character-census
         - --limit
         - "15000"
-        - --chunk-size
-        - "10"
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
