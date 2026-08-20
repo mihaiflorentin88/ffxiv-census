@@ -3,15 +3,19 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	xproxy "golang.org/x/net/proxy"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 // Checker tests whether a proxy can reach The Lodestone by making an HTTP GET
 // request through it. It measures round-trip latency in milliseconds.
+// Supports http, https, socks4, and socks5 proxy protocols.
 type Checker struct {
 	testURL string
 	timeout time.Duration
@@ -35,9 +39,34 @@ func (c *Checker) Check(ctx context.Context, protocol, ip string, port int) (int
 		return 0, fmt.Errorf("parse proxy url: %w", err)
 	}
 
-	transport := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
+	var transport *http.Transport
+	switch proxyURL.Scheme {
+	case "http", "https":
+		transport = &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		}
+	case "socks4", "socks5":
+		dialer, err := xproxy.FromURL(proxyURL, xproxy.Direct)
+		if err != nil {
+			return 0, fmt.Errorf("socks dialer: %w", err)
+		}
+		ctxDialer, ok := dialer.(xproxy.ContextDialer)
+		if !ok {
+			// Fallback: wrap plain Dialer with context
+			transport = &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				},
+			}
+		} else {
+			transport = &http.Transport{
+				DialContext: ctxDialer.DialContext,
+			}
+		}
+	default:
+		return 0, fmt.Errorf("unsupported proxy protocol: %s", protocol)
 	}
+
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   c.timeout,
