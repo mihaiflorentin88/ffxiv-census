@@ -80,6 +80,8 @@ The queue adapter is resolved via `container.Load.Queue()`.
 ├── container/          - Service container exposing interfaces to infrastructure adapters.
 ├── docs/               - Documentation resources.
 ├── domain/             - Domain logic; avoids direct infrastructure dependencies.
+│   ├── census/         - Census bounded context (characters, achievements, FCs).
+│   └── proxy/          - Proxy pool bounded context (discovery, scanning, lifecycle).
 ├── infrastructure/     - External clients (datastores, APIs) implementing ports.
 └── port/               - Contracts (interfaces) and DTOs exchanged across layers.
 ```

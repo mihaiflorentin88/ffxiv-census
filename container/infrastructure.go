@@ -3,7 +3,9 @@ package container
 import (
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/geonode"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
@@ -12,6 +14,8 @@ import (
 	postgresmigration "github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres/migration"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/postgres/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/provider"
+	proxyinfra "github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxy"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxyscrape"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -30,6 +34,10 @@ type InfrastructureContainer struct {
 	achievementRepository contract.AchievementRepository
 	censusRunRepository   contract.CensusRunRepository
 	providerRateLimiter   contract.ProviderRateLimiter
+	proxyRepository       contract.ProxyRepository
+	proxyChecker          *proxyinfra.Checker
+	proxyScrapeProvider   contract.ProxyProvider
+	geonodeProvider       contract.ProxyProvider
 }
 
 // Logger returns the process-wide structured logger (infrastructure/logging.Logger)
@@ -76,6 +84,7 @@ func (s *ServiceContainer) Statsd() contract.StatsdClient {
 	s.infrastructure.statsd = client
 	return client
 }
+
 func (s *ServiceContainer) PrometheusRegistry() *metrics.Registry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,6 +95,7 @@ func (s *ServiceContainer) PrometheusRegistry() *metrics.Registry {
 	s.infrastructure.prometheusRegistry = reg
 	return reg
 }
+
 func (s *ServiceContainer) ProviderRateLimiter() contract.ProviderRateLimiter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,4 +266,70 @@ func (s *ServiceContainer) CensusRunRepository() contract.CensusRunRepository {
 	}
 	s.infrastructure.censusRunRepository = repository.NewCensusRunRepository(driver)
 	return s.infrastructure.censusRunRepository
+}
+
+func (s *ServiceContainer) ProxyRepository() contract.ProxyRepository {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.proxyRepository != nil {
+		return s.infrastructure.proxyRepository
+	}
+	driver := s.databaseUnlocked()
+	if driver == nil {
+		logging.Warn("container.proxy_repository", "database driver unavailable")
+		return nil
+	}
+	s.infrastructure.proxyRepository = repository.NewProxyRepository(driver)
+	return s.infrastructure.proxyRepository
+}
+
+func (s *ServiceContainer) ProxyChecker() *proxyinfra.Checker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.proxyChecker != nil {
+		return s.infrastructure.proxyChecker
+	}
+	cfg := s.configUnlocked().Proxy
+	testURL := "https://na.finalfantasyxiv.com/lodestone/"
+	timeout := 15 * time.Second
+	if cfg != nil {
+		if cfg.TestURL != "" {
+			testURL = cfg.TestURL
+		}
+		if cfg.TestTimeout != "" {
+			if d, err := time.ParseDuration(cfg.TestTimeout); err == nil {
+				timeout = d
+			}
+		}
+	}
+	s.infrastructure.proxyChecker = proxyinfra.NewChecker(testURL, timeout, s.Logger())
+	return s.infrastructure.proxyChecker
+}
+
+func (s *ServiceContainer) ProxyScrapeProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.proxyScrapeProvider != nil {
+		return s.infrastructure.proxyScrapeProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.ProxyScrape {
+		return nil
+	}
+	s.infrastructure.proxyScrapeProvider = proxyscrape.New(s.HTTPClient(), cfg.Providers.ProxyScrapeURL)
+	return s.infrastructure.proxyScrapeProvider
+}
+
+func (s *ServiceContainer) GeonodeProvider() contract.ProxyProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.geonodeProvider != nil {
+		return s.infrastructure.geonodeProvider
+	}
+	cfg := s.configUnlocked().Proxy
+	if cfg == nil || !cfg.Providers.Geonode {
+		return nil
+	}
+	s.infrastructure.geonodeProvider = geonode.New(s.HTTPClient(), cfg.Providers.GeonodeURL)
+	return s.infrastructure.geonodeProvider
 }

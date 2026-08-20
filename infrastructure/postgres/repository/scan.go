@@ -37,6 +37,35 @@ func boolInt(b bool) int {
 	return 0
 }
 
+func nullableFloat64(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func nullableInt(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func sqlFloat64Ptr(nf sql.NullFloat64) *float64 {
+	if !nf.Valid {
+		return nil
+	}
+	return &nf.Float64
+}
+
+func sqlIntPtr(ni sql.NullInt64) *int {
+	if !ni.Valid {
+		return nil
+	}
+	v := int(ni.Int64)
+	return &v
+}
+
 func sqlStringPtr(ns sql.NullString) *string {
 	if !ns.Valid {
 		return nil

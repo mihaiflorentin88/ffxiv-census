@@ -176,6 +176,14 @@ workers:
         - all
         - -c
         - "30"
+    - name: proxy-consumer
+      replicaCount: 1
+      command:
+        - /app/ffxiv-census
+        - proxy
+        - consume
+        - -c
+        - "30"
 
 cronjobs:
   defaults:
@@ -205,7 +213,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "3000"
+        - "5000"
         - --chunk-size
         - "10"
     - name: publish-id-sweep
@@ -216,7 +224,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --batch-size
-        - "3000"
+        - "3500"
         - --chunk-size
         - "10"
     # - name: publish-fc-census disabled for now. please do not remove or uncomment
@@ -238,3 +246,15 @@ cronjobs:
     #     - --fill-gaps
     #     - --chunk-size
     #     - "100"
+    - name: proxy-discover
+      schedule: "0 * * * *"
+      command:
+        - /app/ffxiv-census
+        - proxy
+        - discover
+    - name: proxy-scan
+      schedule: "*/20 * * * *"
+      command:
+        - /app/ffxiv-census
+        - proxy
+        - scan

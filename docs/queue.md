@@ -153,3 +153,12 @@ CLI commands are available under `ffxiv-census queue`:
 ## Container wiring
 
 `container.Load.Queue()` lazily builds the adapter on top of the SQLite driver (which self-migrates on first use) and caches it. Like `SQLite()`, it degrades to a logged `nil` if the driver or `[queue]` config is unavailable.
+
+## Event Types
+
+The queue carries events for two bounded contexts. See `docs/events.md` for payloads and chaining details.
+
+| Context | Events | Consumer |
+|---------|--------|----------|
+| Census | `id-sweep`, `character-census`, `achievement-census`, `fc-census` | `ffxiv-census consume` |
+| Proxy | `new-proxy`, `scan-proxy` | `ffxiv-census proxy consume` |

@@ -25,6 +25,7 @@ type Config struct {
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
 	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
 	Census    *CensusConfig    `mapstructure:"census"`
+	Proxy     *ProxyConfig     `mapstructure:"proxy"`
 }
 
 type AppConfig struct {
@@ -123,6 +124,23 @@ type CensusConfig struct {
 	ActivityWindowDays int               `mapstructure:"activity_window_days"`
 	MaxLevel           uint32            `mapstructure:"max_level"`
 	Expansions         []ExpansionConfig `mapstructure:"expansions"`
+}
+
+type ProxyConfig struct {
+	TestURL              string              `mapstructure:"test_url"`
+	TestTimeout          string              `mapstructure:"test_timeout"`
+	ScanBatchSize        int                 `mapstructure:"scan_batch_size"`
+	DeadThresholdDays    int                 `mapstructure:"dead_threshold_days"`
+	DeadScanIntervalDays int                 `mapstructure:"dead_scan_interval_days"`
+	FailCountThreshold   int                 `mapstructure:"fail_count_threshold"`
+	Providers            ProxyProviderConfig `mapstructure:"providers"`
+}
+
+type ProxyProviderConfig struct {
+	ProxyScrape    bool   `mapstructure:"proxyscrape"`
+	ProxyScrapeURL string `mapstructure:"proxyscrape_url"`
+	Geonode        bool   `mapstructure:"geonode"`
+	GeonodeURL     string `mapstructure:"geonode_url"`
 }
 
 func loadDotEnv() {
