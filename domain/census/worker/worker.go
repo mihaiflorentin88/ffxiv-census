@@ -576,8 +576,8 @@ func (w *Worker) proxyWorkerLoop(
 				badProxy := w.processJobWithHandlers(processCtx, job, workerID, handlers, proxy, owner, proxyHub)
 				if badProxy {
 					w.logger.InfoContext(claimCtx, "worker.proxy_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
-					// Release bad proxy and acquire a new one immediately.
-					_ = proxy.Release(context.Background(), owner)
+					// Mark proxy as failed (increments fail count, sets inactive) and acquire a new one.
+					_ = proxy.MarkFailed(context.Background(), owner)
 					newProxy, perr := proxyHub.NewProxy(claimCtx, owner)
 					if perr != nil {
 						return fmt.Errorf("proxy re-acquire after failure: %w", perr)

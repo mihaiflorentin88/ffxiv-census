@@ -96,3 +96,20 @@ func (p *Proxy) Release(ctx context.Context, owner string) error {
 	p.record.LockedAt = nil
 	return nil
 }
+
+// MarkFailed releases the lock and increments the fail count.
+// This prevents the proxy from being immediately re-acquired by another worker.
+func (p *Proxy) MarkFailed(ctx context.Context, owner string) error {
+	// Release the lock first.
+	if err := p.Release(ctx, owner); err != nil {
+		return err
+	}
+	// Increment fail count and set to inactive so it's not immediately re-selected.
+	newFailCount := p.record.FailCount + 1
+	if err := p.repo.UpdateStatus(ctx, p.record.ID, contract.ProxyStatusInactive, nil, newFailCount, p.record.LastAliveAt); err != nil {
+		return err
+	}
+	p.record.FailCount = newFailCount
+	p.record.Status = contract.ProxyStatusInactive
+	return nil
+}
