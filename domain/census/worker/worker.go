@@ -419,6 +419,15 @@ func (w *Worker) RunEventsWithProxy(
 
 	w.logger.InfoContext(ctx, "worker.proxy_start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 
+	// Reclaim claimed jobs from previous crashed/restarted pods.
+	for _, eventType := range eventTypes {
+		if n, err := w.queue.ReclaimClaimed(ctx, eventType); err != nil {
+			return fmt.Errorf("reclaim claimed jobs for %s: %w", eventType, err)
+		} else if n > 0 {
+			w.logger.InfoContext(ctx, "worker.reclaimed", slog.String("event_type", eventType), slog.Int("reclaimed", n))
+		}
+	}
+
 	childCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
