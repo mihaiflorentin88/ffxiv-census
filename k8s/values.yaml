@@ -222,7 +222,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "5000"
+        - "15000"
         - --chunk-size
         - "10"
     - name: publish-id-sweep
@@ -233,7 +233,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --batch-size
-        - "3500"
+        - "8000"
         - --chunk-size
         - "10"
     # - name: publish-fc-census disabled for now. please do not remove or uncomment
