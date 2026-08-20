@@ -269,6 +269,25 @@ func (f *FakeProxyRepository) ReleaseProxy(_ context.Context, id int64, owner st
 	return nil
 }
 
+func (f *FakeProxyRepository) MarkFailedProxy(_ context.Context, id int64, owner string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.proxies[id]
+	if !ok {
+		return nil
+	}
+	if p.LockedBy == nil || *p.LockedBy != owner {
+		return nil
+	}
+	p.LockedBy = nil
+	p.LockedAt = nil
+	p.Status = contract.ProxyStatusInactive
+	p.FailCount++
+	p.UpdatedAt = time.Now().UTC()
+	f.proxies[id] = p
+	return nil
+}
+
 func priority(p contract.ProxyRecord) int {
 	switch p.Status {
 	case contract.ProxyStatusInactive:

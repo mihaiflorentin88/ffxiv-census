@@ -57,22 +57,29 @@ func (p *Proxy) IsActive() bool {
 }
 
 // CanUse returns true if the proxy is active and locked by the given owner.
-func (p *Proxy) CanUse(owner string) bool {
+// On success, it extends the lock TTL in the database to prevent expiry while
+// the goroutine is still actively processing jobs. Returns false if the proxy
+// is inactive, unlocked, owned by someone else, or if the lock has already
+// expired (another worker may have claimed it).
+func (p *Proxy) CanUse(ctx context.Context, owner string, lockTTL time.Duration) (bool, error) {
 	if p.record.Status != contract.ProxyStatusActive {
-		return false
+		return false, nil
 	}
 	if p.record.LockedBy == nil {
-		return false
+		return false, nil
 	}
-	return *p.record.LockedBy == owner
-}
-
-// ExtendLock extends the lock TTL for this proxy.
-// Returns false if the proxy is not owned by the caller.
-func (p *Proxy) ExtendLock(ctx context.Context, owner string, lockTTL time.Duration) (bool, error) {
+	if *p.record.LockedBy != owner {
+		return false, nil
+	}
+	// Check if the in-memory lock has already expired — if so, another worker
+	// may have claimed this proxy via ClaimProxy's FOR UPDATE SKIP LOCKED.
+	if p.record.LockedAt != nil && time.Since(*p.record.LockedAt) > lockTTL {
+		return false, nil
+	}
+	// Ownership confirmed — extend the lock to keep it alive.
 	ok, err := p.repo.ExtendLock(ctx, p.record.ID, owner, lockTTL)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("extend lock: %w", err)
 	}
 	if ok {
 		now := time.Now().UTC()
@@ -97,19 +104,17 @@ func (p *Proxy) Release(ctx context.Context, owner string) error {
 	return nil
 }
 
-// MarkFailed releases the lock and increments the fail count.
-// This prevents the proxy from being immediately re-acquired by another worker.
+// MarkFailed atomically releases the lock and sets the proxy to inactive with
+// an incremented fail count. This prevents the proxy from being immediately
+// re-acquired by another worker, and avoids the TOCTOU race of separate
+// Release + UpdateStatus calls.
 func (p *Proxy) MarkFailed(ctx context.Context, owner string) error {
-	// Release the lock first.
-	if err := p.Release(ctx, owner); err != nil {
+	if err := p.repo.MarkFailedProxy(ctx, p.record.ID, owner); err != nil {
 		return err
 	}
-	// Increment fail count and set to inactive so it's not immediately re-selected.
-	newFailCount := p.record.FailCount + 1
-	if err := p.repo.UpdateStatus(ctx, p.record.ID, contract.ProxyStatusInactive, nil, newFailCount, p.record.LastAliveAt); err != nil {
-		return err
-	}
-	p.record.FailCount = newFailCount
+	p.record.LockedBy = nil
+	p.record.LockedAt = nil
+	p.record.FailCount++
 	p.record.Status = contract.ProxyStatusInactive
 	return nil
 }

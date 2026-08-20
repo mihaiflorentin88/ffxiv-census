@@ -25,7 +25,11 @@ func TestProxy_CanUse_ActiveAndOwned(t *testing.T) {
 	repo.Upsert(context.Background(), rec)
 
 	p := New(&rec, repo)
-	if !p.CanUse(owner) {
+	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
 		t.Fatal("expected CanUse to return true for active proxy owned by caller")
 	}
 }
@@ -47,7 +51,11 @@ func TestProxy_CanUse_ActiveAndStolen(t *testing.T) {
 	repo.Upsert(context.Background(), rec)
 
 	p := New(&rec, repo)
-	if p.CanUse(owner) {
+	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
 		t.Fatal("expected CanUse to return false for proxy owned by another")
 	}
 }
@@ -65,7 +73,11 @@ func TestProxy_CanUse_Inactive(t *testing.T) {
 	repo.Upsert(context.Background(), rec)
 
 	p := New(&rec, repo)
-	if p.CanUse(owner) {
+	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
 		t.Fatal("expected CanUse to return false for inactive proxy")
 	}
 }
@@ -83,15 +95,20 @@ func TestProxy_CanUse_Unlocked(t *testing.T) {
 	repo.Upsert(context.Background(), rec)
 
 	p := New(&rec, repo)
-	if p.CanUse(owner) {
+	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
 		t.Fatal("expected CanUse to return false for unlocked proxy")
 	}
 }
 
-func TestProxy_ExtendLock(t *testing.T) {
+func TestProxy_CanUse_ExpiredLock(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	owner := "test-g1"
-	now := time.Now().UTC()
+	// Lock was acquired 10 minutes ago — exceeds the 5-minute TTL.
+	expiredTime := time.Now().UTC().Add(-10 * time.Minute)
 	rec := contract.ProxyRecord{
 		ID:       1,
 		Protocol: "http",
@@ -99,21 +116,54 @@ func TestProxy_ExtendLock(t *testing.T) {
 		Port:     8080,
 		Status:   contract.ProxyStatusActive,
 		LockedBy: &owner,
-		LockedAt: &now,
+		LockedAt: &expiredTime,
 	}
 	repo.Upsert(context.Background(), rec)
 
 	p := New(&rec, repo)
-	ok, err := p.ExtendLock(context.Background(), owner, 5*time.Minute)
+	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected CanUse to return false for expired lock")
+	}
+}
+
+func TestProxy_CanUse_ExtendsLock(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	owner := "test-g1"
+	// Lock was acquired 4 minutes ago — within the 5-minute TTL but close to expiry.
+	oldTime := time.Now().UTC().Add(-4 * time.Minute)
+	rec := contract.ProxyRecord{
+		ID:       1,
+		Protocol: "http",
+		IP:       "1.2.3.4",
+		Port:     8080,
+		Status:   contract.ProxyStatusActive,
+		LockedBy: &owner,
+		LockedAt: &oldTime,
+	}
+	repo.Upsert(context.Background(), rec)
+
+	p := New(&rec, repo)
+	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !ok {
-		t.Fatal("expected ExtendLock to return true for owned proxy")
+		t.Fatal("expected CanUse to return true for proxy within TTL")
+	}
+	// Verify the lock time was extended — should be close to now, not 4 minutes ago.
+	if p.LockedAt() == nil {
+		t.Fatal("expected LockedAt to be set after CanUse")
+	}
+	if time.Since(*p.LockedAt()) > time.Second {
+		t.Fatalf("expected lock time to be extended to now, got %v", p.LockedAt())
 	}
 }
 
-func TestProxy_ExtendLock_WrongOwner(t *testing.T) {
+func TestProxy_CanUse_WrongOwner(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	owner := "test-g1"
 	other := "test-g2"
@@ -130,12 +180,12 @@ func TestProxy_ExtendLock_WrongOwner(t *testing.T) {
 	repo.Upsert(context.Background(), rec)
 
 	p := New(&rec, repo)
-	ok, err := p.ExtendLock(context.Background(), other, 5*time.Minute)
+	ok, err := p.CanUse(context.Background(), other, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ok {
-		t.Fatal("expected ExtendLock to return false for wrong owner")
+		t.Fatal("expected CanUse to return false for wrong owner")
 	}
 }
 

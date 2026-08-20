@@ -528,8 +528,13 @@ func (w *Worker) proxyWorkerLoop(
 			return nil
 		}
 
-		// Check proxy ownership before claiming.
-		if !proxy.CanUse(owner) {
+		// Check proxy ownership and extend the lock in one atomic call.
+		lockTTL := proxyHub.LockTTL()
+		canUse, canErr := proxy.CanUse(claimCtx, owner, lockTTL)
+		if canErr != nil {
+			w.logger.WarnContext(claimCtx, "worker.proxy_canuse_error", slog.Int("worker_id", workerID), slog.Any("error", canErr))
+		}
+		if !canUse {
 			w.logger.InfoContext(claimCtx, "worker.proxy_lost", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 			// Acquire new proxy.
 			newProxy, perr := proxyHub.NewProxy(claimCtx, owner)

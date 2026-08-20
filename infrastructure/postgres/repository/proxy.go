@@ -368,3 +368,20 @@ func (r *ProxyRepository) ReleaseProxy(ctx context.Context, id int64, owner stri
 	}
 	return nil
 }
+
+func (r *ProxyRepository) MarkFailedProxy(ctx context.Context, id int64, owner string) error {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	_, err = db.ExecContext(ctx,
+		`UPDATE proxies SET locked_by = NULL, locked_at = NULL, status = 'inactive',
+		fail_count = fail_count + 1, updated_at = $1
+		WHERE id = $2 AND locked_by = $3`,
+		now, id, owner)
+	if err != nil {
+		return fmt.Errorf("proxy mark failed: %w", err)
+	}
+	return nil
+}

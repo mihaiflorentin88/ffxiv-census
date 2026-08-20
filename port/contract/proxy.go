@@ -74,4 +74,8 @@ type ProxyRepository interface {
 	ExtendLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (bool, error)
 	// ReleaseProxy releases the lock on a proxy owned by the given owner.
 	ReleaseProxy(ctx context.Context, id int64, owner string) error
+	// MarkFailedProxy atomically releases the lock AND sets the proxy to inactive
+	// with an incremented fail count. This prevents a TOCTOU race where another
+	// worker could claim the proxy between Release and UpdateStatus.
+	MarkFailedProxy(ctx context.Context, id int64, owner string) error
 }
