@@ -51,7 +51,7 @@ type apiResponse struct {
 func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, error) {
 	var allRecords []contract.ProxyRecord
 	page := 1
-	limit := 500
+	limit := 100
 
 	for {
 		params := map[string]string{

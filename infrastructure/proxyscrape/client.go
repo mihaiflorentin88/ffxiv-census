@@ -40,7 +40,7 @@ type proxyResponse struct {
 	Country   string  `json:"country_code"`
 	Anonymity string  `json:"anonymity"`
 	Uptime    float64 `json:"uptime"`
-	Timeout   int     `json:"timeout"`
+	Timeout   float64 `json:"timeout"`
 }
 
 type apiResponse struct {
