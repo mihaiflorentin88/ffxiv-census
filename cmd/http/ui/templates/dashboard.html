@@ -159,20 +159,20 @@
 <script>
     document.addEventListener("DOMContentLoaded", function () {
         // New Characters Line Chart
-        const lineCtx = document.getElementById('newCharactersChart');
+        var lineCtx = document.getElementById('newCharactersChart');
         if (lineCtx) {
-            const labels = {{jsonSafe .Data.ChartLabels}}
+            var chartLabels = {{jsonSafe .Data.ChartLabels}}
         };
-        const data = {{jsonSafe .Data.ChartData}}
+        var chartData = {{jsonSafe .Data.ChartData}}
     };
 
     new Chart(lineCtx, {
         type: 'line',
         data: {
-            labels: labels,
+            labels: chartLabels,
             datasets: [{
                 label: 'New Characters',
-                data: data,
+                data: chartData,
                 borderColor: '#38bdf8',
                 backgroundColor: 'rgba(56, 189, 248, 0.1)',
                 borderWidth: 2,
@@ -211,16 +211,16 @@
             }
         }
     });
-        }
+    }
 
     // Race Distribution Pie Chart
-    const pieCtx = document.getElementById('racePieChart');
+    var pieCtx = document.getElementById('racePieChart');
     if (pieCtx) {
-        const raceLabels = {{jsonSafe .Data.RaceLabels}}
+        var raceLabels = {{jsonSafe .Data.RaceLabels}}
     };
-    const raceData = {{jsonSafe .Data.RaceData}}};
+    var raceData = {{jsonSafe .Data.RaceData}}};
 
-    const colors = [
+    var colors = [
         '#d4af37', '#38bdf8', '#f472b6', '#34d399',
         '#a78bfa', '#fb923c', '#e879f9', '#22d3ee',
         '#fbbf24', '#60a5fa', '#f87171', '#4ade80'
@@ -261,8 +261,8 @@
                     padding: 10,
                     callbacks: {
                         label: function (ctx) {
-                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                            const pct = ((ctx.parsed / total) * 100).toFixed(1);
+                            var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0);
+                            var pct = ((ctx.parsed / total) * 100).toFixed(1);
                             return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';
                         }
                     }
@@ -270,11 +270,11 @@
             }
         }
     });
-        }
-    });
+    }
+});
 
     function toggleWorldDrilldown(btn, region) {
-        const target = document.getElementById('drilldown-' + region);
+        var target = document.getElementById('drilldown-' + region);
         if (!target) return;
         if (target.innerHTML.trim().length > 0) {
             target.innerHTML = '';
