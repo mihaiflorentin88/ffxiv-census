@@ -306,5 +306,3 @@ cronjobs:
         - /app/ffxiv-census
         - proxy
         - scan
-        - --limit
-        - "0"
