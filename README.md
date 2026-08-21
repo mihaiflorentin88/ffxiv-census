@@ -1,6 +1,6 @@
 # ffxiv-census
 
-**ffxiv-census** is a high-performance, single-binary FFXIV census engine and data crawler built with Go and PostgreSQL. It follows a hexagonal (ports & adapters) architecture, featuring an embedded HTMX Web UI, REST APIs, OpenAPI/Swagger specifications, Prometheus metrics, and a durable, multi-queue consumer with jittered exponential backoff and provider rate-limiting pause controls.
+**ffxiv-census** is a high-performance, single-binary FFXIV census engine and data crawler built with Go and PostgreSQL. It follows a hexagonal (ports & adapters) architecture, featuring an embedded HTMX Web UI, REST APIs, OpenAPI/Swagger specifications, Prometheus metrics, and a RabbitMQ-backed push-based consumer with dead-letter retry and provider rate-limiting pause controls.
 
 ---
 
@@ -25,7 +25,7 @@ Detailed architectural and subsystem documentation lives under `docs/`:
 - `docs/container.md` — Explains the Service Locator pattern and dependency wiring.
 - `docs/postgres.md` — PostgreSQL storage layer, connection pooling, migrations, and DatabaseDriver contract.
 - `docs/external-postgres.md` — External PostgreSQL cluster (pgres-chart), CNPG HA, and Vault integration.
-- `docs/queue.md` — PostgreSQL-backed durable multi-queue, atomic claims, jittered backoff, and infinite retries.
+- `docs/queue.md` — RabbitMQ-backed push-based queue with dead-letter retry and provider rate-limiting.
 - `docs/proxy.md` — Proxy pool discovery, scanning, health checking, and census consumer integration.
 - `docs/lodestone.md` — The Lodestone scraper adapter (rate limiting, Cloudflare protection, retries).
 - `docs/tomestone.md` — Tomestone.gg integration for fast character lookups and dual-source census.
@@ -57,14 +57,14 @@ Starts the HTTP/HTTPS server serving the HTMX Web UI, REST API, Swagger UI, and 
 ./bin/ffxiv-census server --start --port 8080 --profile
 ```
 
-### 2. `consume` — Multi-Queue Worker with Provider Rate-Limit Pausing
+### 2. `consume` — Push-Based RabbitMQ Worker with Provider Rate-Limit Pausing
 
-Runs long-running consumer worker goroutines. By default, consumes from **all** registered event queues concurrently (`id-sweep`, `character-census`, `achievement-census`, `fc-census`).
+Runs long-running consumer goroutines that receive messages via RabbitMQ push delivery. By default, consumes from **all** registered event queues concurrently (`id-sweep`, `character-census`, `achievement-census`). Each event type gets its own dedicated pod in Kubernetes for isolation and independent scaling.
 
 When an external provider (Lodestone or Tomestone) returns HTTP 429 (rate limit exceeded), the worker automatically pauses consumption of queues dependent on that provider for a cooldown period without blocking the other provider's queues.
 
 ```bash
-# Consume from ALL event queues concurrently (default 4 workers)
+# Consume from ALL event queues concurrently (default 3 workers)
 ./bin/ffxiv-census consume
 
 # Consume from specific queues using the --events flag
@@ -72,9 +72,6 @@ When an external provider (Lodestone or Tomestone) returns HTTP 429 (rate limit 
 
 # Consume a single queue via positional argument
 ./bin/ffxiv-census consume achievement-census --concurrency 2
-
-# Adjust polling interval for idle queues
-./bin/ffxiv-census consume --poll-interval 250ms
 
 # Proxy mode: each goroutine acquires its own proxy from the pool
 ./bin/ffxiv-census consume --proxy --concurrency 8
@@ -108,52 +105,19 @@ Enqueues known characters that have not been updated within a specified duration
 ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```
 
-#### `publish fc-census`
-Enqueues Free Company profile updates.
-```bash
-# Re-census stale Free Companies
-./bin/ffxiv-census publish fc-census --older-than 720h --limit 500
-```
+### 4. `export` — Data Export (CSV & JSON)
 
-### 4. `queue` — Queue Inspection & Dead-Letter Replay
-
-Administrative commands to inspect queue depth, replay failed jobs, or purge historical records.
-
-```bash
-# Display live ASCII table with queue depths and sample jobs
-./bin/ffxiv-census queue stats
-
-# Display stats for a specific event type with up to 10 samples
-./bin/ffxiv-census queue stats --event-type id-sweep --sample-limit 10
-
-# Replay failed dead-letter jobs back to pending
-./bin/ffxiv-census queue retry-failed --event-type character-census --limit 500
-
-# Purge completed jobs older than 7 days
-./bin/ffxiv-census queue purge --status done --older-than 168h
-
-# Purge all pending jobs immediately
-./bin/ffxiv-census queue purge --status pending --all
-
-# Purge entire queue (all statuses, all events)
-./bin/ffxiv-census queue purge --all
-
-### 5. `export` — Data Export (CSV & JSON)
-
-Exports census data for characters, free companies, or achievements directly to disk.
+Exports census data for characters or achievements directly to disk.
 
 ```bash
 # Export all active characters to CSV
 ./bin/ffxiv-census export characters --format csv --output ./exports/characters.csv
 
-# Export free companies on a specific datacenter to JSON
-./bin/ffxiv-census export free-companies --datacenter Chaos --format json --output ./exports/fc_chaos.json
-
 # Export character achievements
 ./bin/ffxiv-census export achievements --format csv --output ./exports/achievements.csv
 ```
 
-### 6. `migrate` — Manual Schema Migrations
+### 5. `migrate` — Manual Schema Migrations
 
 Manage database schema versions manually with Goose.
 
@@ -165,7 +129,7 @@ Manage database schema versions manually with Goose.
 ./bin/ffxiv-census migrate --direction down
 ```
 
-### 7. `tomestone` — Direct Character Inspection
+### 6. `tomestone` — Direct Character Inspection
 
 Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 
@@ -189,37 +153,32 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 | `LODESTONE_RATE_LIMIT` | Lodestone scraper rate limit (requests/sec, max 1.0) | `1.0` |
 | `TOMESTONE_API_TOKEN` | Bearer API token for Tomestone.gg | `""` |
 | `TOMESTONE_RATE_LIMIT` | Tomestone API rate limit (requests/sec, max 20.0) | `5.0` |
-| `QUEUE_CLAIM_BATCH_SIZE` | Default number of jobs claimed per batch | `4` |
-| `QUEUE_MAX_ATTEMPTS` | Default retry attempts before dead-lettering (0 = infinite) | `5` |
-| `QUEUE_BACKOFF_BASE_SECONDS` | Initial backoff delay for retried jobs | `5` |
+| `RABBITMQ_URL` | RabbitMQ connection URL | `amqp://guest:guest@localhost:5672/ffxiv-census` |
 
 ---
 
 ## Architecture & Event Pipeline
 
-The census ingest pipeline is durable and event-driven via the PostgreSQL-backed work queue:
+The census ingest pipeline is durable and event-driven via RabbitMQ with push-based consumption:
 
 ```text
-publish id-sweep ──────────► consume (all queues) ──┬──► achievement-census
-                                                  └──► fc-census (if in FC)
+publish id-sweep ──────────► consume (all queues) ────► achievement-census
 
-publish character-census ──► consume (all queues) ──┬──► achievement-census
-                                                  └──► fc-census (if in FC)
+publish character-census ──► consume (all queues) ────► achievement-census
 ```
 
 ### Ingest Events
 
 | Event Name | Purpose | Payload Schema | Provider(s) | Downstream Event Cascading |
 |---|---|---|---|---|
-| `id-sweep` | Probes ranges of character IDs to discover and ingest newly created or active characters. Non-existent IDs are skipped without failing the chunk. | `{"from": 1, "to": 1000, "source": "auto"}` | **Dual-Source**: Tomestone.gg (primary, 5 req/s) + Lodestone (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
-| `character-census` | Re-censuses a known character's profile, job levels, and affiliation. Confirmed 404 on both providers marks the character deleted. | `{"character_id": 12345}` | **Dual-Source**: Lodestone (primary) + Tomestone.gg (fallback) | `achievement-census` (+ `fc-census` if affiliated with an FC) |
+| `id-sweep` | Probes ranges of character IDs to discover and ingest newly created or active characters. Non-existent IDs are skipped without failing the chunk. | `{"from": 1, "to": 1000, "source": "auto"}` | **Dual-Source**: Tomestone.gg (primary, 5 req/s) + Lodestone (fallback) | `achievement-census` |
+| `character-census` | Re-censuses a known character's profile, job levels, and affiliation. Confirmed 404 on both providers marks the character deleted. | `{"character_id": 12345}` | **Dual-Source**: Lodestone (primary) + Tomestone.gg (fallback) | `achievement-census` |
 | `achievement-census` | Fetches character achievements and updates registered expansion and milestone progression. | `{"character_id": 12345}` | **Lodestone-exclusive** | *None (leaf job)* |
-| `fc-census` | Fetches Free Company profile and roster details. | `{"fc_id": "9234567890123456789"}` | **Lodestone-exclusive** | *None (leaf job)* |
 
 ### Provider Coordination & Automatic Queue Switching
 
 - **Dual-Source Queues (`id-sweep`, `character-census`)**: `id-sweep` uses Tomestone.gg as primary (5 req/s REST API for fast discovery) with Lodestone fallback; `character-census` uses Lodestone as primary (authoritative source) with Tomestone.gg fallback. When Tomestone returns 404 on `id-sweep`, Lodestone is probed as fallback. When Lodestone returns 404 on `character-census`, Tomestone is probed. If the fallback also returns 404, the character is confirmed missing. If the fallback is unavailable, the job retries with exponential backoff.
-- **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone encounters HTTP 429 or is paused, workers pause these queues and process dual-source queues via Tomestone.gg.
+- **Lodestone-Exclusive Queues (`achievement-census`)**: When Lodestone encounters HTTP 429 or is paused, workers pause these queues and process dual-source queues via Tomestone.gg.
 - **Earliest Cooldown Sleep**: If all external providers are rate-limited simultaneously, workers sleep until the earliest cooldown expires without burning database transactions or CPU cycles.
 ---
 

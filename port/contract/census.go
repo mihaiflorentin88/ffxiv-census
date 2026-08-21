@@ -77,18 +77,6 @@ type CharacterMilestone struct {
 	AchievedAt    time.Time
 }
 
-// FreeCompanyRecord is the persisted snapshot of a free company. ID is the
-// Lodestone FC ID string (19 digits), not a numeric character ID.
-type FreeCompanyRecord struct {
-	ID          string
-	Name        string
-	World       string
-	Datacenter  string
-	MemberCount uint32
-	FormedAt    *time.Time
-	LastSeenAt  time.Time
-}
-
 // CensusRun is one census sweep for operational tracking.
 type CensusRun struct {
 	ID             int64

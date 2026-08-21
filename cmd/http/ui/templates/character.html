@@ -3,7 +3,8 @@
 <div class="panel text-center" style="padding: 3rem 1.5rem;">
     <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
     <h2 style="color: var(--gold-light); margin-bottom: 0.5rem;">Character Not Found</h2>
-    <p class="text-dim" style="margin-bottom: 1.5rem;">Character <code>#{{.Data.Character.ID}}</code> has not been ingested by census sweeps or does not exist on Lodestone.</p>
+    <p class="text-dim" style="margin-bottom: 1.5rem;">Character <code>#{{.Data.Character.ID}}</code> has not been
+        ingested by census sweeps or does not exist on Lodestone.</p>
     <a href="/ui/characters" class="btn btn-primary">Browse Character Directory</a>
 </div>
 {{else}}
@@ -35,13 +36,7 @@
             <span style="color: var(--gold);">{{.Data.Character.GrandCompany}}</span>
             {{end}}
         </div>
-        {{if .Data.FreeCompany}}
-        <div style="margin-top: 0.5rem; font-size: 0.92rem;">
-            <span class="text-muted">Free Company:</span>
-            <strong style="color: var(--cyan);">{{.Data.FreeCompany.Name}}</strong>
-            <span class="text-dim">({{.Data.FreeCompany.MemberCount}} members)</span>
-        </div>
-        {{else if .Data.Character.FreeCompanyName}}
+        {{if .Data.Character.FreeCompanyName}}
         <div style="margin-top: 0.5rem; font-size: 0.92rem;">
             <span class="text-muted">Free Company:</span>
             <strong style="color: var(--cyan);">{{.Data.Character.FreeCompanyName}}</strong>
@@ -49,10 +44,12 @@
         {{end}}
     </div>
     <div class="profile-actions">
-        <a href="https://na.finalfantasyxiv.com/lodestone/character/{{.Data.Character.ID}}/" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+        <a href="https://na.finalfantasyxiv.com/lodestone/character/{{.Data.Character.ID}}/" target="_blank"
+            rel="noopener noreferrer" class="btn btn-primary">
             Lodestone ↗
         </a>
-        <a href="https://tomestone.gg/character/{{.Data.Character.ID}}" target="_blank" rel="noopener noreferrer" class="btn btn-outline">
+        <a href="https://tomestone.gg/character/{{.Data.Character.ID}}" target="_blank" rel="noopener noreferrer"
+            class="btn btn-outline">
             Tomestone.gg ↗
         </a>
     </div>
@@ -60,7 +57,7 @@
 
 <!-- Layout: Job Matrix on Left, Milestones & Details on Right -->
 <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;">
-    
+
     <!-- Left Column: Job Level Matrix -->
     <div class="panel">
         <div class="panel-header">
@@ -114,7 +111,8 @@
                         <div class="timeline-dot"></div>
                         <div class="timeline-content">
                             <div class="timeline-title">
-                                {{if .Expansion}}[{{.Expansion}}]{{end}} {{if .Detail}}{{.Detail}}{{else}}Achievement #{{.AchievementID}}{{end}}
+                                {{if .Expansion}}[{{.Expansion}}]{{end}} {{if .Detail}}{{.Detail}}{{else}}Achievement
+                                #{{.AchievementID}}{{end}}
                             </div>
                             <div class="timeline-date">Achieved {{formatDate .AchievedAt}}</div>
                         </div>

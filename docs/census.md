@@ -1,10 +1,10 @@
 # Census Domain Model
 
-This document describes the census data model and the persistence layer that stores it. The census ingests FINAL FANTASY XIV character data scraped from The Lodestone and stores it in PostgreSQL (the same single datastore that backs the queue — see `docs/external-postgres.md` and `docs/queue.md`).
+This document describes the census data model and the persistence layer that stores it. The census ingests FINAL FANTASY XIV character data scraped from The Lodestone and stores it in PostgreSQL.
 
 ## Tables
 
-All timestamps are stored as TEXT in UTC `"2006-01-02T15:04:05.000Z"` (millisecond precision), the same convention as `queue_jobs`.
+All timestamps are stored as TEXT in UTC `"2006-01-02T15:04:05.000Z"` (millisecond precision).
 
 ### `characters`
 
@@ -41,10 +41,6 @@ The registry of achievements the census tracks (data-driven — add a row to tra
 
 A character's earned milestones: `(character_id, achievement_id)` primary key plus `achieved_at`.
 
-### `free_companies`
-
-One row per free company. `id` is the Lodestone FC ID string (19 digits), not a numeric character ID.
-
 ### `census_runs`
 
 Operational tracking of census sweeps: `started_at`, `finished_at`, `characters_seen`, `new_characters`.
@@ -68,10 +64,9 @@ Default entries:
 | expansion_msq | 3496 | Dawntrail | In the Glow of a New Dawn |
 ## Repositories
 
-Four contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
+Three contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
 
 - **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `UpsertGear`, `GetGear`, `FindIDGaps`, `MarkDeleted`, `UpdateAchievementSummary`, `SetAchievementsPrivate`, `ListStale`, `List`, `Count`, `CountActive`, `Breakdown`, `NewPerDay`, `MaxID`. The complete persistence and query contract for character data.
-- **`FreeCompanyRepository`** — `Upsert`, `Get`.
 - **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones`, `ListCharacterMilestones`, `CountExpansions`, `CountExpansionsFiltered`, `NewCharactersPerDay`, `CountChocoboMilestones`.
 - **`CensusRunRepository`** — `Start`, `Finish`.
 
@@ -95,7 +90,7 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 
 ## CensusService
 
-`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the four repositories; the ingest handlers call it.
+`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the three repositories; the ingest handlers call it.
 
 - `SyncMilestones(ctx)` — seeds configured expansion milestones and chocobo achievement into the DB (idempotent).
 - `UpsertCharacter(ctx, *godestone.Character)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
@@ -120,6 +115,3 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 | JP | Elemental, Gaia, Mana, Meteor |
 | OCE | Materia |
 
-## Not yet implemented (later phases)
-
-- **FC member-list re-census** — `fc-census` upserts FC basic info; chaining `character-census` for stale members is deferred until `FetchFreeCompanyMembers` is exposed by the LodestoneClient contract (see `docs/events.md`).

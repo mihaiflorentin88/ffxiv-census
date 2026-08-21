@@ -24,7 +24,3 @@ func Execute() error {
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)
 	return rootCmd.Execute()
 }
-
-func init() {
-	rootCmd.AddCommand(queueCmd)
-}

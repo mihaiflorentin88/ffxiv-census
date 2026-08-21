@@ -34,10 +34,13 @@ database       = "ffxiv_census"
 sslmode        = "disable"
 max_open_conns = 10
 max_idle_conns = 5
-[queue]
-claim_batch_size = 4
-max_attempts = 5
-backoff_base_seconds = 5
+[rabbitmq]
+url      = "amqp://guest:guest@localhost:5672/ffxiv-census"
+host     = "localhost"
+port     = 5672
+user     = "guest"
+password = "guest"
+vhost    = "ffxiv-census"
 
 [lodestone]
 rate_limit = 1.0

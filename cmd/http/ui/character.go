@@ -15,13 +15,12 @@ import (
 
 // CharacterProfileViewData holds all data for rendering /ui/characters/{id}.
 type CharacterProfileViewData struct {
-	Character   contract.CharacterRecord
-	GenderText  string
-	IsActive    bool
-	FreeCompany *contract.FreeCompanyRecord
-	JobGroups   []JobGroup
-	Milestones  []MilestoneDisplay
-	MaxLevel    uint32
+	Character  contract.CharacterRecord
+	GenderText string
+	IsActive   bool
+	JobGroups  []JobGroup
+	Milestones []MilestoneDisplay
+	MaxLevel   uint32
 }
 
 // JobGroup groups jobs by combat/crafting/gathering role.
@@ -183,13 +182,12 @@ func (c *UIController) CharacterDetail(w http.ResponseWriter, r *http.Request) {
 	})
 
 	viewData := CharacterProfileViewData{
-		Character:   detail.Character,
-		GenderText:  genderStr,
-		IsActive:    isActive,
-		FreeCompany: detail.FreeCompany,
-		JobGroups:   jobGroups,
-		Milestones:  milestones,
-		MaxLevel:    maxLevel,
+		Character:  detail.Character,
+		GenderText: genderStr,
+		IsActive:   isActive,
+		JobGroups:  jobGroups,
+		Milestones: milestones,
+		MaxLevel:   maxLevel,
 	}
 
 	c.render(w, "templates/character.html", PageData{

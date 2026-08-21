@@ -46,7 +46,6 @@ var proxyDiscoverCmd = &cobra.Command{
 
 		totalDiscovered := 0
 		totalPublished := 0
-		totalSkipped := 0
 		totalErrors := 0
 
 		for _, p := range providers {
@@ -62,7 +61,6 @@ var proxyDiscoverCmd = &cobra.Command{
 			totalDiscovered += len(proxies)
 
 			providerPublished := 0
-			providerSkipped := 0
 			for _, rec := range proxies {
 				job := handler.NewProxyJob(handler.NewProxyPayload{
 					Protocol:      rec.Protocol,
@@ -73,24 +71,18 @@ var proxyDiscoverCmd = &cobra.Command{
 					Source:        rec.Source,
 					UptimePercent: rec.UptimePercent,
 				})
-				n, err := q.Publish(ctx, job)
-				if err != nil {
+				if err := q.Publish(ctx, job); err != nil {
 					logger.ErrorContext(ctx, "proxy.discover.publish_failed", "provider", p.Name(), "ip", rec.IP, "port", rec.Port, "protocol", rec.Protocol, "error", err)
 					totalErrors++
 					continue
 				}
-				if n > 0 {
-					totalPublished++
-					providerPublished++
-				} else {
-					totalSkipped++
-					providerSkipped++
-				}
+				totalPublished++
+				providerPublished++
 			}
-			logger.InfoContext(ctx, "proxy.discover.provider_published", "provider", p.Name(), "published", providerPublished, "skipped_dedup", providerSkipped)
+			logger.InfoContext(ctx, "proxy.discover.provider_published", "provider", p.Name(), "published", providerPublished)
 		}
 
-		logger.InfoContext(ctx, "proxy.discover.complete", "discovered", totalDiscovered, "published", totalPublished, "skipped_dedup", totalSkipped, "errors", totalErrors)
+		logger.InfoContext(ctx, "proxy.discover.complete", "discovered", totalDiscovered, "published", totalPublished, "errors", totalErrors)
 		return nil
 	},
 }
@@ -158,33 +150,37 @@ var proxyScanCmd = &cobra.Command{
 		publishErrors := 0
 		for _, p := range proxies {
 			job := handler.ScanProxyJob(p.ID)
-			n, err := q.Publish(ctx, job)
-			if err != nil {
+			if err := q.Publish(ctx, job); err != nil {
 				logger.ErrorContext(ctx, "proxy.scan.publish_failed", "proxy_id", p.ID, "ip", p.IP, "port", p.Port, "status", p.Status, "error", err)
 				publishErrors++
 				continue
 			}
-			if n > 0 {
-				published++
-			}
+			published++
 		}
 
-		logger.InfoContext(ctx, "proxy.scan.complete", "scannable", len(proxies), "published", published, "deduplicated", len(proxies)-published, "errors", publishErrors)
+		logger.InfoContext(ctx, "proxy.scan.complete", "scannable", len(proxies), "published", published, "errors", publishErrors)
 		return nil
 	},
 }
 
 var proxyConsumeCmd = &cobra.Command{
-	Use:   "consume",
+	Use:   "consume [event-type]",
 	Short: "Run a consumer worker for proxy event queues (long-running)",
+	Long: `Run a long-running proxy queue consumer worker.
+
+By default, consumes from both new-proxy and scan-proxy queues.
+Specify a single event type as a positional argument to consume only that queue.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		pollIntervalStr, _ := cmd.Flags().GetString("poll-interval")
 
-		pollInterval := 500 * time.Millisecond
-		if pollIntervalStr != "" {
-			if d, err := time.ParseDuration(pollIntervalStr); err == nil && d > 0 {
-				pollInterval = d
+		var eventTypes []string
+		if len(args) > 0 && args[0] != "" {
+			eventTypes = []string{args[0]}
+		} else {
+			eventTypes = []string{
+				handler.EventNewProxy,
+				handler.EventScanProxy,
 			}
 		}
 
@@ -196,12 +192,7 @@ var proxyConsumeCmd = &cobra.Command{
 			return fmt.Errorf("queue not initialised")
 		}
 		w := worker.New(q, container.Load.ProxyHandlers(), container.Load.Logger())
-		w.SetPollInterval(pollInterval)
 
-		eventTypes := []string{
-			handler.EventNewProxy,
-			handler.EventScanProxy,
-		}
 		return w.RunEvents(ctx, eventTypes, concurrency)
 	},
 }
@@ -215,5 +206,4 @@ func init() {
 
 	proxyScanCmd.Flags().IntP("limit", "l", 50, "max proxies to queue for scanning")
 	proxyConsumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
-	proxyConsumeCmd.Flags().String("poll-interval", "500ms", "idle queue polling interval (e.g. 500ms, 1s)")
 }

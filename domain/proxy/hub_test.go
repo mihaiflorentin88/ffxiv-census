@@ -21,7 +21,7 @@ func TestProxyHub_NewProxy_Success(t *testing.T) {
 	// Mark as active.
 	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
 
-	hub := NewProxyHub(repo, 5*time.Minute)
+	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.NewProxy(context.Background(), "test-g1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -39,7 +39,7 @@ func TestProxyHub_NewProxy_Success(t *testing.T) {
 
 func TestProxyHub_NewProxy_NoAvailable(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
-	hub := NewProxyHub(repo, 5*time.Minute)
+	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.NewProxy(context.Background(), "test-g1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -69,7 +69,7 @@ func TestProxyHub_NewProxy_AllLocked(t *testing.T) {
 		t.Fatal("expected proxy to be claimed by other-g1")
 	}
 
-	hub := NewProxyHub(repo, 5*time.Minute)
+	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.NewProxy(context.Background(), "test-g1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -82,7 +82,7 @@ func TestProxyHub_NewProxy_AllLocked(t *testing.T) {
 func TestProxyHub_LockTTL(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	ttl := 10 * time.Minute
-	hub := NewProxyHub(repo, ttl)
+	hub := NewProxyHub(repo, ttl, nil)
 	if hub.LockTTL() != ttl {
 		t.Fatalf("expected lock TTL %v, got %v", ttl, hub.LockTTL())
 	}

@@ -54,6 +54,31 @@ spec:
       caBundle: {{ $cert }}
 ---
 apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: {{ $fullName }}-rabbitmq
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install,pre-rollback
+    "helm.sh/hook-weight": "-6"
+spec:
+  provider:
+    vault:
+      auth:
+        kubernetes:
+          mountPath: {{ .Values.vault.mountPath }}
+          role: {{ .Values.vault.authRole }}
+          serviceAccountRef:
+            name: {{ .Values.vault.authServiceAccount }}
+      {{ if semverCompare "<=1.21-0" .Capabilities.KubeVersion.GitVersion }}
+            namespace: {{ .Release.Namespace }}
+      {{ end }}
+      version: {{ .Values.vault.version }}
+      path: rabbitmq
+      server: {{ .Values.vault.server }}
+      caBundle: {{ $cert }}
+---
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: {{ $fullName }}
@@ -80,6 +105,22 @@ spec:
       sourceRef:
         storeRef:
           name: {{ $fullName }}-pgres
+          kind: SecretStore
+    - secretKey: RABBITMQ_USER
+      remoteRef:
+        key: rabbitmq/prod
+        property: RABBITMQ_USER
+      sourceRef:
+        storeRef:
+          name: {{ $fullName }}-rabbitmq
+          kind: SecretStore
+    - secretKey: RABBITMQ_PASSWORD
+      remoteRef:
+        key: rabbitmq/prod
+        property: RABBITMQ_PASSWORD
+      sourceRef:
+        storeRef:
+          name: {{ $fullName }}-rabbitmq
           kind: SecretStore
   dataFrom:
     - extract:

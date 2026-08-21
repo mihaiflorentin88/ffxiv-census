@@ -1,6 +1,6 @@
 # Event Model & Ingest Pipeline
 
-The census ingests Lodestone data through a durable, event-driven pipeline. Publishers enqueue jobs into the PostgreSQL-backed queue (`docs/queue.md`); consumers claim jobs of one event type, run a handler, and chain downstream events. See the design spec (`docs/superpowers/specs/2026-08-16-lodestone-census-design.md`) for the full picture.
+The census ingests Lodestone data through a durable, event-driven pipeline. Publishers enqueue jobs into the RabbitMQ-backed queue (`docs/queue.md`); consumers receive jobs via push-based consumption, run a handler, and chain downstream events. See the design spec (`docs/superpowers/specs/2026-08-16-lodestone-census-design.md`) for the full picture.
 
 ## Events
 
@@ -9,7 +9,6 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 | `id-sweep` | Probe a range of character IDs; ingest any that exist | ✅ implemented |
 | `character-census` | Re-census a known character's profile + jobs | ✅ implemented |
 | `achievement-census` | Fetch achievements, filter milestones, track latest | ✅ implemented |
-| `fc-census` | Fetch a free company's basic info | ✅ implemented (member chaining deferred) |
 | `new-proxy` | Register and test a newly discovered proxy | ✅ implemented |
 | `scan-proxy` | Re-test an existing proxy and update its status | ✅ implemented |
 
@@ -20,7 +19,6 @@ Queue job payloads are JSON. Types are declared in `domain/census/handler/event.
 - **id-sweep**: `{"from": 1, "to": 1000, "source": "auto"}` — inclusive range of character IDs to probe, with optional source (`"auto"`, `"tomestone"`, `"lodestone"`).
 - **character-census**: `{"character_id": 123}` — a character to re-census.
 - **achievement-census**: `{"character_id": 123}` — a character to run an achievement census on.
-- **fc-census**: `{"fc_id": "9234567890123456789"}` — a free company to census.
 - **new-proxy**: `{"protocol": "http", "ip": "1.2.3.4", "port": 8080, "country": "US", "anonymity": "elite", "source": "proxyscrape", "uptime_percent": 95.5}` — a proxy to register and test.
 - **scan-proxy**: `{"proxy_id": 42}` — an existing proxy to re-scan.
 
@@ -28,17 +26,15 @@ Proxy event types are declared in `domain/proxy/handler/handler.go`. Both are le
 
 ## Chaining
 
-Handlers return the jobs they want published next; the worker persists them atomically with the current job's completion via `Queue.Complete(id, nextJobs...)` (same transaction). This is how downstream work is scheduled without losing atomicity.
+Handlers return the downstream jobs they want published; the worker publishes each one individually via `queue.Publish(ctx, job)`. The queue's push-based `Consume` method handles retry and failure internally — no explicit `Complete`, `Retry`, or `Fail` calls.
 
-- `id-sweep` → `achievement-census` (+ `fc-census` when the character is affiliated with a free company)
-- `character-census` → `achievement-census` (+ `fc-census` when the character is affiliated with a free company)
+- `id-sweep` → `achievement-census`
+- `character-census` → `achievement-census`
 - `achievement-census` → (leaf)
-- `fc-census` → (leaf)
-Member-list re-census (`fc-census` → `character-census` for stale members) is deferred until `FetchFreeCompanyMembers` is exposed by the `LodestoneClient` contract.
 
 ## Loop safety
 
-The queue deduplicates on `UNIQUE(type, payload_hash)`, so re-publishing an identical job is a no-op. Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs.
+Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs. RabbitMQ does not deduplicate at the queue level — idempotency is enforced by the database layer.
 
 ## Dual-source ingest, Fallback & Provider Rate-Limit Coordination
 
@@ -58,12 +54,12 @@ Both `id-sweep` and `character-census` are dual-source events, but they use diff
 3. When Lodestone encounters a transient error or is paused, Tomestone.gg is probed as a fallback. If Tomestone returns 404, the job retries on Lodestone with backoff.
 
 **Shared rules:**
-- Downstream dependent jobs (`achievement-census`, plus `fc-census` when in an FC) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
-- **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`, `fc-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting database claims or CPU cycles.
+- Downstream dependent jobs (`achievement-census`) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
+- **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting CPU cycles.
 
 ### Lodestone-Only Event Rate-Limit Handling
 
-`achievement-census` and `fc-census` are Lodestone-exclusive events (no Tomestone fallback). When Lodestone is rate-limited or paused, these handlers call `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retry the fetch inline. This is more efficient than returning an error immediately (which triggers 30s idle + queue retry + 5s backoff = ~35s wasted).
+`achievement-census` is a Lodestone-exclusive event (no Tomestone fallback). When Lodestone is rate-limited or paused, the handler calls `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retries the fetch inline. This is more efficient than returning an error immediately (which triggers queue retry + backoff).
 
 `WaitUntilAvailable` blocks exactly once per rate-limit cooldown. If the subsequent fetch fails again (new 429), the handler returns an error and the queue's exponential backoff kicks in. The handler does NOT loop on `WaitUntilAvailable`.
 
@@ -76,7 +72,7 @@ Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other cl
 When `consume --proxy` is used, the event pipeline runs through proxy-aware clients:
 
 - **`id-sweep` in proxy mode**: Lodestone is the primary provider (not Tomestone). Proxies bypass Lodestone's per-IP rate limit, so the faster Tomestone-first strategy is unnecessary. Tomestone is used only as a fallback when Lodestone returns an error.
-- **`achievement-census` / `fc-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting.
+- **`achievement-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting.
 - **Proxy rotation on failure**: If a proxy fails during any request (connection refused, timeout, host unreachable), the worker immediately marks it as failed and acquires a fresh proxy from the pool. This ensures workers quickly rotate through bad proxies.
 - **Per-goroutine isolation**: Each goroutine has its own proxy, its own LodestoneClient, its own TomestoneClient, and its own rate limiter. No shared state between goroutines.
 
@@ -98,4 +94,4 @@ When `consume --proxy` is used, the event pipeline runs through proxy-aware clie
 ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```
 
-`consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` divides the sweep range into `chunk-size`-sized jobs with deduplication.
+`consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` divides the sweep range into `chunk-size`-sized jobs.

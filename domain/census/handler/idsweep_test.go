@@ -24,7 +24,7 @@ func newTestIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mockrepo.Char
 	t.Helper()
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	return NewIDSweep(ls, nil, svc, nil), ls, chars
 }
 
@@ -33,7 +33,7 @@ func newTestDualIDSweep(t *testing.T) (*IDSweep, *mocklodestone.Fake, *mocktomes
 	ls := mocklodestone.NewFake()
 	ts := mocktomestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	return NewIDSweep(ls, ts, svc, nil), ls, ts, chars
 }
 
@@ -43,7 +43,7 @@ func newTestDualIDSweepWithLimiter(t *testing.T) (*IDSweep, *mocklodestone.Fake,
 	ts := mocktomestone.NewFake()
 	limiter := mock.NewProviderRateLimiter()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	return NewIDSweep(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
 }
 
@@ -489,7 +489,7 @@ func TestIDSweep_NilTomestoneClient_ExplicitTomestoneSource(t *testing.T) {
 
 func TestIDSweep_NilClients_Error(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	h := NewIDSweep(nil, nil, svc, nil)
 
 	payload, _ := json.Marshal(IDSweepPayload{
@@ -506,7 +506,7 @@ func TestIDSweep_NilClients_Error(t *testing.T) {
 
 func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	ts := mocktomestone.NewFake()
 	h := NewIDSweep(nil, ts, svc, nil)
 
@@ -528,7 +528,7 @@ func TestIDSweep_NilLodestoneClient_ExplicitLodestoneSource(t *testing.T) {
 func TestIDSweep_ReturnsDownstreamJobsInNext(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 
 	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
 		return &godestone.Character{
@@ -546,110 +546,12 @@ func TestIDSweep_ReturnsDownstreamJobsInNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(next) != 4 {
-		t.Fatalf("expected 4 returned jobs (2 ach + 2 fc), got %d", len(next))
+	if len(next) != 2 {
+		t.Fatalf("expected 2 returned jobs (2 ach), got %d", len(next))
 	}
-	// Verify downstream jobs are returned (not published eagerly).
-	// The worker's Complete(id, next...) will publish them atomically.
-	achCount := 0
-	fcCount := 0
 	for _, j := range next {
-		switch j.Type {
-		case EventAchievementCensus:
-			achCount++
-		case EventFreeCompanyCensus:
-			fcCount++
+		if j.Type != EventAchievementCensus {
+			t.Errorf("unexpected job type: %q", j.Type)
 		}
-	}
-	if achCount != 2 {
-		t.Errorf("expected 2 achievement-census jobs, got %d", achCount)
-	}
-	if fcCount != 2 {
-		t.Errorf("expected 2 fc-census jobs, got %d", fcCount)
-	}
-}
-
-func TestIDSweep_ChainsFreeCompanyJobWhenFCIDPresent_Lodestone(t *testing.T) {
-	h, ls, _ := newTestIDSweep(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
-			ID:            id,
-			Name:          "Hero",
-			World:         "Spriggan",
-			DC:            "Chaos",
-			FreeCompanyID: "9231234567890123456",
-		}, nil
-	}
-
-	next, err := h.Handle(context.Background(), idsweepPayload(100, 100))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-
-	var foundAchievement, foundFC bool
-	for _, j := range next {
-		if j.Type == EventAchievementCensus {
-			foundAchievement = true
-		}
-		if j.Type == EventFreeCompanyCensus {
-			foundFC = true
-			var p FreeCompanyCensusPayload
-			if err := json.Unmarshal(j.Payload, &p); err != nil {
-				t.Fatalf("unmarshal fc payload: %v", err)
-			}
-			if p.FCID != "9231234567890123456" {
-				t.Errorf("fc id = %q, want 9231234567890123456", p.FCID)
-			}
-		}
-	}
-	if !foundAchievement {
-		t.Errorf("expected achievement census job to be chained")
-	}
-	if !foundFC {
-		t.Errorf("expected free company census job to be chained")
-	}
-}
-
-func TestIDSweep_ChainsFreeCompanyJobWhenFCIDPresent_Tomestone(t *testing.T) {
-	h, _, ts, _ := newTestDualIDSweep(t)
-	fcID := "9231234567890123456"
-	fcName := "Crystal Braves"
-	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, retry429 bool) (*contract.TomestoneCharacter, error) {
-		return &contract.TomestoneCharacter{
-			ID:              id,
-			Name:            "Alphinaud",
-			Server:          "Spriggan",
-			Datacenter:      "Chaos",
-			FreeCompanyID:   &fcID,
-			FreeCompanyName: &fcName,
-		}, nil
-	}
-
-	next, err := h.Handle(context.Background(), idsweepPayloadWithSource(200, 200, "tomestone"))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-
-	var foundAchievement, foundFC bool
-	for _, j := range next {
-		if j.Type == EventAchievementCensus {
-			foundAchievement = true
-		}
-		if j.Type == EventFreeCompanyCensus {
-			foundFC = true
-			var p FreeCompanyCensusPayload
-			if err := json.Unmarshal(j.Payload, &p); err != nil {
-				t.Fatalf("unmarshal fc payload: %v", err)
-			}
-			if p.FCID != "9231234567890123456" {
-				t.Errorf("fc id = %q, want 9231234567890123456", p.FCID)
-			}
-		}
-	}
-	if !foundAchievement {
-		t.Errorf("expected achievement census job to be chained")
-	}
-	if !foundFC {
-		t.Errorf("expected free company census job to be chained")
 	}
 }

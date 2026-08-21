@@ -4,7 +4,7 @@
         <span>📊</span>
         <span>Eorzea Census Overview</span>
     </h1>
-    <p class="page-desc">Real-time global character demographics, activity tracking, and Lodestone ingest status.</p>
+    <p class="page-desc">Real-time global character demographics, activity tracking, and expansion progression.</p>
 </div>
 
 <!-- Stat Cards Grid -->
@@ -24,18 +24,62 @@
         <div class="stat-value" style="color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
         <div class="stat-subtext highlight">{{.Data.ActivePercent}} Active Ratio</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-label">Queue Ingest Status</div>
-        <div class="stat-value" style="color: var(--gold-light);">{{formatNumber (add .Data.QueuePending .Data.QueueClaimed)}}</div>
-        <div class="stat-subtext">
-            {{.Data.QueuePending}} Pending &bull; {{.Data.QueueClaimed}} Claimed
+</div>
+
+<!-- Race Distribution & Expansion Completion -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+    <!-- Race Distribution Pie Chart -->
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>🧬</span>
+                <span>Race Distribution</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.RaceLabels}}
+            <div class="chart-container" style="height: 280px;">
+                <canvas id="racePieChart"></canvas>
+            </div>
+            {{else}}
+            <p class="text-dim">No race data available yet.</p>
+            {{end}}
         </div>
     </div>
-    <div class="stat-card">
-        <div class="stat-label">Ingest Completed</div>
-        <div class="stat-value" style="color: var(--active-green);">{{formatNumber .Data.QueueDone}}</div>
-        <div class="stat-subtext">
-            {{.Data.QueueFailed}} Failed Jobs
+
+    <!-- Expansion Completion -->
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title">
+                <span>⚔️</span>
+                <span>MSQ Expansion Completion</span>
+            </h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.ExpansionCompletions}}
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                {{range .Data.ExpansionCompletions}}
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span style="font-size: 1.3rem; width: 2rem; text-align: center;">{{.Icon}}</span>
+                    <div style="flex: 1;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
+                            <span style="font-size: 0.85rem; font-weight: 600;">{{.Name}}</span>
+                            <span style="font-size: 0.8rem; color: var(--gold);">{{formatNumber .Count}}
+                                ({{.Percent}})</span>
+                        </div>
+                        <div
+                            style="background: var(--bg-secondary); border-radius: 4px; height: 6px; overflow: hidden;">
+                            <div
+                                style="background: linear-gradient(90deg, var(--gold), var(--gold-light)); height: 100%; width: {{.Percent}}; border-radius: 4px; min-width: 2px;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {{end}}
+            </div>
+            {{else}}
+            <p class="text-dim">No expansion completion data available yet.</p>
+            {{end}}
         </div>
     </div>
 </div>
@@ -90,18 +134,16 @@
                             <span class="badge badge-active">{{.ActiveRatio}}</span>
                         </td>
                         <td class="text-center">
-                            <button 
-                                class="btn btn-outline" 
-                                style="font-size: 0.8rem; padding: 0.3rem 0.75rem;"
-                                onclick="toggleWorldDrilldown(this, '{{.Region}}')"
-                            >
+                            <button class="btn btn-outline" style="font-size: 0.8rem; padding: 0.3rem 0.75rem;"
+                                onclick="toggleWorldDrilldown(this, '{{.Region}}')">
                                 View Worlds ▾
                             </button>
                         </td>
                     </tr>
                     <tr>
                         <td colspan="5" style="padding: 0; border-bottom: 1px solid var(--border-color);">
-                            <div id="drilldown-{{.Region}}" style="padding: 0.5rem 1rem; background: rgba(0,0,0,0.2);"></div>
+                            <div id="drilldown-{{.Region}}" style="padding: 0.5rem 1rem; background: rgba(0,0,0,0.2);">
+                            </div>
                         </td>
                     </tr>
                     {{end}}
@@ -115,14 +157,16 @@
 </div>
 
 <script>
-document.addEventListener("DOMContentLoaded", function() {
-    const ctx = document.getElementById('newCharactersChart');
-    if (!ctx) return;
+    document.addEventListener("DOMContentLoaded", function () {
+        // New Characters Line Chart
+        const lineCtx = document.getElementById('newCharactersChart');
+        if (lineCtx) {
+            const labels = {{jsonSafe .Data.ChartLabels}}
+        };
+        const data = {{jsonSafe .Data.ChartData}}
+    };
 
-    const labels = {{jsonSafe .Data.ChartLabels}};
-    const data = {{jsonSafe .Data.ChartData}};
-
-    new Chart(ctx, {
+    new Chart(lineCtx, {
         type: 'line',
         data: {
             labels: labels,
@@ -144,9 +188,7 @@ document.addEventListener("DOMContentLoaded", function() {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    display: false
-                },
+                legend: {display: false},
                 tooltip: {
                     backgroundColor: '#141923',
                     borderColor: '#263248',
@@ -158,43 +200,94 @@ document.addEventListener("DOMContentLoaded", function() {
             },
             scales: {
                 x: {
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.05)'
-                    },
-                    ticks: {
-                        color: '#94a3b8'
-                    }
+                    grid: {color: 'rgba(255, 255, 255, 0.05)'},
+                    ticks: {color: '#94a3b8'}
                 },
                 y: {
                     beginAtZero: true,
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.05)'
-                    },
-                    ticks: {
+                    grid: {color: 'rgba(255, 255, 255, 0.05)'},
+                    ticks: {color: '#94a3b8', precision: 0}
+                }
+            }
+        }
+    });
+        }
+
+    // Race Distribution Pie Chart
+    const pieCtx = document.getElementById('racePieChart');
+    if (pieCtx) {
+        const raceLabels = {{jsonSafe .Data.RaceLabels}}
+    };
+    const raceData = {{jsonSafe .Data.RaceData}}};
+
+    const colors = [
+        '#d4af37', '#38bdf8', '#f472b6', '#34d399',
+        '#a78bfa', '#fb923c', '#e879f9', '#22d3ee',
+        '#fbbf24', '#60a5fa', '#f87171', '#4ade80'
+    ];
+
+    new Chart(pieCtx, {
+        type: 'doughnut',
+        data: {
+            labels: raceLabels,
+            datasets: [{
+                data: raceData,
+                backgroundColor: colors.slice(0, raceLabels.length),
+                borderColor: '#0b0e14',
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '55%',
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
                         color: '#94a3b8',
-                        precision: 0
+                        padding: 10,
+                        font: {size: 11},
+                        usePointStyle: true,
+                        pointStyleWidth: 8
+                    }
+                },
+                tooltip: {
+                    backgroundColor: '#141923',
+                    borderColor: '#263248',
+                    borderWidth: 1,
+                    titleColor: '#d4af37',
+                    bodyColor: '#f1f5f9',
+                    padding: 10,
+                    callbacks: {
+                        label: function (ctx) {
+                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                            const pct = ((ctx.parsed / total) * 100).toFixed(1);
+                            return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';
+                        }
                     }
                 }
             }
         }
     });
-});
+        }
+    });
 
-function toggleWorldDrilldown(btn, region) {
-    const target = document.getElementById('drilldown-' + region);
-    if (!target) return;
-    if (target.innerHTML.trim().length > 0) {
-        target.innerHTML = '';
-        btn.innerHTML = 'View Worlds ▾';
-        btn.classList.remove('active');
-    } else {
-        htmx.ajax('GET', '/ui/partials/world-breakdown?region=' + encodeURIComponent(region), {
-            target: target,
-            swap: 'innerHTML'
-        });
-        btn.innerHTML = 'Hide Worlds ▴';
-        btn.classList.add('active');
+    function toggleWorldDrilldown(btn, region) {
+        const target = document.getElementById('drilldown-' + region);
+        if (!target) return;
+        if (target.innerHTML.trim().length > 0) {
+            target.innerHTML = '';
+            btn.innerHTML = 'View Worlds ▾';
+            btn.classList.remove('active');
+        } else {
+            htmx.ajax('GET', '/ui/partials/world-breakdown?region=' + encodeURIComponent(region), {
+                target: target,
+                swap: 'innerHTML'
+            });
+            btn.innerHTML = 'Hide Worlds ▴';
+            btn.classList.add('active');
+        }
     }
-}
 </script>
 {{end}}

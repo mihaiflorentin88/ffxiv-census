@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +28,6 @@ By default, consumes from all registered event queues concurrently:
   - id-sweep
   - character-census
   - achievement-census
-  - fc-census
 
 You can specify a single event positional argument or use the --events flag with
 a comma-separated list of event names. Rate limits (HTTP 429s) automatically
@@ -38,7 +36,6 @@ pause affected provider queues while letting others continue.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		eventsFlag, _ := cmd.Flags().GetString("events")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		pollIntervalStr, _ := cmd.Flags().GetString("poll-interval")
 		proxyMode, _ := cmd.Flags().GetBool("proxy")
 
 		var eventTypes []string
@@ -57,14 +54,6 @@ pause affected provider queues while letting others continue.`,
 				handler.EventIDSweep,
 				handler.EventCharacterCensus,
 				handler.EventAchievementCensus,
-				handler.EventFreeCompanyCensus,
-			}
-		}
-
-		pollInterval := time.Second
-		if pollIntervalStr != "" {
-			if d, err := time.ParseDuration(pollIntervalStr); err == nil && d > 0 {
-				pollInterval = d
 			}
 		}
 
@@ -77,11 +66,10 @@ pause affected provider queues while letting others continue.`,
 		}
 
 		if proxyMode {
-			return runProxyConsumer(ctx, q, eventTypes, concurrency, pollInterval)
+			return runProxyConsumer(ctx, q, eventTypes, concurrency)
 		}
 
-		w := worker.New(q, container.Load.Handlers(), container.Load.Logger(), container.Load.ProviderRateLimiter())
-		w.SetPollInterval(pollInterval)
+		w := worker.New(q, container.Load.Handlers(), container.Load.Logger())
 		return w.RunEvents(ctx, eventTypes, concurrency)
 	},
 }
@@ -90,13 +78,12 @@ func init() {
 	rootCmd.AddCommand(consumeCmd)
 	consumeCmd.Flags().StringP("events", "e", "all", "comma-separated event types to consume (e.g. id-sweep,character-census or 'all')")
 	consumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
-	consumeCmd.Flags().String("poll-interval", "500ms", "idle queue polling interval (e.g. 500ms, 1s)")
 	consumeCmd.Flags().Bool("proxy", false, "run in proxy mode: each goroutine acquires its own proxy from the pool")
 }
 
 // runProxyConsumer starts the census consumer in proxy mode. Each worker goroutine
 // acquires its own proxy from the ProxyHub and routes ALL requests through it.
-func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string, concurrency int, pollInterval time.Duration) error {
+func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string, concurrency int) error {
 	logger := container.Load.Logger()
 
 	// Read proxy consumer config overrides.
@@ -148,6 +135,5 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 	}
 
 	w := worker.New(q, container.Load.Handlers(), logger)
-	w.SetPollInterval(pollInterval)
 	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
 }

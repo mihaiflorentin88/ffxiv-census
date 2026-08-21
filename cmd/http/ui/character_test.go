@@ -39,15 +39,6 @@ func TestCharacterDetailHandler(t *testing.T) {
 		{CharacterID: 36796000, Name: "Miner", Level: 90},
 	})
 
-	_ = rig.fcs.Upsert(context.Background(), contract.FreeCompanyRecord{
-		ID:          fcID,
-		Name:        fcName,
-		World:       "Balmung",
-		Datacenter:  "Crystal",
-		MemberCount: 42,
-		LastSeenAt:  recent,
-	})
-
 	// Test 200 OK for existing character
 	req := httptest.NewRequest(http.MethodGet, "/ui/characters/36796000", nil)
 	req.SetPathValue("id", "36796000")
@@ -61,9 +52,6 @@ func TestCharacterDetailHandler(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "Tataru Taru") {
 		t.Errorf("expected body to contain 'Tataru Taru', got:\n%s", body)
-	}
-	if !strings.Contains(body, "Scions of the Seventh Dawn") {
-		t.Errorf("expected body to contain FC name, got:\n%s", body)
 	}
 	if !strings.Contains(body, "Paladin") {
 		t.Errorf("expected body to contain Paladin job, got:\n%s", body)

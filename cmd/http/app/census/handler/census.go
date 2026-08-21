@@ -280,14 +280,5 @@ func toCharacterDetail(d *census.CharacterDetail) response.CharacterDetail {
 			AchievedAt:    m.AchievedAt,
 		})
 	}
-	if d.FreeCompany != nil {
-		out.FreeCompany = &response.FreeCompanyDetail{
-			ID:          d.FreeCompany.ID,
-			Name:        d.FreeCompany.Name,
-			World:       d.FreeCompany.World,
-			Datacenter:  d.FreeCompany.Datacenter,
-			MemberCount: d.FreeCompany.MemberCount,
-		}
-	}
 	return out
 }

@@ -19,7 +19,7 @@ import (
 	proxyinfra "github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxyscrape"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/pubproxy"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/queue"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/rabbitmq"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/textproxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -34,7 +34,6 @@ type InfrastructureContainer struct {
 	lodestoneClient       contract.LodestoneClient
 	tomestoneClient       contract.TomestoneClient
 	characterRepository   contract.CharacterRepository
-	freeCompanyRepository contract.FreeCompanyRepository
 	achievementRepository contract.AchievementRepository
 	censusRunRepository   contract.CensusRunRepository
 	providerRateLimiter   contract.ProviderRateLimiter
@@ -162,19 +161,14 @@ func (s *ServiceContainer) Queue() contract.Queue {
 	if s.infrastructure.queue != nil {
 		return s.infrastructure.queue
 	}
-	driver := s.databaseUnlocked()
-	if driver == nil {
-		logging.Warn("container.queue", "database driver unavailable, queue disabled")
-		return nil
-	}
-	cfg := s.configUnlocked().Queue
+	cfg := s.configUnlocked().RabbitMQ
 	if cfg == nil {
-		logging.Warn("container.queue", "queue config missing")
+		logging.Warn("container.queue", "rabbitmq config missing")
 		return nil
 	}
-	q, err := queue.NewQueue(driver, cfg, s.Logger())
+	q, err := rabbitmq.New(cfg.GetURL(), s.Logger())
 	if err != nil {
-		logging.Error("container.queue", fmt.Sprintf("failed to create queue: %v", err))
+		logging.Error("container.queue", fmt.Sprintf("failed to create rabbitmq queue: %v", err))
 		return nil
 	}
 	s.infrastructure.queue = q
@@ -234,21 +228,6 @@ func (s *ServiceContainer) CharacterRepository() contract.CharacterRepository {
 	}
 	s.infrastructure.characterRepository = repository.NewCharacterRepository(driver)
 	return s.infrastructure.characterRepository
-}
-
-func (s *ServiceContainer) FreeCompanyRepository() contract.FreeCompanyRepository {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.infrastructure.freeCompanyRepository != nil {
-		return s.infrastructure.freeCompanyRepository
-	}
-	driver := s.databaseUnlocked()
-	if driver == nil {
-		logging.Warn("container.free_company_repository", "database driver unavailable")
-		return nil
-	}
-	s.infrastructure.freeCompanyRepository = repository.NewFreeCompanyRepository(driver)
-	return s.infrastructure.freeCompanyRepository
 }
 
 func (s *ServiceContainer) AchievementRepository() contract.AchievementRepository {
@@ -523,5 +502,5 @@ func (s *ServiceContainer) ProxyHub(owner string) *proxydomain.ProxyHub {
 			lockTTL = d
 		}
 	}
-	return proxydomain.NewProxyHub(repo, lockTTL)
+	return proxydomain.NewProxyHub(repo, lockTTL, s.ProxyChecker())
 }

@@ -34,7 +34,7 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 ./bin/ffxiv-census proxy scan [--limit 50]
 
 # Consume new-proxy and scan-proxy events (long-running)
-./bin/ffxiv-census proxy consume [--concurrency 4] [--poll-interval 500ms]
+./bin/ffxiv-census proxy consume [--concurrency 4]
 ```
 
 ### Cronjob Scheduling
@@ -127,13 +127,12 @@ geonode     = true
 
 ## Worker
 
-The proxy consumer (`proxy consume`) uses the same dispatcher pattern as the census consumer:
+The proxy consumer (`proxy consume`) uses push-based consumption via RabbitMQ:
 
-- **WorkerID 0**: Dedicated retry goroutine (`ClaimModeRetriesOnly`)
-- **WorkerID 1+**: Per-event-type goroutines (`ClaimModeNewOnly`) with `ClaimModeAny` fallback
-- **Concurrency**: Clamped to `len(eventTypes) + 1` minimum (3 for proxy: 1 retry + 1 new-proxy + 1 scan-proxy)
-- **Startup**: Reclaims claimed jobs from previous crashed consumers
-- **Graceful shutdown**: Stops claiming on signal, finishes in-flight jobs
+- **Push-based**: The queue delivers messages directly to the handler — no polling, no `pollInterval`
+- **Concurrency**: Each event type gets its own goroutine pool sized by the `--concurrency` flag
+- **Retry/fail**: Handled internally by the queue adapter (retry exchange with TTL backoff, dead-letter for permanent failures)
+- **Graceful shutdown**: Cancels the consumption context, finishes in-flight jobs
 
 ## Scan Priority
 
@@ -168,9 +167,18 @@ The `consume` command supports a `--proxy` flag for per-goroutine proxy isolatio
 5. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy
 6. If `CanUse()` returns false (ownership changed by lock expiry), the goroutine acquires a new proxy
 
-### ProxyHub — Atomic Proxy Acquisition
+### ProxyHub — Atomic Proxy Acquisition with Test-Before-Handout
 
-`ProxyHub` (`domain/proxy/hub.go`) manages proxy acquisition for worker goroutines. Each call to `NewProxy(ctx, owner)` atomically claims the best available proxy using `FOR UPDATE SKIP LOCKED` in PostgreSQL.
+`ProxyHub` (`domain/proxy/hub.go`) manages proxy acquisition for worker goroutines. Each call to `NewProxy(ctx, owner)` atomically claims the best available proxy using `FOR UPDATE SKIP LOCKED` in PostgreSQL, then **tests it before handing it to the worker**.
+
+**Test-before-handout flow** (up to 3 attempts):
+
+1. Claim a proxy from the database (`ClaimProxy`)
+2. If no proxy is available, return `nil` immediately
+3. Run a live check against the Lodestone URL via the proxy checker
+4. If the check passes, return the proxy to the worker
+5. If the check fails, call `MarkFailed` on the proxy and try another
+6. After 3 failed attempts, return `nil` (no working proxy available)
 
 **ClaimProxy priority** (implemented in `infrastructure/postgres/repository/proxy.go`):
 
@@ -181,6 +189,8 @@ The `consume` command supports a `--proxy` flag for per-goroutine proxy isolatio
 5. **Fallback** — if no recently-scanned proxy is available, any active proxy is returned
 
 This ensures workers get the most reliable proxies from the scan pool. The scan (`proxy scan`) tests proxies against the Lodestone URL and updates `last_alive_at`, `latency_ms`, and `status` — so the ClaimProxy query always has fresh data.
+
+**Why test-before-handout:** Previously, `NewProxy` returned proxies from the database without verifying they still work. Workers would receive dead proxies and waste time on connection failures before marking them failed. Now the proxy is tested at claim time — if it can't reach the Lodestone, it's immediately marked failed and the next candidate is tried. This eliminates the "dead proxy on first job" problem entirely.
 
 **Why this design:** Free proxies are inherently unreliable. The scan identifies which proxies can reach Lodestone right now. The ClaimProxy query prioritizes those, reducing wasted time on dead proxies. When a proxy fails during use, `MarkFailed` increments its `fail_count` and sets it to `inactive`, preventing other workers from picking it up until the next scan re-validates it.
 
@@ -212,15 +222,14 @@ When a proxy fails during a job, the worker switches to a fresh proxy **immediat
 
 On SIGTERM, the shutdown sequence is:
 
-1. `stopClaiming` context is canceled — workers stop claiming new jobs
-2. In-flight jobs continue processing with a live `childCtx` (not canceled)
+1. The consumption context is canceled — the queue adapter stops delivering new messages
+2. In-flight jobs continue processing until their handlers complete
 3. Each worker goroutine exits independently when its current job finishes
 4. `wg.Wait()` blocks until all workers have completed
-5. `defer cancel()` cleans up `childCtx`
 
 **Key decisions:**
-- **`queue.Retry` and `queue.Complete` use `context.Background()`** — during shutdown, the process context is canceled. If retry/complete used the canceled context, jobs would stay stuck in `claimed` status. Using `context.Background()` ensures jobs always return to the queue.
-- **Worker errors don't cancel `childCtx`** — previously, one failing worker would cancel the shared context, killing ALL other workers' in-flight jobs. Now each worker exits independently and the WaitGroup waits for all to finish naturally.
+- **Handler errors trigger retry/fail via the queue adapter** — the queue handles dead-letter and retry-exchange routing internally, so handlers just return errors
+- **Worker errors don't cancel sibling workers** — each worker exits independently and the WaitGroup waits for all to finish naturally
 
 ### Protocol Support
 

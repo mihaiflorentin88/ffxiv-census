@@ -1,6 +1,6 @@
 # Lodestone Client
 
-The Lodestone client reads character, achievement, and free-company data from **The Lodestone** (FFXIV's official community site) via [godestone v2](https://github.com/xivapi/godestone), backed by the [bingode](https://github.com/karashiiro/bingode) game-data provider and the **EN** locale.
+The Lodestone client reads character and achievement data from **The Lodestone** (FFXIV's official community site) via [godestone v2](https://github.com/xivapi/godestone), backed by the [bingode](https://github.com/karashiiro/bingode) game-data provider and the **EN** locale.
 
 ## Contract
 
@@ -10,14 +10,13 @@ The Lodestone client reads character, achievement, and free-company data from **
 | ------ | --------- | ----- |
 | `FetchCharacter` | `(ctx, id uint32) (*godestone.Character, error)` | Character ID is the numeric Lodestone ID. |
 | `FetchAchievements` | `(ctx, id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)` | List of unlocked achievements + aggregate info. A private profile comes back as `AllAchievementInfo.Private = true` with no error. |
-| `FetchFreeCompany` | `(ctx, id string) (*godestone.FreeCompany, error)` | FC ID is the 19-digit Lodestone string, **not** a numeric id. |
 
 ## Primary Provider & Fallback Integration
 
 The Lodestone client serves as the **primary data provider for `character-census`** and the **fallback provider for `id-sweep`** across the census ingest pipeline:
 - **ID Sweep (`id-sweep`)**: Tomestone.gg is queried first for character ranges in `auto` mode (5 req/s REST API vs Lodestone's 1 req/s scraper). Lodestone is the fallback when Tomestone returns 404 or transient errors — characters may exist on Lodestone but not be indexed by Tomestone.
 - **Character Census (`character-census`)**: Lodestone is fetched first as the authoritative source, falling back to Tomestone.gg when unresolvable or rate-limited.
-- **Achievement Census (`achievement-census`) & Free Company (`fc-census`)**: Lodestone is the exclusive provider. When Lodestone is rate-limited or paused, these queues wait while dual-source queues continue on Tomestone.
+- **Achievement Census (`achievement-census`)**: Lodestone is the exclusive provider. When Lodestone is rate-limited or paused, achievement messages remain queued in RabbitMQ while dual-source event types continue on Tomestone.
 
 ## Rate limiting
 

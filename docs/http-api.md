@@ -1,6 +1,6 @@
 # HTTP API
 
-ffxiv-census exposes a small versioned read API for the ingested census data and queue depth. Every endpoint is a `GET` returning JSON (`application/json`). Data endpoints live under `/api/v1/`; the unversioned `/health` probe is the only exception. The same surface is documented in the embedded Swagger 2.0 spec served at `/docs/swagger.json` by the HTTP app.
+ffxiv-census exposes a small versioned read API for the ingested census data. Every endpoint is a `GET` returning JSON (`application/json`). Data endpoints live under `/api/v1/`; the unversioned `/health` probe is the only exception. The same surface is documented in the embedded Swagger 2.0 spec served at `/docs/swagger.json` by the HTTP app.
 
 This is living documentation — when the API changes, update this file with it.
 
@@ -46,7 +46,7 @@ Times are RFC 3339 UTC (Go `time.Time` marshaling). The exception is `NewCharact
 activity_window_days = 30
 ```
 
-Environment override uses the same rule as `[postgres]`/`[queue]` (dots become underscores, section name is the prefix — see `docs/queue.md`): `CENSUS_ACTIVITY_WINDOW_DAYS=45`.
+Environment override uses the same rule as `[postgres]` (dots become underscores, section name is the prefix): `CENSUS_ACTIVITY_WINDOW_DAYS=45`.
 
 The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/latest` and the `active` count on `GET /api/v1/stats/breakdown`.
 
@@ -62,12 +62,6 @@ The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/late
 | GET | `/api/v1/stats/breakdown` | `by` (required, `race`\|`world`\|`datacenter`\|`region`) | `[BreakdownGroup]` | 400 (missing/unknown `by`), 500 |
 | GET | `/api/v1/stats/new-characters` | `since` (required, `YYYY-MM-DD`), `until` (optional, `YYYY-MM-DD`, default now) | `[NewCharactersDay]` | 400 (missing/invalid `since`/`until`), 500 |
 | GET | `/api/v1/stats/expansion` | `name` (optional, exact match) | `[ExpansionStat]` | 500 |
-| GET | `/api/v1/queue` | — | `[QueueDepthItem]` | 500 |
-| GET | `/api/v1/queue/events` | `sample_limit` (int, default 5, max 50) | `[QueueEventTypeSummary]` | 500 |
-| POST | `/api/v1/queue/retry-failed` | `type` (optional string), `limit` (optional int, default 100) | `QueueRetryFailedResponse` | 500 |
-| POST | `/api/v1/queue/purge` | `status` (required, `done`\|`failed`), `older_than` (optional duration, e.g. `24h`, `7d`, default `0s`) | `QueuePurgeResponse` | 400 (invalid `status`/`older_than`), 500 |
-| GET | `/api/v1/queue/jobs` | `type` (string), `status` (`pending`\|`claimed`\|`done`\|`failed`), `limit` (int, default 50, max 200), `offset` (int, default 0) | `PaginatedQueueJobs` | 400 (invalid `status`/`limit`/`offset`), 500 |
-| GET | `/api/v1/queue/jobs/{id}` | `id` (path, int64 queue job id) | `QueueJobItem` | 400 (invalid id), 404 (not found), 500 |
 
 ### GET /health
 
@@ -193,180 +187,7 @@ How many distinct characters completed each expansion's MSQ. The optional `name`
 ]
 ```
 
-### GET /api/v1/queue
-
-Work-queue depth per job status, sorted by status (see `docs/queue.md`).
-
-```json
-[
-  {"status": "done", "count": 3},
-  {"status": "pending", "count": 1}
-]
-```
-
-### GET /api/v1/queue/events
-
-Supported event types, descriptions, and live breakdown by status. Accepts optional `sample_limit` query parameter (default 5, max 50) to limit the number of sampled `active_jobs`, `next_jobs`, and `failed_jobs` included for each event type.
-
-```json
-[
-  {
-    "type": "id-sweep",
-    "description": "Probes an ID range for new characters and chains achievement ingestion",
-    "pending": 12,
-    "claimed": 2,
-    "done": 120,
-    "failed": 0,
-    "total": 134,
-    "active_jobs": [
-      {
-        "id": 105,
-        "type": "id-sweep",
-        "payload": {
-          "from": 1,
-          "to": 100
-        },
-        "status": "claimed",
-        "attempts": 1,
-        "max_attempts": 5,
-        "claimed_at": "2026-08-17T12:00:00Z",
-        "run_at": "2026-08-17T12:00:00Z",
-        "created_at": "2026-08-17T11:59:50Z"
-      }
-    ],
-    "next_jobs": [
-      {
-        "id": 106,
-        "type": "id-sweep",
-        "payload": {
-          "from": 101,
-          "to": 200
-        },
-        "status": "pending",
-        "attempts": 0,
-        "max_attempts": 5,
-        "run_at": "2026-08-17T12:05:00Z",
-        "created_at": "2026-08-17T11:59:50Z"
-      }
-    ],
-    "failed_jobs": []
-  },
-  {
-    "type": "achievement-census",
-    "description": "Fetches character achievements, updates milestones and latest achievement activity",
-    "pending": 5,
-    "claimed": 0,
-    "done": 38,
-    "failed": 2,
-    "total": 45,
-    "active_jobs": [],
-    "next_jobs": [],
-    "failed_jobs": [
-      {
-        "id": 88,
-        "type": "achievement-census",
-        "payload": {
-          "character_id": 99999
-        },
-        "status": "failed",
-        "attempts": 5,
-        "max_attempts": 5,
-        "last_error": "lodestone rate limit exceeded",
-        "run_at": "2026-08-17T11:00:00Z",
-        "created_at": "2026-08-17T10:30:00Z",
-        "failed_at": "2026-08-17T11:00:00Z"
-      }
-    ]
-  },
-  {
-    "type": "fc-census",
-    "description": "Fetches Free Company details and active member counts",
-    "pending": 0,
-    "claimed": 0,
-    "done": 15,
-    "failed": 0,
-    "total": 15,
-    "active_jobs": [],
-    "next_jobs": [],
-    "failed_jobs": []
-  }
-]
-```
-
-### POST /api/v1/queue/retry-failed
-
-Replays failed dead-letter jobs back to `pending` status so workers can re-process them. Optionally filters by `type` and limits the number of retried jobs using `limit` (defaults to 100).
-
-```json
-{
-  "retried": 2,
-  "message": "Successfully queued 2 failed jobs for retry"
-}
-```
-
-### POST /api/v1/queue/purge
-
-Purges historical jobs with status `done` or `failed` older than the specified duration. `status` is required (`done` or `failed`). `older_than` is an optional duration string (e.g. `24h`, `7d`, `30m`). When `older_than` is omitted or `0s`, all jobs matching the status are purged immediately.
-
-```json
-{
-  "purged": 120,
-  "status": "done",
-  "older_than": "24h"
-}
-```
-
-### GET /api/v1/queue/jobs
-
-Paginated list of queue jobs ordered by ID descending (newest first). Supports optional filtering by `type` and/or `status`. `limit` defaults to 50 and is capped at 200; `offset` defaults to 0.
-
-```json
-{
-  "items": [
-    {
-      "id": 105,
-      "type": "id-sweep",
-      "payload": {
-        "from": 1,
-        "to": 100
-      },
-      "payload_hash": "a1b2c3d4e5f6...",
-      "status": "pending",
-      "run_at": "2026-08-17T12:00:00Z",
-      "attempts": 0,
-      "max_attempts": 5,
-      "created_at": "2026-08-17T12:00:00Z"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0
-}
-```
-
-### GET /api/v1/queue/jobs/{id}
-
-Detailed metadata and payload for a single queue job. Returns 400 for non-positive or malformed IDs, and 404 if the job does not exist.
-
-```json
-{
-  "id": 105,
-  "type": "id-sweep",
-  "payload": {
-    "from": 1,
-    "to": 100
-  },
-  "payload_hash": "a1b2c3d4e5f6...",
-  "status": "pending",
-  "run_at": "2026-08-17T12:00:00Z",
-  "attempts": 0,
-  "max_attempts": 5,
-  "created_at": "2026-08-17T12:00:00Z"
-}
-```
-
 ## See also
 
 - `docs/census.md` — the data model behind these endpoints.
-- `docs/queue.md` — the queue lifecycle behind `GET /api/v1/queue`.
 - `/docs/swagger.json` — machine-readable spec (Swagger 2.0).

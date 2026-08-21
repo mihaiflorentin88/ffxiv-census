@@ -30,7 +30,6 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	}
 	svc := census.NewService(
 		s.CharacterRepository(),
-		s.FreeCompanyRepository(),
 		achievements,
 		s.CensusRunRepository(),
 	)
@@ -74,7 +73,6 @@ func (s *ServiceContainer) Handlers() *handler.Registry {
 	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), s.TomestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
 	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
 	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), s.TomestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
-	reg.Register(handler.EventFreeCompanyCensus, handler.NewFreeCompanyCensus(s.LodestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
 	return reg
 }
 
@@ -171,6 +169,5 @@ func (s *ServiceContainer) ProxyCensusHandlers(lodestoneClient contract.Lodeston
 	reg.Register(handler.EventIDSweep, handler.NewIDSweep(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter).WithProxyMode())
 	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(lodestoneClient, svc, s.Logger(), rateLimiter))
 	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter))
-	reg.Register(handler.EventFreeCompanyCensus, handler.NewFreeCompanyCensus(lodestoneClient, svc, s.Logger(), rateLimiter))
 	return reg
 }

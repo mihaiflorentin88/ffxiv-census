@@ -43,11 +43,6 @@ func cloneCharacter(rec contract.CharacterRecord) contract.CharacterRecord {
 	return rec
 }
 
-func cloneFreeCompany(rec contract.FreeCompanyRecord) contract.FreeCompanyRecord {
-	rec.FormedAt = cloneTime(rec.FormedAt)
-	return rec
-}
-
 func cloneMilestone(m contract.MilestoneAchievement) contract.MilestoneAchievement {
 	m.Expansion = cloneString(m.Expansion)
 	return m

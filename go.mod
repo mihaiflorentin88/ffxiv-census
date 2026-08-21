@@ -7,6 +7,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/karashiiro/bingode v1.11.0
 	github.com/pressly/goose/v3 v3.27.3
+	github.com/rabbitmq/amqp091-go v1.14.0
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.17.0
 	github.com/swaggo/http-swagger v1.3.4

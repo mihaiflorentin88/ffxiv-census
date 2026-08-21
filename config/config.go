@@ -21,7 +21,7 @@ type Config struct {
 	Auth      *AuthConfig      `mapstructure:"auth"`
 	Metrics   *MetricsConfig   `mapstructure:"metrics"`
 	Postgres  *PostgresConfig  `mapstructure:"postgres"`
-	Queue     *QueueConfig     `mapstructure:"queue"`
+	RabbitMQ  *RabbitMQConfig  `mapstructure:"rabbitmq"`
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
 	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
 	Census    *CensusConfig    `mapstructure:"census"`
@@ -96,11 +96,38 @@ func (p *PostgresConfig) GetDSN() string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s", user, p.Password, host, port, dbname, sslmode)
 }
 
-type QueueConfig struct {
-	ClaimBatchSize     int `mapstructure:"claim_batch_size"`
-	MaxAttempts        int `mapstructure:"max_attempts"`
-	BackoffBaseSeconds int `mapstructure:"backoff_base_seconds"`
+type RabbitMQConfig struct {
+	URL      string `mapstructure:"url"`
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	User     string `mapstructure:"user"`
+	Password string `mapstructure:"password"`
+	Vhost    string `mapstructure:"vhost"`
 }
+
+func (r *RabbitMQConfig) GetURL() string {
+	if r.URL != "" {
+		return r.URL
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost"
+	}
+	port := r.Port
+	if port == 0 {
+		port = 5672
+	}
+	user := r.User
+	if user == "" {
+		user = "guest"
+	}
+	vhost := r.Vhost
+	if vhost == "" {
+		vhost = "/"
+	}
+	return fmt.Sprintf("amqp://%s:%s@%s:%d/%s", user, r.Password, host, port, vhost)
+}
+
 type LodestoneConfig struct {
 	RateLimit  float64 `mapstructure:"rate_limit"`
 	MaxRetries int     `mapstructure:"max_retries"`

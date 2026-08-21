@@ -17,7 +17,6 @@ import (
 type testRig struct {
 	svc   *census.Service
 	chars *mockrepo.CharacterRepository
-	fcs   *mockrepo.FreeCompanyRepository
 	ach   *mockrepo.AchievementRepository
 	q     *mockqueue.Fake
 	ctrl  *UIController
@@ -26,16 +25,14 @@ type testRig struct {
 func newTestRig(t *testing.T) *testRig {
 	t.Helper()
 	chars := mockrepo.NewCharacterFake()
-	fcs := mockrepo.NewFreeCompanyFake()
 	ach := mockrepo.NewAchievementFake()
 	runs := mockrepo.NewCensusRunFake()
-	svc := census.NewService(chars, fcs, ach, runs)
+	svc := census.NewService(chars, ach, runs)
 	q := mockqueue.NewFake()
 	ctrl := NewUIController(svc, q)
 	return &testRig{
 		svc:   svc,
 		chars: chars,
-		fcs:   fcs,
 		ach:   ach,
 		q:     q,
 		ctrl:  ctrl,

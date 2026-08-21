@@ -22,7 +22,7 @@ func newTestAchievementCensus(t *testing.T) (*AchievementCensus, *mocklodestone.
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
 	ach := mockrepo.NewAchievementFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), ach, mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, ach, mockrepo.NewCensusRunFake())
 	if err := svc.SyncMilestones(context.Background()); err != nil {
 		t.Fatalf("SyncMilestones: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestAchievementCensus_FetchError(t *testing.T) {
 
 func TestAchievementCensus_WaitsForRateLimitedLodestone(t *testing.T) {
 	ls := mocklodestone.NewFake()
-	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	if err := svc.SyncMilestones(context.Background()); err != nil {
 		t.Fatalf("SyncMilestones: %v", err)
 	}

@@ -48,34 +48,30 @@ func TestWorker_DynamicDispatcher_DedicatedPoolsConcurrentProcessing(t *testing.
 
 	hSweep := &concurrencyTrackingHandler{holdDuration: 50 * time.Millisecond}
 	hChar := &concurrencyTrackingHandler{holdDuration: 50 * time.Millisecond}
-	hFC := &concurrencyTrackingHandler{holdDuration: 50 * time.Millisecond}
 
 	reg.Register(handler.EventIDSweep, hSweep)
 	reg.Register(handler.EventCharacterCensus, hChar)
-	reg.Register(handler.EventFreeCompanyCensus, hFC)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Enqueue 20 jobs of each type with unique payloads
-	for i := 0; i < 20; i++ {
-		_, _ = q.Publish(
-			ctx,
-			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"sweep":%d}`, i))},
-			contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))},
-			contract.QueueJob{Type: handler.EventFreeCompanyCensus, Payload: []byte(fmt.Sprintf(`{"fc":%d}`, i))},
-		)
+	for i := range 20 {
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"sweep":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	w := worker.New(q, reg, nil)
-	w.SetPollInterval(10 * time.Millisecond)
 
 	done := make(chan error, 1)
 	go func() {
 		done <- w.RunEvents(ctx, []string{
 			handler.EventIDSweep,
 			handler.EventCharacterCensus,
-			handler.EventFreeCompanyCensus,
 		}, 20)
 	}()
 
@@ -85,14 +81,10 @@ func TestWorker_DynamicDispatcher_DedicatedPoolsConcurrentProcessing(t *testing.
 	_ = <-done
 
 	peakChar := atomic.LoadInt32(&hChar.peakInFlight)
-	peakFC := atomic.LoadInt32(&hFC.peakInFlight)
 	peakSweep := atomic.LoadInt32(&hSweep.peakInFlight)
 
 	if peakChar == 0 {
 		t.Errorf("expected character-census to be processed concurrently, got peak=0")
-	}
-	if peakFC == 0 {
-		t.Errorf("expected free-company-census to be processed concurrently, got peak=0")
 	}
 	if peakSweep == 0 {
 		t.Errorf("expected id-sweep to be processed concurrently, got peak=0")
@@ -100,47 +92,8 @@ func TestWorker_DynamicDispatcher_DedicatedPoolsConcurrentProcessing(t *testing.
 	if atomic.LoadInt32(&hChar.totalHandled) == 0 {
 		t.Errorf("expected character-census jobs to be handled")
 	}
-	if atomic.LoadInt32(&hFC.totalHandled) == 0 {
-		t.Errorf("expected fc-census jobs to be handled")
-	}
 	if atomic.LoadInt32(&hSweep.totalHandled) == 0 {
 		t.Errorf("expected id-sweep jobs to be handled")
-	}
-}
-
-func TestWorker_DynamicDispatcher_FullCapacityWhenSingleCategory(t *testing.T) {
-	q := mockqueue.NewFake()
-	reg := handler.NewRegistry()
-
-	hSweep := &concurrencyTrackingHandler{holdDuration: 40 * time.Millisecond}
-	hChar := &concurrencyTrackingHandler{holdDuration: 40 * time.Millisecond}
-
-	reg.Register(handler.EventIDSweep, hSweep)
-	reg.Register(handler.EventCharacterCensus, hChar)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Enqueue ONLY id-sweep jobs with unique payloads
-	for i := 0; i < 30; i++ {
-		_, _ = q.Publish(ctx, contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"id":%d}`, i))})
-	}
-
-	w := worker.New(q, reg, nil)
-	w.SetPollInterval(5 * time.Millisecond)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- w.RunEvents(ctx, []string{handler.EventIDSweep, handler.EventCharacterCensus}, 8)
-	}()
-
-	time.Sleep(150 * time.Millisecond)
-	cancel()
-	_ = <-done
-
-	peakSweep := atomic.LoadInt32(&hSweep.peakInFlight)
-	if peakSweep < 6 {
-		t.Errorf("expected id-sweep to utilize full worker capacity, got peak=%d, want >= 6", peakSweep)
 	}
 }
 
@@ -161,16 +114,16 @@ func TestWorker_DynamicDispatcher_LowConcurrencyRoundRobin(t *testing.T) {
 	defer cancel()
 
 	// Enqueue 5 jobs of each type with unique payloads
-	for i := 0; i < 5; i++ {
-		_, _ = q.Publish(
-			ctx,
-			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"sweep":%d}`, i))},
-			contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))},
-		)
+	for i := range 5 {
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"sweep":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	w := worker.New(q, reg, nil)
-	w.SetPollInterval(5 * time.Millisecond)
 
 	done := make(chan error, 1)
 	go func() {
@@ -212,50 +165,6 @@ func TestWorker_DynamicDispatcher_LowConcurrencyRoundRobin(t *testing.T) {
 	}
 }
 
-func TestWorker_DynamicDispatcher_RetriesCeiling(t *testing.T) {
-	q := mockqueue.NewFake()
-	reg := handler.NewRegistry()
-
-	hSweep := &concurrencyTrackingHandler{holdDuration: 40 * time.Millisecond}
-	reg.Register(handler.EventIDSweep, hSweep)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Enqueue 10 jobs that were already attempted (retries) and 10 new jobs
-	for i := 0; i < 10; i++ {
-		_, _ = q.Publish(
-			ctx,
-			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"retry":%d}`, i))},
-			contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"new":%d}`, i))},
-		)
-	}
-
-	// Mark the first 10 as retries by claiming and failing them once
-	claimed, _ := q.Claim(ctx, handler.EventIDSweep, 10, contract.ClaimModeAny)
-	for _, j := range claimed {
-		_ = q.Retry(ctx, j.ID, "simulated error")
-	}
-
-	// Concurrency = 12 -> Retries ceiling = 25% of 12 = 3
-	w := worker.New(q, reg, nil)
-	w.SetPollInterval(5 * time.Millisecond)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- w.RunEvents(ctx, []string{handler.EventIDSweep}, 12)
-	}()
-
-	time.Sleep(200 * time.Millisecond)
-	cancel()
-	_ = <-done
-
-	total := atomic.LoadInt32(&hSweep.totalHandled)
-	if total < 10 {
-		t.Errorf("expected at least 10 jobs handled, got %d", total)
-	}
-}
-
 type orderRecordingHandler struct {
 	orderMu   *sync.Mutex
 	order     *[]string
@@ -287,12 +196,13 @@ func TestWorker_DynamicDispatcher_NoStarvationWhenPrimaryAlreadyRunning(t *testi
 	defer cancel()
 
 	// 1. Initially enqueue 100 id-sweep jobs (fill the entire queue with primary)
-	for i := 0; i < 100; i++ {
-		_, _ = q.Publish(ctx, contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"id":%d}`, i))})
+	for i := range 100 {
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventIDSweep, Payload: []byte(fmt.Sprintf(`{"id":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	w := worker.New(q, reg, nil)
-	w.SetPollInterval(5 * time.Millisecond)
 
 	done := make(chan error, 1)
 	go func() {
@@ -307,12 +217,13 @@ func TestWorker_DynamicDispatcher_NoStarvationWhenPrimaryAlreadyRunning(t *testi
 	time.Sleep(50 * time.Millisecond)
 
 	// 3. Now enqueue character-census and achievement-census jobs
-	for i := 0; i < 20; i++ {
-		_, _ = q.Publish(
-			ctx,
-			contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))},
-			contract.QueueJob{Type: handler.EventAchievementCensus, Payload: []byte(fmt.Sprintf(`{"ach":%d}`, i))},
-		)
+	for i := range 20 {
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventCharacterCensus, Payload: []byte(fmt.Sprintf(`{"char":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
+		if err := q.Publish(ctx, contract.QueueJob{Type: handler.EventAchievementCensus, Payload: []byte(fmt.Sprintf(`{"ach":%d}`, i))}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// 4. Wait 200ms

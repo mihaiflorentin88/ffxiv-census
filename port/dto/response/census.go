@@ -34,10 +34,9 @@ type PaginatedCharacters struct {
 }
 
 type CharacterDetail struct {
-	Character   CharacterListItem          `json:"character"`
-	Jobs        []CharacterJobDetail       `json:"jobs"`
-	Milestones  []CharacterMilestoneDetail `json:"milestones"`
-	FreeCompany *FreeCompanyDetail         `json:"free_company,omitempty"`
+	Character  CharacterListItem          `json:"character"`
+	Jobs       []CharacterJobDetail       `json:"jobs"`
+	Milestones []CharacterMilestoneDetail `json:"milestones"`
 }
 
 type CharacterJobDetail struct {
@@ -50,31 +49,6 @@ type CharacterJobDetail struct {
 type CharacterMilestoneDetail struct {
 	AchievementID uint32    `json:"achievement_id"`
 	AchievedAt    time.Time `json:"achieved_at"`
-}
-
-type FreeCompanyDetail struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	World       string `json:"world"`
-	Datacenter  string `json:"datacenter"`
-	MemberCount uint32 `json:"member_count"`
-}
-
-type FreeCompanyListItem struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	World       string     `json:"world"`
-	Datacenter  string     `json:"datacenter"`
-	MemberCount uint32     `json:"member_count"`
-	FormedAt    *time.Time `json:"formed_at,omitempty"`
-	LastSeenAt  time.Time  `json:"last_seen_at"`
-}
-
-type PaginatedFreeCompanies struct {
-	Items  []FreeCompanyListItem `json:"items"`
-	Total  int64                 `json:"total"`
-	Limit  int                   `json:"limit"`
-	Offset int                   `json:"offset"`
 }
 
 type BreakdownGroup struct {

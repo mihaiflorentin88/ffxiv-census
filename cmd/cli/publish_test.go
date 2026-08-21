@@ -116,9 +116,6 @@ func TestBuildIDSweepJobs(t *testing.T) {
 		if p.Source != "tomestone" {
 			t.Errorf("job[%d] source = %q, want tomestone", i, p.Source)
 		}
-		if j.MaxAttempts != -1 {
-			t.Errorf("job[%d] MaxAttempts = %d, want -1 (infinite retry)", i, j.MaxAttempts)
-		}
 	}
 }
 
@@ -126,7 +123,7 @@ func TestPublishIDSweepCmd_FlagsRegistered(t *testing.T) {
 	flags := publishIDSweepCmd.Flags()
 	for _, name := range []string{
 		"auto", "batch-size", "from", "to", "count", "chunk-size", "source",
-		"fill-gaps", "daemon", "daemon-interval", "min-pending-jobs", "max-gaps",
+		"fill-gaps", "daemon", "daemon-interval", "max-gaps",
 	} {
 		if flags.Lookup(name) == nil {
 			t.Errorf("flag --%s not registered on publish id-sweep", name)
@@ -187,9 +184,6 @@ func TestPublishIDSweep_AutoAndGapBatchGeneration(t *testing.T) {
 	}
 
 	for idx, j := range jobs {
-		if j.MaxAttempts != -1 {
-			t.Errorf("job %d max attempts = %d, want -1", idx, j.MaxAttempts)
-		}
 		var p handler.IDSweepPayload
 		if err := json.Unmarshal(j.Payload, &p); err != nil {
 			t.Fatalf("job %d payload unmarshal error: %v", idx, err)
@@ -209,12 +203,5 @@ func TestPublishIDSweep_AutoAndGapBatchGeneration(t *testing.T) {
 	gapJobs := buildGapSweepJobs(gaps, 100, "lodestone")
 	if len(gapJobs) != 3 {
 		t.Fatalf("expected 3 gap jobs, got %d", len(gapJobs))
-	}
-}
-
-func TestPublishFCCensusCmd_FlagsRegistered(t *testing.T) {
-	flags := publishFCCensusCmd.Flags()
-	if flags.Lookup("fc-id") == nil {
-		t.Errorf("flag --fc-id not registered on publish fc-census")
 	}
 }

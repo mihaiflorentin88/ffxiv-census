@@ -42,6 +42,4 @@ func (c *UIController) RegisterRoutes(mux *http.ServeMux) {
 	// mux.HandleFunc("GET /ui/characters/{id}", c.CharacterDetail)
 	// mux.HandleFunc("GET /ui/characters", c.CharacterList)
 	// mux.HandleFunc("GET /ui/characters/search", c.CharacterSearch)
-	// mux.HandleFunc("GET /ui/free-companies/{id}", c.FreeCompanyDetail)
-	// mux.HandleFunc("GET /ui/free-companies", c.FreeCompanyList)
 }

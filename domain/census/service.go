@@ -18,7 +18,6 @@ import (
 // contracts, never on SQL or HTTP.
 type Service struct {
 	characters     contract.CharacterRepository
-	freeCompanies  contract.FreeCompanyRepository
 	achievements   contract.AchievementRepository
 	censusRuns     contract.CensusRunRepository
 	mu             sync.RWMutex
@@ -29,13 +28,11 @@ type Service struct {
 
 func NewService(
 	characters contract.CharacterRepository,
-	freeCompanies contract.FreeCompanyRepository,
 	achievements contract.AchievementRepository,
 	censusRuns contract.CensusRunRepository,
 ) *Service {
 	return &Service{
 		characters:     characters,
-		freeCompanies:  freeCompanies,
 		achievements:   achievements,
 		censusRuns:     censusRuns,
 		activityWindow: defaultActivityWindow,
@@ -371,47 +368,21 @@ func (s *Service) activitySince() time.Time {
 	return time.Now().UTC().Add(-window)
 }
 
-// UpsertFreeCompany converts a Lodestone free company into a record and persists it.
-func (s *Service) UpsertFreeCompany(ctx context.Context, fc *godestone.FreeCompany) error {
-	if fc == nil {
-		return errors.New("cannot upsert nil free company")
-	}
-	return s.freeCompanies.Upsert(ctx, toFreeCompanyRecord(fc))
-}
-
 // MarkCharacterDeleted records that a character no longer exists on Lodestone.
 func (s *Service) MarkCharacterDeleted(ctx context.Context, id uint32, at time.Time) error {
 	return s.characters.MarkDeleted(ctx, id, at)
-}
-
-func toFreeCompanyRecord(fc *godestone.FreeCompany) contract.FreeCompanyRecord {
-	rec := contract.FreeCompanyRecord{
-		ID:          fc.ID,
-		Name:        fc.Name,
-		World:       fc.World,
-		Datacenter:  fc.DC,
-		MemberCount: fc.ActiveMemberCount,
-		LastSeenAt:  time.Now().UTC(),
-	}
-	if !fc.Formed.IsZero() {
-		rec.FormedAt = &fc.Formed
-	}
-	return rec
 }
 
 // ErrInvalidDimension is returned by Breakdown when by is not one of
 // race|world|datacenter|region.
 var ErrInvalidDimension = errors.New("invalid breakdown dimension: want race|world|datacenter|region")
 
-// CharacterDetail aggregates a character's persisted profile, jobs, milestones,
-// and free company into one response payload. FreeCompany is nil when the
-// character is not in an FC or the referenced FC was never ingested.
+// CharacterDetail aggregates a character's persisted profile, jobs, and milestones.
 type CharacterDetail struct {
-	Character   contract.CharacterRecord
-	Jobs        []contract.ClassJobRecord
-	Gear        []contract.CharacterGearRecord
-	Milestones  []contract.CharacterMilestone
-	FreeCompany *contract.FreeCompanyRecord
+	Character  contract.CharacterRecord
+	Jobs       []contract.ClassJobRecord
+	Gear       []contract.CharacterGearRecord
+	Milestones []contract.CharacterMilestone
 }
 
 // Summary returns the total number of non-deleted characters and how many of
@@ -474,32 +445,7 @@ func (s *Service) CharacterDetail(ctx context.Context, id uint32) (*CharacterDet
 		return nil, err
 	}
 	detail := &CharacterDetail{Character: *rec, Jobs: jobs, Gear: gear, Milestones: milestones}
-	if rec.FreeCompanyID != nil {
-		fc, err := s.freeCompanies.Get(ctx, *rec.FreeCompanyID)
-		if err != nil {
-			return nil, err
-		}
-		detail.FreeCompany = fc
-	}
 	return detail, nil
-}
-
-// ListFreeCompanies returns a page of free companies matching filter and the total count.
-func (s *Service) ListFreeCompanies(ctx context.Context, f contract.FreeCompanyFilter, limit, offset int) ([]contract.FreeCompanyRecord, int64, error) {
-	fcs, err := s.freeCompanies.List(ctx, f, limit, offset)
-	if err != nil {
-		return nil, 0, err
-	}
-	total, err := s.freeCompanies.Count(ctx, f)
-	if err != nil {
-		return nil, 0, err
-	}
-	return fcs, total, nil
-}
-
-// FreeCompanyDetail returns the free company record for the given id, or nil if not found.
-func (s *Service) FreeCompanyDetail(ctx context.Context, id string) (*contract.FreeCompanyRecord, error) {
-	return s.freeCompanies.Get(ctx, id)
 }
 
 // WorldDetailStats aggregates high-level census facts for a specific world.

@@ -21,7 +21,7 @@ func newTestCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.Fake
 	t.Helper()
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	return NewCharacterCensus(ls, nil, svc, nil), ls, chars
 }
 
@@ -31,7 +31,7 @@ func newTestDualCharacterCensus(t *testing.T) (*CharacterCensus, *mocklodestone.
 	ts := mocktomestone.NewFake()
 	limiter := mock.NewProviderRateLimiter()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	return NewCharacterCensus(ls, ts, svc, nil, limiter), ls, ts, limiter, chars
 }
 
@@ -49,11 +49,11 @@ func TestCharacterCensus_UpsertAndChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(next) != 2 {
-		t.Fatalf("next jobs = %d, want 2 (achievement + fc)", len(next))
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1 (achievement)", len(next))
 	}
-	if next[0].Type != EventAchievementCensus || next[1].Type != EventFreeCompanyCensus {
-		t.Errorf("next types = %q, %q", next[0].Type, next[1].Type)
+	if next[0].Type != EventAchievementCensus {
+		t.Errorf("next types = %q, want %q", next[0].Type, EventAchievementCensus)
 	}
 	if got, _ := chars.Get(context.Background(), 42); got == nil {
 		t.Errorf("character 42 should be upserted")
@@ -96,7 +96,7 @@ func TestCharacterCensus_NotFoundMarksDeleted(t *testing.T) {
 func TestCharacterCensus_ReturnsDownstreamJobsInNext(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	chars := mockrepo.NewCharacterFake()
-	svc := census.NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 
 	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
 		return &godestone.Character{
@@ -114,16 +114,11 @@ func TestCharacterCensus_ReturnsDownstreamJobsInNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(next) != 2 {
-		t.Fatalf("expected 2 returned jobs (ach + fc), got %d", len(next))
+	if len(next) != 1 {
+		t.Fatalf("expected 1 returned job (ach), got %d", len(next))
 	}
-	// Verify downstream jobs are returned (not published eagerly).
-	// The worker's Complete(id, next...) will publish them atomically.
 	if next[0].Type != EventAchievementCensus {
 		t.Errorf("expected first job to be achievement-census, got %q", next[0].Type)
-	}
-	if next[1].Type != EventFreeCompanyCensus {
-		t.Errorf("expected second job to be fc-census, got %q", next[1].Type)
 	}
 }
 
@@ -137,7 +132,7 @@ func TestCharacterCensus_FetchError(t *testing.T) {
 	}
 }
 
-func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievementAndFC(t *testing.T) {
+func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievement(t *testing.T) {
 	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
 	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
 		return &godestone.Character{
@@ -153,10 +148,10 @@ func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievementAndFC(t *test
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(next) != 2 {
-		t.Fatalf("next jobs = %d, want 2", len(next))
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1", len(next))
 	}
-	if next[0].Type != EventAchievementCensus || next[1].Type != EventFreeCompanyCensus {
+	if next[0].Type != EventAchievementCensus {
 		t.Errorf("unexpected job types: %+v", next)
 	}
 	if len(ts.ProfileCalls) != 0 {
@@ -185,10 +180,10 @@ func TestCharacterCensus_LodestoneError_FallbackToTomestone_Success(t *testing.T
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(next) != 2 {
-		t.Fatalf("next jobs = %d, want 2 (achievement + fc)", len(next))
+	if len(next) != 1 {
+		t.Fatalf("next jobs = %d, want 1 (achievement)", len(next))
 	}
-	if next[0].Type != EventAchievementCensus || next[1].Type != EventFreeCompanyCensus {
+	if next[0].Type != EventAchievementCensus {
 		t.Errorf("unexpected job types: %+v", next)
 	}
 	got, _ := chars.Get(context.Background(), 200)

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -58,9 +59,8 @@ func buildIDSweepJobs(from, to, chunkSize uint32, source string) []contract.Queu
 		}
 		b, _ := json.Marshal(handler.IDSweepPayload{From: start, To: end, Source: source})
 		jobs = append(jobs, contract.QueueJob{
-			Type:        handler.EventIDSweep,
-			Payload:     b,
-			MaxAttempts: -1, // infinite retries for ID sweeps so rate limits never drop jobs
+			Type:    handler.EventIDSweep,
+			Payload: b,
 		})
 		if end == to {
 			break
@@ -77,6 +77,16 @@ func buildGapSweepJobs(gaps [][2]uint32, chunkSize uint32, source string) []cont
 		jobs = append(jobs, gapJobs...)
 	}
 	return jobs
+}
+
+func publishAll(q contract.Queue, logger contract.Logger, ctx context.Context, jobs []contract.QueueJob) error {
+	for _, job := range jobs {
+		if err := q.Publish(ctx, job); err != nil {
+			return err
+		}
+	}
+	logger.InfoContext(ctx, "publish.enqueued", slog.Int("count", len(jobs)))
+	return nil
 }
 
 var publishIDSweepCmd = &cobra.Command{
@@ -96,8 +106,6 @@ var publishIDSweepCmd = &cobra.Command{
 		fillGaps, _ := cmd.Flags().GetBool("fill-gaps")
 		daemon, _ := cmd.Flags().GetBool("daemon")
 		daemonInterval, _ := cmd.Flags().GetDuration("daemon-interval")
-		purgeEvent, _ := cmd.Flags().GetBool("purge-event")
-		minPendingJobs, _ := cmd.Flags().GetInt("min-pending-jobs")
 		maxGaps, _ := cmd.Flags().GetInt("max-gaps")
 		if daemon && daemonInterval <= 0 {
 			return fmt.Errorf("invalid --daemon-interval %v: must be positive", daemonInterval)
@@ -117,36 +125,28 @@ var publishIDSweepCmd = &cobra.Command{
 			return fmt.Errorf("queue not initialised")
 		}
 		logger := container.Load.Logger()
-		if purgeEvent {
-			purged, err := q.PurgeJobs(cmd.Context(), "id-sweep", "", 0)
-			if err != nil {
-				return fmt.Errorf("purge id-sweep jobs: %w", err)
-			}
-			logger.InfoContext(cmd.Context(), "publish.id_sweep_purged", slog.Int64("purged", purged))
-		}
 
-		publishBatch := func() (int, error) {
+		publishBatch := func() error {
 			var jobs []contract.QueueJob
 			if fillGaps {
 				maxID, err := repo.MaxID(cmd.Context())
 				if err != nil {
-					return 0, fmt.Errorf("lookup max character id for gap fill: %w", err)
+					return fmt.Errorf("lookup max character id for gap fill: %w", err)
 				}
 				if maxID == 0 {
-					// Empty DB: fallback to sweeping first count
 					actualFrom, actualTo, err := computeIDSweepRange(0, 0, count, true, func() (uint32, error) { return 0, nil })
 					if err != nil {
-						return 0, err
+						return err
 					}
 					jobs = buildIDSweepJobs(actualFrom, actualTo, chunkSize, source)
 				} else {
 					gaps, err := repo.FindIDGaps(cmd.Context(), maxID, maxGaps)
 					if err != nil {
-						return 0, fmt.Errorf("find id gaps: %w", err)
+						return fmt.Errorf("find id gaps: %w", err)
 					}
 					if len(gaps) == 0 {
 						logger.InfoContext(cmd.Context(), "publish.id_sweep_gaps.none_found", slog.Uint64("max_id", uint64(maxID)))
-						return 0, nil
+						return nil
 					}
 					jobs = buildGapSweepJobs(gaps, chunkSize, source)
 				}
@@ -156,43 +156,30 @@ var publishIDSweepCmd = &cobra.Command{
 				}
 				actualFrom, actualTo, err := computeIDSweepRange(from, to, count, auto, maxIDFunc)
 				if err != nil {
-					return 0, err
+					return err
 				}
 				jobs = buildIDSweepJobs(actualFrom, actualTo, chunkSize, source)
 			}
 
 			if len(jobs) == 0 {
-				return 0, nil
+				return nil
 			}
 
-			inserted, err := q.Publish(cmd.Context(), jobs...)
-			if err != nil {
-				return 0, err
+			if err := publishAll(q, logger, cmd.Context(), jobs); err != nil {
+				return err
 			}
-			dedup := len(jobs) - inserted
 			logger.InfoContext(
 				cmd.Context(), "publish.id_sweep",
 				slog.Bool("fill_gaps", fillGaps),
 				slog.Uint64("chunk_size", uint64(chunkSize)),
 				slog.String("source", source),
-				slog.Int("requested", len(jobs)),
-				slog.Int("enqueued", inserted),
-				slog.Int("deduplicated", dedup),
+				slog.Int("count", len(jobs)),
 			)
-			if inserted == 0 && len(jobs) > 0 {
-				logger.WarnContext(
-					cmd.Context(), "publish.id_sweep_deduplicated",
-					slog.String("notice", "all requested jobs already exist in queue (done/pending/failed); no new work enqueued"),
-					slog.Int("requested", len(jobs)),
-					slog.Int("deduplicated", dedup),
-				)
-			}
-			return inserted, nil
+			return nil
 		}
 
 		if !daemon {
-			_, err := publishBatch()
-			return err
+			return publishBatch()
 		}
 
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -201,13 +188,11 @@ var publishIDSweepCmd = &cobra.Command{
 		logger.InfoContext(
 			ctx, "publish.id_sweep_daemon.started",
 			slog.Duration("interval", daemonInterval),
-			slog.Int("min_pending_jobs", minPendingJobs),
 			slog.Bool("fill_gaps", fillGaps),
 			slog.String("source", source),
 		)
 
-		// Run initial sweep
-		if _, err := publishBatch(); err != nil {
+		if err := publishBatch(); err != nil {
 			logger.WarnContext(ctx, "publish.id_sweep_daemon.initial_sweep_error", slog.Any("error", err))
 		}
 
@@ -220,23 +205,8 @@ var publishIDSweepCmd = &cobra.Command{
 				logger.InfoContext(ctx, "publish.id_sweep_daemon.stopped")
 				return nil
 			case <-ticker.C:
-				pending, err := q.CountJobs(ctx, contract.QueueJobFilter{
-					Type:   handler.EventIDSweep,
-					Status: contract.QueueJobPending,
-				})
-				if err != nil {
-					logger.WarnContext(ctx, "publish.id_sweep_daemon.count_pending_error", slog.Any("error", err))
-					continue
-				}
-				if pending < int64(minPendingJobs) {
-					logger.InfoContext(
-						ctx, "publish.id_sweep_daemon.threshold_reached",
-						slog.Int64("pending", pending),
-						slog.Int("min_pending", minPendingJobs),
-					)
-					if _, err := publishBatch(); err != nil {
-						logger.WarnContext(ctx, "publish.id_sweep_daemon.publish_error", slog.Any("error", err))
-					}
+				if err := publishBatch(); err != nil {
+					logger.WarnContext(ctx, "publish.id_sweep_daemon.publish_error", slog.Any("error", err))
 				}
 			}
 		}
@@ -272,89 +242,15 @@ var publishCharacterCensusCmd = &cobra.Command{
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
-		inserted, err := q.Publish(cmd.Context(), jobs...)
-		if err != nil {
+		if err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
 			return err
 		}
-		dedup := len(jobs) - inserted
 		container.Load.Logger().InfoContext(
 			cmd.Context(), "publish.character_census",
 			slog.String("older_than", olderThan.String()),
 			slog.Int("limit", limit),
 			slog.Int("stale", len(stale)),
-			slog.Int("requested", len(jobs)),
-			slog.Int("enqueued", inserted),
-			slog.Int("deduplicated", dedup),
-		)
-		if inserted == 0 && len(jobs) > 0 {
-			container.Load.Logger().WarnContext(
-				cmd.Context(), "publish.character_census_deduplicated",
-				slog.String("notice", "all requested jobs already exist in queue (done/pending/failed); no new work enqueued"),
-				slog.Int("requested", len(jobs)),
-				slog.Int("deduplicated", dedup),
-			)
-		}
-		return nil
-	},
-}
-
-var publishFCCensusCmd = &cobra.Command{
-	Use:   "fc-census",
-	Short: "Publish fc-census jobs for free companies",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fcID, _ := cmd.Flags().GetString("fc-id")
-		limit, _ := cmd.Flags().GetInt("limit")
-		olderThan, _ := cmd.Flags().GetDuration("older-than")
-
-		q := container.Load.Queue()
-		if q == nil {
-			return fmt.Errorf("queue not initialised")
-		}
-
-		if fcID != "" {
-			job := handler.FreeCompanyCensusJob(fcID)
-			inserted, err := q.Publish(cmd.Context(), job)
-			if err != nil {
-				return err
-			}
-			container.Load.Logger().InfoContext(
-				cmd.Context(), "publish.fc_census",
-				slog.String("fc_id", fcID),
-				slog.Int("enqueued", inserted),
-			)
-			return nil
-		}
-
-		if limit <= 0 {
-			limit = 500
-		}
-		repo := container.Load.FreeCompanyRepository()
-		if repo == nil {
-			return fmt.Errorf("free company repository not initialised")
-		}
-		fcs, err := repo.List(cmd.Context(), contract.FreeCompanyFilter{}, limit, 0)
-		if err != nil {
-			return fmt.Errorf("list free companies: %w", err)
-		}
-
-		cutoff := time.Now().UTC().Add(-olderThan)
-		var jobs []contract.QueueJob
-		for _, fc := range fcs {
-			if olderThan <= 0 || fc.LastSeenAt.Before(cutoff) {
-				jobs = append(jobs, handler.FreeCompanyCensusJob(fc.ID))
-			}
-		}
-
-		inserted, err := q.Publish(cmd.Context(), jobs...)
-		if err != nil {
-			return err
-		}
-		container.Load.Logger().InfoContext(
-			cmd.Context(), "publish.fc_census",
-			slog.Int("limit", limit),
-			slog.Int("found", len(fcs)),
-			slog.Int("enqueued", inserted),
-			slog.Int("deduplicated", len(jobs)-inserted),
+			slog.Int("count", len(jobs)),
 		)
 		return nil
 	},
@@ -374,14 +270,12 @@ var publishAchievementCensusCmd = &cobra.Command{
 
 		if charID > 0 {
 			job := handler.AchievementCensusJob(charID)
-			inserted, err := q.Publish(cmd.Context(), job)
-			if err != nil {
+			if err := q.Publish(cmd.Context(), job); err != nil {
 				return err
 			}
 			container.Load.Logger().InfoContext(
 				cmd.Context(), "publish.achievement_census",
 				slog.Uint64("character_id", uint64(charID)),
-				slog.Int("enqueued", inserted),
 			)
 			return nil
 		}
@@ -403,16 +297,14 @@ var publishAchievementCensusCmd = &cobra.Command{
 			jobs = append(jobs, handler.AchievementCensusJob(c.ID))
 		}
 
-		inserted, err := q.Publish(cmd.Context(), jobs...)
-		if err != nil {
+		if err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
 			return err
 		}
 		container.Load.Logger().InfoContext(
 			cmd.Context(), "publish.achievement_census",
 			slog.Int("limit", limit),
 			slog.Int("found", len(chars)),
-			slog.Int("enqueued", inserted),
-			slog.Int("deduplicated", len(jobs)-inserted),
+			slog.Int("count", len(jobs)),
 		)
 		return nil
 	},
@@ -429,18 +321,12 @@ func init() {
 	publishIDSweepCmd.Flags().Uint32("chunk-size", 100, "IDs per id-sweep job")
 	publishIDSweepCmd.Flags().String("source", "auto", "ingest source (auto, tomestone, lodestone)")
 	publishIDSweepCmd.Flags().Bool("fill-gaps", false, "scan unscanned holes between 1 and MaxID")
-	publishIDSweepCmd.Flags().Bool("purge-event", false, "purge existing id-sweep jobs in queue before publishing")
 	publishIDSweepCmd.Flags().Bool("daemon", false, "run continuous auto-sweep loop")
 	publishIDSweepCmd.Flags().Duration("daemon-interval", 30*time.Second, "tick interval for daemon checks")
-	publishIDSweepCmd.Flags().Int("min-pending-jobs", 5, "threshold of pending jobs below which new batches are enqueued")
 	publishIDSweepCmd.Flags().Int("max-gaps", 50, "max gap ranges to query per run in --fill-gaps mode")
 	publishCmd.AddCommand(publishCharacterCensusCmd)
 	publishCharacterCensusCmd.Flags().Duration("older-than", 720*time.Hour, "only re-census characters not seen within this duration")
 	publishCharacterCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")
-	publishCmd.AddCommand(publishFCCensusCmd)
-	publishFCCensusCmd.Flags().String("fc-id", "", "Lodestone Free Company ID")
-	publishFCCensusCmd.Flags().Duration("older-than", 720*time.Hour, "only re-census free companies not seen within this duration")
-	publishFCCensusCmd.Flags().Int("limit", 500, "max free companies to enqueue")
 	publishCmd.AddCommand(publishAchievementCensusCmd)
 	publishAchievementCensusCmd.Flags().Uint32("character-id", 0, "specific character ID to census")
 	publishAchievementCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")

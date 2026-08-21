@@ -11,7 +11,6 @@ const (
 	EventIDSweep           = "id-sweep"
 	EventCharacterCensus   = "character-census"
 	EventAchievementCensus = "achievement-census"
-	EventFreeCompanyCensus = "fc-census"
 )
 
 // AchievementCensusPayload identifies a character to run an achievement census on.
@@ -36,23 +35,8 @@ func CharacterCensusJob(characterID uint32) contract.QueueJob {
 	return contract.QueueJob{Type: EventCharacterCensus, Payload: b}
 }
 
-// FreeCompanyCensusPayload identifies a free company to census.
-type FreeCompanyCensusPayload struct {
-	FCID string `json:"fc_id"`
-}
-
-// FreeCompanyCensusJob builds an fc-census queue job for a free company.
-func FreeCompanyCensusJob(fcID string) contract.QueueJob {
-	b, _ := json.Marshal(FreeCompanyCensusPayload{FCID: fcID})
-	return contract.QueueJob{Type: EventFreeCompanyCensus, Payload: b}
-}
-
 // BuildDependentCharacterJobs creates downstream jobs for an ingested character:
-// always an achievement-census job, plus an fc-census job if the character is affiliated with an FC.
-func BuildDependentCharacterJobs(characterID uint32, freeCompanyID string) []contract.QueueJob {
-	jobs := []contract.QueueJob{AchievementCensusJob(characterID)}
-	if freeCompanyID != "" {
-		jobs = append(jobs, FreeCompanyCensusJob(freeCompanyID))
-	}
-	return jobs
+// an achievement-census job.
+func BuildDependentCharacterJobs(characterID uint32) []contract.QueueJob {
+	return []contract.QueueJob{AchievementCensusJob(characterID)}
 }

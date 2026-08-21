@@ -1,196 +1,298 @@
-# PostgreSQL-backed Work Queue
+# RabbitMQ Work Queue
 
-ffxiv-census runs its durable async work queue in the **same PostgreSQL datastore** as application data. There is no separate queue process: the `queue_jobs` table (applied by goose migration `00002`) holds jobs, and consumers claim them with a single atomic `UPDATE`.
+ffxiv-census runs its durable async work queue on **RabbitMQ**. The broker replaces the former PostgreSQL-backed `queue_jobs` table, eliminating 30-goroutine polling and moving to push-based consumption. There is no deduplication at the queue level — database upserts in handlers are idempotent.
 
-## Lifecycle
+## Topology
 
-```
-pending -> claimed -> done (completed_at set)
-              \-> pending (retry: attempts++, last_error captured, run_at pushed back with exponential backoff)
-              \-> failed (permanently, when attempts >= max_attempts; failed_at and last_error captured)
-              \-> pending (via RetryFailed / DLQ replay: attempts reset to 0, run_at set to now)
-```
-
-- **Publish** inserts jobs as `pending` and returns `(inserted int, err error)`. Rows whose `(type, payload_hash)` already exist — in *any* status — are ignored (`INSERT OR IGNORE` on the `UNIQUE (type, payload_hash)` constraint), so re-publishing is idempotent. The returned integer indicates how many jobs were newly enqueued vs deduplicated.
-- **Claim** atomically marks up to `claim_batch_size` pending jobs of one type as `claimed` and increments `attempts`.
-- **Complete** marks a claimed job `done`, records `completed_at`, and publishes downstream jobs in the **same transaction** (atomic chaining).
-- **Retry** returns a claimed job to `pending` with `run_at` set to `now + backoff` and records `last_error`, or marks it `failed` once `attempts >= max_attempts` with `failed_at` timestamp.
-- **Fail** marks a claimed job `failed` permanently with `last_error` and `failed_at` timestamps.
-- **RetryFailed** transitions `failed` dead-letter jobs back to `pending` with `attempts = 0` and `run_at = now`.
-- **PurgeJobs** deletes completed or failed jobs older than a specified duration.
-## Atomic claim (multi-pod safe)
-
-Claiming is a single `UPDATE ... WHERE id IN (SELECT ... WHERE status = 'pending') ... RETURNING`. PostgreSQL serialises writers with row-level locks, and the subquery re-evaluates `status = 'pending'` under that lock, so concurrent consumers (multiple processes, multiple goroutines) can never double-deliver the same job. PostgreSQL's lock queue handles contention while waiting for the write lock. Claim order is `run_at, id`, so older due jobs win.
-
-## Deduplication
-
-`payload_hash` is a sha256 of the raw payload, computed server-side by the adapter — callers never set it. Combined with `type`, it makes duplicate jobs (e.g. a re-published census request) a no-op regardless of status.
-
-## Jittered Exponential Backoff & Infinite Retries
-
-- **Exponential Backoff with Jitter**: When a job is retried, its `run_at` delay is computed as `backoff = min(base * 2^(attempts-1), max_cap) * jitter`, where `jitter` is `[0.9, 1.2]`. This prevents thundering herds when external services recover.
-- **Infinite Retry (`max_attempts = 0`)**: For critical tasks like `id-sweep`, setting `MaxAttempts = 0` configures infinite retries—jobs will back off slower on failure, record incrementing attempts and error messages in PostgreSQL, and never transition to `failed`.
-
-## Multi-Queue Consumption & Rate-Limit Pausing
-
-Consumers (`ffxiv-census consume`) poll all registered event queues concurrently (`id-sweep`, `character-census`, `achievement-census`, `fc-census`). External rate limits are tracked per provider:
-- **Dual-Source Queues (`id-sweep`, `character-census`)**: Use Lodestone as primary. When Lodestone is rate-limited (HTTP 429), workers automatically route requests through Tomestone.gg. If Tomestone is rate-limited, requests route through Lodestone.
-- **Lodestone-Exclusive Queues (`achievement-census`, `fc-census`)**: When Lodestone is rate-limited, these queues pause consumption until the cooldown expires while dual-source queues continue processing.
-- **Earliest Cooldown Sleep**: When all providers are paused, the worker sleeps until the earliest provider cooldown expires.
-
-## Dispatcher Algorithm
-
-The worker uses a **dynamic dispatcher with a dedicated retry goroutine** to prioritize retry jobs (attempts > 1) over new jobs.
-
-### Goroutine Allocation
-
-Concurrency is clamped to a minimum of `len(eventTypes) + 1` (1 retry goroutine + 1 goroutine per event type). The allocation formula:
+The adapter declares the full topology idempotently on connection. All exchanges and queues are durable; messages are persistent.
 
 ```
-minConcurrency = len(eventTypes) + 1
-retryWorkers   = 1
-newWorkers     = concurrency - retryWorkers
-workersPerEvent = newWorkers / len(eventTypes)   // always >= 1 due to clamping
-extraWorkers    = newWorkers - (workersPerEvent * len(eventTypes))  // distributed to first event types
+census (exchange, direct)
+  ├─ routing key "id-sweep"           → census.id-sweep           (queue)
+  ├─ routing key "character-census"   → census.character-census   (queue)
+  ├─ routing key "achievement-census" → census.achievement-census (queue)
+  ├─ routing key "new-proxy"          → census.new-proxy          (queue)
+  └─ routing key "scan-proxy"         → census.scan-proxy         (queue)
+
+census.<type>.failed (queue, per event type)
+  └─ x-dead-letter-exchange = census
+  └─ x-dead-letter-routing-key = <type>
 ```
 
-**Example with concurrency=5 and 4 event types:**
-- WorkerID 0: retry goroutine (claims retries from any event type)
-- WorkerID 1: primary=id-sweep (new only)
-- WorkerID 2: primary=character-census (new only)
-- WorkerID 3: primary=achievement-census (new only)
-- WorkerID 4: primary=fc-census (new only)
+Each event type gets a **main queue** (`census.<type>`) bound to the `census` exchange with routing key equal to the event type, and a **failed queue** (`census.<type>.failed`) that dead-letters back to the main exchange. Retry messages in the failed queue have a TTL — when the TTL expires, RabbitMQ dead-letters them back to the main queue automatically. Permanent failures (no TTL) stay in the failed queue indefinitely.
 
-If `--concurrency 3` is passed, it is silently raised to 5. If `--concurrency 8`: 1 retry + 7 distributed (e.g. 2, 2, 2, 1).
+## Message Flow
 
-### 3-Step Claim Loop
-
-Each goroutine runs a 3-step claim loop on every poll cycle:
-
-1. **Primary queue (preferred mode):** Claim from the goroutine's dedicated event type using `ClaimModeRetriesOnly` (retry goroutine) or `ClaimModeNewOnly` (new-job goroutines).
-2. **Borrow from other queues (preferred mode):** If the primary queue is empty or paused, claim from other available event types using the same preferred mode via `ClaimMultiple`.
-3. **Fallback to `ClaimModeAny`:** If no jobs were found in the preferred mode, retry both primary and borrowed queues with `ClaimModeAny` to prevent starvation. This means:
-   - The retry goroutine can help with new jobs when no retries exist.
-   - New-job goroutines can help with retries when no new jobs exist.
-
-### ClaimMode Contract
-
-| Mode | Behavior | Used By |
-|---|---|---|
-| `ClaimModeAny` | Claims any pending job regardless of attempts | Fallback for all goroutines |
-| `ClaimModeNewOnly` | Claims only jobs with `attempts == 0` | New-job goroutines (workerID > 0) |
-| `ClaimModeRetriesOnly` | Claims only jobs with `attempts > 0` | Retry goroutine (workerID 0) |
-
-### Rate-Limit Integration
-
-`isEventTypeAvailable` gates claiming per provider availability. Dual-source queues (`id-sweep`, `character-census`) fall back to Tomestone when Lodestone is paused. Lodestone-exclusive queues (`achievement-census`, `fc-census`) pause consumption until cooldown.
-
-### Job Chaining
-
-Handlers return downstream jobs in the `next` slice. The worker's `Complete(id, next...)` publishes them atomically in the same PostgreSQL transaction. No eager `Publish` calls are made from handlers — this prevents double-enqueue and ensures exactly-once downstream delivery.
-
-```toml
-[queue]
-claim_batch_size = 4
-max_attempts = 5
-backoff_base_seconds = 5
+```
+Publisher                     Broker                          Consumer
+─────────                     ──────                          ────────
+Publish(ctx, job)
+  │
+  ├─ exchange: census
+  ├─ routing key: job.Type
+  └─ body: JSON payload
+                                census.<type> queue
+                                  │
+                                  ├─ push to consumer
+                                  │
+                                  │   handler(ctx, job)
+                                  │     ├─ success → Ack
+                                  │     └─ error   → handleFailure()
+                                  │                    ├─ attempts < 5
+                                  │                    │   publish to census.<type>.failed
+                                  │                    │   with TTL (auto-retry)
+                                  │                    └─ attempts >= 5
+                                  │                        publish to census.<type>.failed
+                                  │                        without TTL (permanent)
+                                  │
+                                census.<type>.failed
+                                  ├─ TTL message: expires → dead-letter → census.<type>
+                                  └─ no TTL message: stays permanently
 ```
 
-| Field                | Purpose                                                        |
-| -------------------- | -------------------------------------------------------------- |
-| `claim_batch_size`   | Default batch for `Claim` when `n <= 0`.                       |
-| `max_attempts`       | Default for jobs published without an explicit `MaxAttempts`.  |
-| `backoff_base_seconds` | Base duration for the exponential retry backoff.             |
+## Retry Mechanism
 
-Environment overrides work like `[postgres]`: dots become underscores and the section name is the prefix — e.g. `QUEUE_MAX_ATTEMPTS=3`, `QUEUE_CLAIM_BATCH_SIZE=10`, `QUEUE_BACKOFF_BASE_SECONDS=30`.
+When a handler returns an error, the adapter inspects the `x-attempts` header and decides:
 
-## Contract
+| Condition | Action | TTL | Result |
+|-----------|--------|-----|--------|
+| `attempts < 5` | Publish to `census.<type>.failed` | `min(5 × 2^(attempts-1), 3600)` seconds | Auto-dead-letters back to main queue after TTL |
+| `attempts >= 5` | Publish to `census.<type>.failed` | None | Stays in failed queue permanently |
 
-`port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/queue` (PostgreSQL) and `mock/queue` (in-memory fake for tests). The job type lives in `contract` because Go's internal-package rule would block `port/contract`, `infrastructure/queue`, and `mock/queue` from importing `port/dto/internal`.
+Backoff schedule (seconds): **5, 10, 20, 40, 80**. After 5 failed attempts the message is parked permanently in the failed queue.
 
-## Consumer pattern
+The attempt count is tracked in the `x-attempts` message header. On each retry the header is incremented. The original message is always acked after being forwarded to the failed queue — there is no requeue.
+
+## Consumer Pattern
+
+Consumption is **push-based**. The worker calls `queue.Consume` which blocks until the context is cancelled. RabbitMQ delivers messages to consumers as they arrive — no polling, no claim loops, no `FOR UPDATE SKIP LOCKED`.
 
 ```go
-jobs, err := queue.Claim(ctx, "character-census", 10) // batch of due jobs
-for _, j := range jobs {
-    if err := handle(j); err != nil {
-        queue.Retry(ctx, j.ID, err.Error()) // or Fail(ctx, j.ID, err.Error()) for permanent errors
-        continue
-    }
-    queue.Complete(ctx, j.ID, downstreamJob(j)) // atomic chaining
+// contract.Queue — the simplified interface
+type Queue interface {
+    Publish(ctx context.Context, job QueueJob) error
+    Consume(ctx context.Context, eventTypes []string, concurrency int, handler func(ctx context.Context, job QueueJob) error) error
+    Close() error
 }
 ```
 
-Worker loops are panic-isolated: unexpected panics in handlers are caught, formatted with stack traces, and forwarded to `queue.Retry(ctx, j.ID, panicTrace)` so the worker goroutine does not crash.
+**`Publish`** sends a single job to the `census` exchange with routing key = `job.Type`. The payload is JSON bytes. Returns error on failure.
 
-`Depth(ctx)` returns the job count per status — useful for dashboards and backpressure signals.
+**`Consume`** starts `concurrency` worker goroutines. Each worker opens a dedicated AMQP channel with `prefetch(1)`, consumes from all specified event type queues, and dispatches messages to the handler. On handler return:
+- `nil` → message is acked
+- `error` → message is published to the failed queue (retry or permanent), then acked
 
-## Operational Inspection & REST APIs
+The original message is always acked — failed messages are forwarded, not requeued. This prevents redelivery loops.
 
-In addition to consumer execution methods (`Claim`, `Complete`, `Retry`, `Fail`, `RetryFailed`, `PurgeJobs`), `contract.Queue` exposes query capabilities for administrative and monitoring interfaces:
+**Worker usage:**
 
-- `Depth(ctx)`: aggregates active job counts by status (`pending`, `claimed`, `done`, `failed`).
-- `StatsByType(ctx)`: aggregates job status breakdown grouped by event type.
-- `GetEventDetails(ctx, sampleLimit)`: returns aggregated counts and sampled active, upcoming queued, and dead-letter failed jobs per event type.
-- `ListJobs(ctx, filter, limit, offset)`: returns paginated jobs matching optional `Type` and `Status` filters, ordered newest first (`id DESC`).
-- `CountJobs(ctx, filter)`: returns total count of jobs matching the filter.
-- `GetJob(ctx, id)`: fetches a single job by its numeric ID with error trace and timestamps.
+```go
+processJob := func(ctx context.Context, job contract.QueueJob) error {
+    h, ok := handlers.Get(job.Type)
+    if !ok {
+        return fmt.Errorf("no handler for %s", job.Type)
+    }
+    next, err := h.Handle(ctx, job.Payload)
+    if err != nil {
+        return err // queue handles retry/dead-letter
+    }
+    // Publish downstream jobs individually
+    for _, j := range next {
+        if err := queue.Publish(ctx, j); err != nil {
+            return err
+        }
+    }
+    return nil
+}
 
-These capabilities are surfaced over HTTP in the REST API (see `docs/http-api.md` and `swagger.json`):
-- `GET /api/v1/queue` — status depth overview.
-- `GET /api/v1/queue/events?sample_limit=5` — event types summary, live stats, and active/next/failed job samples.
-- `POST /api/v1/queue/retry-failed` — replay failed dead-letter jobs back to pending.
-- `POST /api/v1/queue/purge` — purge old completed or failed jobs.
-- `GET /api/v1/queue/jobs` — paginated job list with query filters.
-- `GET /api/v1/queue/jobs/{id}` — single job detail with payload, error traces, and timestamps.
-
-## CLI Management
-
-CLI commands are available under `ffxiv-census queue`:
-- `ffxiv-census queue stats [--event-type TYPE] [--sample-limit N]` — prints ASCII table of queue status and lists sampled active, upcoming, and failed jobs.
-- `ffxiv-census queue retry-failed [--event-type TYPE] [--limit N]` — replays dead-letter failed jobs back to pending.
-- `ffxiv-census queue purge [--status done|failed|pending|claimed|all] [--older-than 24h] [--all]` — purges old or all jobs immediately.
-## Graceful Shutdown & Job Recovery
-
-### Shutdown Sequence
-
-On SIGTERM, the worker shutdown sequence is:
-
-1. **Stop claiming** — a `stopClaiming` context is canceled, causing all worker goroutines to stop claiming new jobs
-2. **Finish in-flight jobs** — the `childCtx` (used for handler execution) stays alive, so in-flight jobs continue processing
-3. **Retry/Complete with background context** — `queue.Retry` and `queue.Complete` use `context.Background()` to ensure jobs always return to the queue, even if the process context is canceled
-4. **Wait for all goroutines** — `wg.Wait()` blocks until all worker goroutines have finished their current jobs
-5. **Cleanup** — `defer cancel()` cleans up the childCtx
-
-**Why background context for retry/complete:** During shutdown, the process context is canceled. If retry/complete used the canceled context, the database call would fail and the job would stay stuck in `claimed` status — requiring the next pod startup's `ReclaimClaimed` to recover it. Using `context.Background()` ensures jobs always return to the queue immediately.
-
-**Why worker errors don't cancel other workers:** Previously, one failing worker goroutine would cancel the shared `childCtx`, killing ALL other workers' in-flight jobs. Now each worker exits independently and the WaitGroup waits for all to finish naturally.
-
-### ReclaimClaimed — Stuck Job Recovery
-
-When a worker starts (both `RunEvents` and `RunEventsWithProxy`), it calls `ReclaimClaimed` for each event type. This resets all `claimed` jobs back to `pending` status:
-
-```sql
-UPDATE queue_jobs SET status = 'pending', run_at = NOW(), claimed_at = NULL
-WHERE type = $1 AND status = 'claimed'
+err := queue.Consume(ctx, eventTypes, concurrency, processJob)
 ```
 
-This handles the case where a pod crashes or is killed without graceful shutdown — jobs that were `claimed` by the dead pod are recovered and made available for other workers.
+Handler panics are caught with `defer/recover`, formatted with stack traces, and returned as errors — the worker goroutine does not crash.
 
-**Why reclaim all claimed jobs, not just the dead pod's:** The reclaim doesn't filter by `claimed_at` or owner because the queue doesn't track which pod claimed which job. Reclaiming all claimed jobs is safe because:
-- If a job was claimed by a live pod, that pod will complete it normally (the reclaim only affects jobs that are still `claimed` when the new pod starts)
-- If a job was claimed by a dead pod, the reclaim recovers it
-- The `UNIQUE(type, payload_hash)` constraint prevents duplicate jobs from being created
+## Configuration
 
-## Container wiring
+```toml
+[rabbitmq]
+url      = "amqp://guest:guest@localhost:5672/ffxiv-census"
+host     = "localhost"
+port     = 5672
+user     = "guest"
+password = "guest"
+vhost    = "ffxiv-census"
+```
 
-`container.Load.Queue()` lazily builds the adapter on top of the PostgreSQL driver (which self-migrates on first use) and caches it. Like `Postgres()`, it degrades to a logged `nil` if the driver or `[queue]` config is unavailable.
+| Field | Purpose |
+|-------|---------|
+| `url` | Full AMQP connection URL (takes precedence over individual fields) |
+| `host` | RabbitMQ hostname |
+| `port` | AMQP port (default 5672) |
+| `user` | Authentication username |
+| `password` | Authentication password |
+| `vhost` | Virtual host (default `ffxiv-census`) |
+
+If `url` is empty, it is constructed from the individual fields: `amqp://<user>:<password>@<host>:<port>/<vhost>`.
+
+**Environment overrides** — dots become underscores, section name is the prefix:
+
+| Variable | Overrides |
+|----------|-----------|
+| `RABBITMQ_URL` | `url` |
+| `RABBITMQ_HOST` | `host` |
+| `RABBITMQ_PORT` | `port` |
+| `RABBITMQ_USER` | `user` |
+| `RABBITMQ_PASSWORD` | `password` |
+| `RABBITMQ_VHOST` | `vhost` |
+
+In Kubernetes, `RABBITMQ_USER` and `RABBITMQ_PASSWORD` are injected from Vault (`rabbitmq/prod` secret) via External Secrets Operator. The URL is constructed in the deployment env:
+
+```yaml
+- name: RABBITMQ_URL
+  value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
+```
+
+## Kubernetes Deployment
+
+Each event type runs as a **separate Deployment** with its own replica count and concurrency setting. This allows independent scaling and restart of each consumer type.
+
+```yaml
+# k8s/values.yaml — worker instances
+workers:
+  instances:
+    - name: id-sweep
+      replicaCount: 1
+      command: [/app/ffxiv-census, consume, id-sweep, -c, "10"]
+    - name: character-census
+      replicaCount: 1
+      command: [/app/ffxiv-census, consume, character-census, -c, "10"]
+    - name: achievement-census
+      replicaCount: 1
+      command: [/app/ffxiv-census, consume, achievement-census, -c, "10"]
+    - name: proxy-id-sweep
+      replicaCount: 1
+      command: [/app/ffxiv-census, consume, id-sweep, --proxy, -c, "10"]
+    - name: proxy-character-census
+      replicaCount: 1
+      command: [/app/ffxiv-census, consume, character-census, --proxy, -c, "10"]
+    - name: proxy-achievement-census
+      replicaCount: 1
+      command: [/app/ffxiv-census, consume, achievement-census, --proxy, -c, "10"]
+    - name: proxy-new
+      replicaCount: 1
+      command: [/app/ffxiv-census, proxy, consume, -c, "10"]
+    - name: proxy-scan
+      replicaCount: 1
+      command: [/app/ffxiv-census, proxy, consume, scan-proxy, -c, "5"]
+```
+
+Concurrency is set per-deployment via the `-c` flag. The default is 4 if not specified. Each worker goroutine opens its own AMQP channel with `prefetch(1)`.
+
+**Scaling:** Increase `replicaCount` or `-c` to handle higher throughput. RabbitMQ distributes messages across consumers automatically (round-robin with prefetch=1). There is no risk of double-delivery — each message is delivered to exactly one consumer.
+
+**Graceful shutdown:** On SIGTERM, the context is cancelled. Workers stop accepting new messages and finish their current handler calls. The `terminationGracePeriodSeconds` (default 180s) gives in-flight jobs time to complete.
+
+## Monitoring
+
+RabbitMQ exposes a **management UI** on port 15672. In the cluster it is accessible via NodePort 31672:
+
+```
+http://<node-ip>:31672
+```
+
+The management UI shows:
+- Queue depths and message rates per queue
+- Consumer connections and channel counts
+- Exchange bindings and routing
+- Message rates (publish, deliver, ack)
+
+Useful CLI commands inside the pod:
+
+```bash
+# List all queues with message counts
+kubectl exec rabbitmq-0 -- rabbitmqctl list_queues -p ffxiv-census name messages consumers
+
+# List connections
+kubectl exec rabbitmq-0 -- rabbitmqctl list_connections
+
+# Purge a queue (e.g. to clear stuck messages)
+kubectl exec rabbitmq-0 -- rabbitmqctl purge_queue census.id-sweep -p ffxiv-census
+```
+
+## Migration from PostgreSQL
+
+The `migrate queue` command moves all pending, claimed, and failed jobs from the legacy `queue_jobs` table to RabbitMQ:
+
+```bash
+# Dry run — shows what would be migrated
+./bin/ffxiv-census migrate queue --dry-run
+
+# Execute migration
+./bin/ffxiv-census migrate queue
+```
+
+The command:
+1. Queries all non-done jobs from `queue_jobs` (`status IN ('pending', 'claimed', 'failed')`)
+2. Publishes each job individually to RabbitMQ via `queue.Publish`
+3. Logs counts per event type and status
+4. Deletes the migrated rows from PostgreSQL (`DELETE FROM queue_jobs WHERE status != 'done'`)
+
+**Pre-migration steps:**
+
+```bash
+# Scale down all workers
+kubectl scale deploy/ffxiv-census-worker-id-sweep --replicas=0
+kubectl scale deploy/ffxiv-census-worker-character-census --replicas=0
+kubectl scale deploy/ffxiv-census-worker-achievement-census --replicas=0
+kubectl scale deploy/ffxiv-census-worker-proxy-id-sweep --replicas=0
+kubectl scale deploy/ffxiv-census-worker-proxy-character-census --replicas=0
+kubectl scale deploy/ffxiv-census-worker-proxy-achievement-census --replicas=0
+kubectl scale deploy/ffxiv-census-worker-proxy-new --replicas=0
+kubectl scale deploy/ffxiv-census-worker-proxy-scan --replicas=0
+
+# Suspend cronjobs
+kubectl patch cronjob publish-character -p '{"spec":{"suspend":true}}'
+kubectl patch cronjob publish-id-sweep -p '{"spec":{"suspend":true}}'
+kubectl patch cronjob proxy-discover -p '{"spec":{"suspend":true}}'
+kubectl patch cronjob proxy-scan -p '{"spec":{"suspend":true}}'
+```
+
+**Post-migration steps:**
+
+```bash
+# Scale workers back up
+kubectl scale deploy/ffxiv-census-worker-id-sweep --replicas=1
+kubectl scale deploy/ffxiv-census-worker-character-census --replicas=1
+kubectl scale deploy/ffxiv-census-worker-achievement-census --replicas=1
+kubectl scale deploy/ffxiv-census-worker-proxy-id-sweep --replicas=1
+kubectl scale deploy/ffxiv-census-worker-proxy-character-census --replicas=1
+kubectl scale deploy/ffxiv-census-worker-proxy-achievement-census --replicas=1
+kubectl scale deploy/ffxiv-census-worker-proxy-new --replicas=1
+kubectl scale deploy/ffxiv-census-worker-proxy-scan --replicas=1
+
+# Resume cronjobs
+kubectl patch cronjob publish-character -p '{"spec":{"suspend":false}}'
+kubectl patch cronjob publish-id-sweep -p '{"spec":{"suspend":false}}'
+kubectl patch cronjob proxy-discover -p '{"spec":{"suspend":false}}'
+kubectl patch cronjob proxy-scan -p '{"spec":{"suspend":false}}'
+```
 
 ## Event Types
 
-The queue carries events for two bounded contexts. See `docs/events.md` for payloads and chaining details.
+The queue carries events for census and proxy contexts. See `docs/events.md` for payloads and chaining details.
 
-| Context | Events | Consumer |
-|---------|--------|----------|
-| Census | `id-sweep`, `character-census`, `achievement-census`, `fc-census` | `ffxiv-census consume` |
+| Context | Events | Consumer Command |
+|---------|--------|-----------------|
+| Census | `id-sweep`, `character-census`, `achievement-census` | `ffxiv-census consume` |
 | Proxy | `new-proxy`, `scan-proxy` | `ffxiv-census proxy consume` |
+
+**Handler chaining:** When a handler succeeds, it returns downstream jobs. The worker publishes each downstream job individually:
+- `id-sweep` → `achievement-census` (per discovered character)
+- `character-census` → `achievement-census` (per re-censused character)
+
+## Contract
+
+`port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/rabbitmq` and `mock/queue` (in-memory fake for tests). The simplified interface has three methods: `Publish`, `Consume`, and `Close`. All retry and dead-letter logic is internal to the adapter — callers only see success or error from the handler.
+
+## Connection Resilience
+
+The RabbitMQ adapter handles connection drops with automatic reconnect. On `Publish`, if the connection is closed, it dials a new connection and channel before retrying. The topology is re-declared on reconnect (idempotent). Consumer goroutines will error and the `Consume` call will return if the connection cannot be recovered.

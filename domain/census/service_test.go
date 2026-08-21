@@ -19,19 +19,18 @@ import (
 func newTestService(t *testing.T) (*Service, *mockrepo.CharacterRepository) {
 	t.Helper()
 	chars := mockrepo.NewCharacterFake()
-	svc := NewService(chars, mockrepo.NewFreeCompanyFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	svc := NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	return svc, chars
 }
 
 // newTestServiceAll returns the service plus every fake it depends on, so
-// tests can seed jobs/milestones/free companies directly.
-func newTestServiceAll(t *testing.T) (*Service, *mockrepo.CharacterRepository, *mockrepo.FreeCompanyRepository, *mockrepo.AchievementRepository) {
+// tests can seed jobs/milestones directly.
+func newTestServiceAll(t *testing.T) (*Service, *mockrepo.CharacterRepository, *mockrepo.AchievementRepository) {
 	t.Helper()
 	chars := mockrepo.NewCharacterFake()
-	fcs := mockrepo.NewFreeCompanyFake()
 	ach := mockrepo.NewAchievementFake()
-	svc := NewService(chars, fcs, ach, mockrepo.NewCensusRunFake())
-	return svc, chars, fcs, ach
+	svc := NewService(chars, ach, mockrepo.NewCensusRunFake())
+	return svc, chars, ach
 }
 
 func TestService_UpsertCharacter(t *testing.T) {
@@ -107,6 +106,7 @@ func TestService_UpsertCharacter_NilSafe(t *testing.T) {
 		t.Fatalf("UpsertCharacter: %v", err)
 	}
 }
+
 func TestService_UpsertTomestoneCharacter(t *testing.T) {
 	svc, chars := newTestService(t)
 
@@ -487,6 +487,7 @@ func TestService_Config(t *testing.T) {
 		t.Errorf("milestones = %+v", milestones)
 	}
 }
+
 func TestService_ListCharacters_Pagination(t *testing.T) {
 	svc, chars := newTestService(t)
 	ctx := context.Background()
@@ -551,8 +552,8 @@ func TestService_CharacterDetail_Missing(t *testing.T) {
 	}
 }
 
-func TestService_CharacterDetail_WithFreeCompany(t *testing.T) {
-	svc, chars, fcs, ach := newTestServiceAll(t)
+func TestService_CharacterDetail_WithJobsAndMilestones(t *testing.T) {
+	svc, chars, ach := newTestServiceAll(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 	fcID := "9234567890123456789"
@@ -566,7 +567,6 @@ func TestService_CharacterDetail_WithFreeCompany(t *testing.T) {
 	}, []contract.ClassJobRecord{
 		{CharacterID: 123, ClassJobID: 19, Name: "Paladin", Level: 90, ExpLevel: 12345},
 	})
-	_ = fcs.Upsert(ctx, contract.FreeCompanyRecord{ID: fcID, Name: fcName, World: "Ultros", Datacenter: "Primal", MemberCount: 100, LastSeenAt: now})
 	_ = ach.UpsertCharacterMilestones(ctx, 123, []contract.CharacterMilestone{
 		{CharacterID: 123, AchievementID: 590, AchievedAt: now},
 	})
@@ -586,27 +586,6 @@ func TestService_CharacterDetail_WithFreeCompany(t *testing.T) {
 	}
 	if len(got.Milestones) != 1 || got.Milestones[0].AchievementID != 590 {
 		t.Errorf("Milestones = %+v", got.Milestones)
-	}
-	if got.FreeCompany == nil || got.FreeCompany.ID != fcID || got.FreeCompany.Name != fcName {
-		t.Errorf("FreeCompany = %+v, want id %q", got.FreeCompany, fcID)
-	}
-}
-
-func TestService_CharacterDetail_MissingFreeCompany(t *testing.T) {
-	svc, chars, _, _ := newTestServiceAll(t)
-	ctx := context.Background()
-	fcID := "9234567890123456789"
-	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 7, Name: "X", World: "Ultros", FirstSeenAt: time.Now(), FreeCompanyID: &fcID}, nil)
-
-	got, err := svc.CharacterDetail(ctx, 7)
-	if err != nil {
-		t.Fatalf("CharacterDetail: %v", err)
-	}
-	if got == nil {
-		t.Fatal("CharacterDetail = nil, want detail")
-	}
-	if got.FreeCompany != nil {
-		t.Errorf("FreeCompany = %+v, want nil when the FC was never ingested", got.FreeCompany)
 	}
 }
 
@@ -650,7 +629,7 @@ func TestService_Breakdown_Delegates(t *testing.T) {
 }
 
 func TestService_WorldDetail(t *testing.T) {
-	svc, chars, _, ach := newTestServiceAll(t)
+	svc, chars, ach := newTestServiceAll(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -697,7 +676,7 @@ func TestService_WorldDetail(t *testing.T) {
 }
 
 func TestService_NewCharacters(t *testing.T) {
-	svc, _, _, ach := newTestServiceAll(t)
+	svc, _, ach := newTestServiceAll(t)
 	ctx := context.Background()
 	mk := func(day int) time.Time { return time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC) }
 
@@ -720,7 +699,7 @@ func TestService_NewCharacters(t *testing.T) {
 }
 
 func TestService_ExpansionCompletions(t *testing.T) {
-	svc, _, _, ach := newTestServiceAll(t)
+	svc, _, ach := newTestServiceAll(t)
 	ctx := context.Background()
 	if err := svc.SyncMilestones(ctx); err != nil {
 		t.Fatalf("SyncMilestones: %v", err)

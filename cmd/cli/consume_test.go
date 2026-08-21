@@ -26,12 +26,4 @@ func TestConsumeCmd_FlagsAndArgs(t *testing.T) {
 	if concurrencyFlag.DefValue != "4" {
 		t.Fatalf("expected --concurrency default to be '4', got %s", concurrencyFlag.DefValue)
 	}
-
-	pollIntervalFlag := cmd.Flags().Lookup("poll-interval")
-	if pollIntervalFlag == nil {
-		t.Fatal("expected --poll-interval flag to be present")
-	}
-	if pollIntervalFlag.DefValue != "500ms" {
-		t.Fatalf("expected --poll-interval default to be '500ms', got %s", pollIntervalFlag.DefValue)
-	}
 }

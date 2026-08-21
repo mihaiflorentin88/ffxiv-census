@@ -26,9 +26,6 @@ func TestNewConfig_Defaults(t *testing.T) {
 	if cfg.Lodestone.RateLimit != 1.0 {
 		t.Errorf("expected Lodestone.RateLimit 1.0, got %f", cfg.Lodestone.RateLimit)
 	}
-	if cfg.Queue.ClaimBatchSize != 4 {
-		t.Errorf("expected Queue.ClaimBatchSize 4, got %d", cfg.Queue.ClaimBatchSize)
-	}
 }
 
 func TestNewConfig_EnvOverrides(t *testing.T) {
@@ -65,16 +62,6 @@ func TestNewConfig_EnvOverrides(t *testing.T) {
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Lodestone.RateLimit != 5.5 {
 					t.Errorf("expected Lodestone.RateLimit 5.5, got %f", cfg.Lodestone.RateLimit)
-				}
-			},
-		},
-		{
-			name:   "queue backoff base seconds override",
-			envKey: "QUEUE_BACKOFF_BASE_SECONDS",
-			envVal: "15",
-			validate: func(t *testing.T, cfg *Config) {
-				if cfg.Queue.BackoffBaseSeconds != 15 {
-					t.Errorf("expected Queue.BackoffBaseSeconds 15, got %d", cfg.Queue.BackoffBaseSeconds)
 				}
 			},
 		},

@@ -20,7 +20,7 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 - `cmd/cli`: Cobra-based control surface. `main.go` forwards execution here to keep the root tidy.
 - `cmd/http`: HTTP server wiring. The server reads configuration via the container, attaches standard middleware (logging, recovery, request ID), and mounts route groups. APIs must accept request DTOs and return response DTOs; convert them to internal DTOs before passing work into the domain.
 - `config`: Configuration loader powered by Viper with an embedded `config.toml`. Environment variables override file values using the `APP_`, `HTTP_`, and feature-specific prefixes.
-- `container`: Simple service locator that bootstraps configuration, logging, and optional infrastructure clients (PostgreSQL, queue, StatsD, outbound HTTP, LodestoneClient, TomestoneClient, ProxyRepository, ProxyHub). Generated code resolves these adapters through `ServiceContainer` accessors instead of constructing them inside handlers or domain services.
+- `container`: Simple service locator that bootstraps configuration, logging, and optional infrastructure clients (PostgreSQL, RabbitMQ, StatsD, outbound HTTP, LodestoneClient, TomestoneClient, ProxyRepository, ProxyHub). Generated code resolves these adapters through `ServiceContainer` accessors instead of constructing them inside handlers or domain services.
 - `domain`: Reserved for pure business logic. Keep this folder clean; avoid direct references to HTTP or CLI packages. Domain objects can be instantiated from `cmd/` but they interact with infrastructure solely via contracts and DTOs.
 - `infrastructure`: Adapters that speak to the outside world (logging, PostgreSQL, metrics, etc.). Code here implements interfaces defined in `port/contract` to honour dependency inversion.
 - `docs`: Living documentation. Extend these markdown files alongside code changes so future-you knows how to operate the system.
@@ -38,7 +38,8 @@ High-level modules (application/domain) depend on abstractions, never concrete i
                                    ▼
                              ┌──────────────┐
                              │ infrastructure│
-                             │ (postgres, etc.)│
+                             │ (postgres,    │
+                             │  rabbitmq, etc.)│
                              └──────────────┘
 ```
 
@@ -58,18 +59,17 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 
 ## Queue & Ingest Event Pipeline
 
-Durable async work lives in the PostgreSQL datastore (`queue_jobs` table) with a claim-based lifecycle (see [docs/queue.md](queue.md) and [docs/events.md](events.md)). The ingest pipeline consists of four core events:
+Durable async work is managed by RabbitMQ (see [docs/queue.md](queue.md) and [docs/events.md](events.md)). Messages are published to the `census` exchange and routed to per-event-type queues. Failed messages are retried with exponential backoff via a dedicated retry exchange; permanently failed messages land in a dead-letter queue. The ingest pipeline consists of three core events:
 
-1. **`id-sweep`**: Probes character ID ranges across Lodestone and Tomestone.gg. Discovered characters are upserted and chain downstream `achievement-census` (+ `fc-census` if affiliated with an FC) jobs.
-2. **`character-census`**: Re-censuses known character profiles. Confirmed 404 on both providers marks the character deleted; successful fetches chain `achievement-census` (+ `fc-census`).
+1. **`id-sweep`**: Probes character ID ranges across Lodestone and Tomestone.gg. Discovered characters are upserted and chain downstream `achievement-census` jobs.
+2. **`character-census`**: Re-censuses known character profiles. Confirmed 404 on both providers marks the character deleted; successful fetches chain `achievement-census`.
 3. **`achievement-census`**: Fetches character achievements from The Lodestone and tracks expansion/milestone progression (*leaf job*).
-4. **`fc-census`**: Fetches Free Company details and membership info from The Lodestone (*leaf job*).
 
 The queue adapter is resolved via `container.Load.Queue()`.
 
 **Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy. This ensures workers quickly rotate through bad proxies until they find working ones from the scan pool. See [docs/proxy.md](proxy.md) for the full design.
 
-**Graceful Shutdown:** On SIGTERM, workers stop claiming new jobs but in-flight jobs continue processing with a live context. Failed jobs during shutdown are retried via `context.Background()` to prevent them from staying stuck in `claimed` status. Worker errors don't cancel other workers' in-flight jobs — each goroutine exits independently.
+**Graceful Shutdown:** On SIGTERM, workers stop consuming new messages but in-flight deliveries continue processing. The queue adapter handles ack/nack semantics — successfully processed messages are acknowledged; failures trigger retry with backoff or permanent failure routing. Worker errors don't cancel other workers' in-flight jobs — each goroutine exits independently.
 ## Future Hooks
 
 - Add domain service constructors under `container/domain.go` to keep wiring explicit.
@@ -84,9 +84,9 @@ The queue adapter is resolved via `container.Load.Queue()`.
 ├── container/          - Service container exposing interfaces to infrastructure adapters.
 ├── docs/               - Documentation resources.
 ├── domain/             - Domain logic; avoids direct infrastructure dependencies.
-│   ├── census/         - Census bounded context (characters, achievements, FCs).
+│   ├── census/         - Census bounded context (characters, achievements).
 │   └── proxy/          - Proxy pool bounded context (discovery, scanning, lifecycle).
-├── infrastructure/     - External clients (datastores, APIs) implementing ports.
+├── infrastructure/     - External clients (datastores, RabbitMQ, APIs) implementing ports.
 └── port/               - Contracts (interfaces) and DTOs exchanged across layers.
 ```
 

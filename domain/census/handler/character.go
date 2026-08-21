@@ -13,7 +13,7 @@ import (
 )
 
 // CharacterCensus re-censuses a known character using Lodestone as primary and Tomestone as fallback.
-// On success, chains an achievement-census job and (when in an FC) an fc-census job.
+// On success, chains an achievement-census job.
 // On confirmed 404 across both providers, marks the character deleted.
 type CharacterCensus struct {
 	lodestone   contract.LodestoneClient
@@ -66,7 +66,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 				return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, err)
 			}
 			h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World))
-			next := BuildDependentCharacterJobs(char.ID, char.FreeCompanyID)
+			next := BuildDependentCharacterJobs(char.ID)
 			h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 			return next, nil
 		}
@@ -81,11 +81,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 						return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
 					}
 					h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
-					fcID := ""
-					if tChar.FreeCompanyID != nil {
-						fcID = *tChar.FreeCompanyID
-					}
-					next := BuildDependentCharacterJobs(tChar.ID, fcID)
+					next := BuildDependentCharacterJobs(tChar.ID)
 					h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 					return next, nil
 				}
@@ -120,11 +116,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 					return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
 				}
 				h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
-				fcID := ""
-				if tChar.FreeCompanyID != nil {
-					fcID = *tChar.FreeCompanyID
-				}
-				next := BuildDependentCharacterJobs(tChar.ID, fcID)
+				next := BuildDependentCharacterJobs(tChar.ID)
 				h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 				return next, nil
 			}
@@ -149,11 +141,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 			return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
 		}
 		h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
-		fcID := ""
-		if tChar.FreeCompanyID != nil {
-			fcID = *tChar.FreeCompanyID
-		}
-		next := BuildDependentCharacterJobs(tChar.ID, fcID)
+		next := BuildDependentCharacterJobs(tChar.ID)
 		h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 		return next, nil
 	}

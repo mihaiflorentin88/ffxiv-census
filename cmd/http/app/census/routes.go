@@ -27,24 +27,13 @@ func Register(mux *http.ServeMux) {
 	}
 
 	svc := container.Load.CensusService()
-	q := container.Load.Queue()
 	c := handler.NewCensusController(svc)
-	fc := handler.NewFreeCompanyController(svc)
-	qc := handler.NewQueueController(q)
 
 	handle("GET /api/v1/census/latest", c.Latest)
 	handle("GET /api/v1/census/characters", c.List)
 	handle("GET /api/v1/census/export", c.Export)
 	handle("GET /api/v1/census/characters/{id}", c.Get)
-	handle("GET /api/v1/census/free-companies", fc.List)
-	handle("GET /api/v1/census/free-companies/{id}", fc.Get)
 	handle("GET /api/v1/stats/breakdown", c.Breakdown)
 	handle("GET /api/v1/stats/new-characters", c.NewCharacters)
 	handle("GET /api/v1/stats/expansion", c.Expansion)
-	handle("GET /api/v1/queue", qc.Depth)
-	handle("GET /api/v1/queue/events", qc.Events)
-	handle("POST /api/v1/queue/retry-failed", qc.RetryFailed)
-	handle("POST /api/v1/queue/purge", qc.Purge)
-	handle("GET /api/v1/queue/jobs", qc.ListJobs)
-	handle("GET /api/v1/queue/jobs/{id}", qc.GetJob)
 }
