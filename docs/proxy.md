@@ -31,7 +31,7 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 ./bin/ffxiv-census proxy discover
 
 # Scan proxies from DB, publish scan-proxy events (priority-ordered)
-./bin/ffxiv-census proxy scan [--limit 50]
+./bin/ffxiv-census proxy scan [--limit 0]   # 0 = no limit (scan all)
 
 # Consume new-proxy and scan-proxy events (long-running)
 ./bin/ffxiv-census proxy consume [--concurrency 4]
@@ -120,7 +120,7 @@ geonode     = true
 |-------|---------|-------------|-------------|
 | `test_url` | `https://na.finalfantasyxiv.com/lodestone/` | `PROXY_TEST_URL` | URL to test proxies against |
 | `test_timeout` | `15s` | `PROXY_TEST_TIMEOUT` | Timeout per proxy test request |
-| `scan_batch_size` | `50` | `PROXY_SCAN_BATCH_SIZE` | Max proxies to queue per scan cron |
+| `scan_batch_size` | `0` | `PROXY_SCAN_BATCH_SIZE` | Max proxies to queue per scan cron (0 = no limit) |
 | `dead_threshold_days` | `2` | `PROXY_DEAD_THRESHOLD_DAYS` | Days inactive before marking dead |
 | `dead_scan_interval_days` | `3` | `PROXY_DEAD_SCAN_INTERVAL_DAYS` | Days between dead proxy re-scans |
 | `fail_count_threshold` | `5` | `PROXY_FAIL_COUNT_THRESHOLD` | Consecutive failures before dead |
@@ -142,7 +142,7 @@ The `proxy scan` command queries the database with priority ordering:
 2. **Active** proxies not scanned in 10 minutes
 3. **Dead** proxies not scanned in 3 days
 
-All matching proxies are published as individual `scan-proxy` events, processed FIFO by the consumer.
+By default (`--limit 0`), all matching proxies are scanned. Pass `--limit N` to cap the batch size. All matching proxies are published as individual `scan-proxy` events, processed FIFO by the consumer.
 
 ---
 

@@ -164,15 +164,14 @@ var proxyScanCmd = &cobra.Command{
 		logger.InfoContext(ctx, "proxy.scan.db_stats", "active", counts["active"], "inactive", counts["inactive"], "dead", counts["dead"], "total", counts["active"]+counts["inactive"]+counts["dead"])
 
 		limit, _ := cmd.Flags().GetInt("limit")
-		if limit <= 0 {
-			cfg := container.Load.Config().Proxy
-			if cfg != nil && cfg.ScanBatchSize > 0 {
-				limit = cfg.ScanBatchSize
-			} else {
-				limit = 50
-			}
+		if limit < 0 {
+			limit = 0
 		}
-		logger.InfoContext(ctx, "proxy.scan.querying", "limit", limit)
+		if limit == 0 {
+			logger.InfoContext(ctx, "proxy.scan.querying", "limit", "all")
+		} else {
+			logger.InfoContext(ctx, "proxy.scan.querying", "limit", limit)
+		}
 
 		start := time.Now()
 		proxies, err := repo.ListForScan(ctx, limit)
@@ -260,6 +259,6 @@ func init() {
 	proxyCmd.AddCommand(proxyScanCmd)
 	proxyCmd.AddCommand(proxyConsumeCmd)
 
-	proxyScanCmd.Flags().IntP("limit", "l", 50, "max proxies to queue for scanning")
+	proxyScanCmd.Flags().IntP("limit", "l", 0, "max proxies to queue for scanning (0 = no limit, scan all)")
 	proxyConsumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 }

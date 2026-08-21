@@ -162,8 +162,8 @@ func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contrac
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx,
-		`SELECT `+proxyColumns+` FROM proxies
+
+	query := `SELECT ` + proxyColumns + ` FROM proxies
 		WHERE
 			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '20 minutes')
 			OR (status = 'active' AND last_scanned_at < NOW() - INTERVAL '10 minutes')
@@ -174,8 +174,14 @@ func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contrac
 				WHEN status = 'active' THEN 1
 				WHEN status = 'dead' THEN 2
 			END,
-			last_scanned_at ASC NULLS FIRST
-		LIMIT $1`, limit)
+			last_scanned_at ASC NULLS FIRST`
+
+	var rows *sql.Rows
+	if limit > 0 {
+		rows, err = db.QueryContext(ctx, query+` LIMIT $1`, limit)
+	} else {
+		rows, err = db.QueryContext(ctx, query)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("proxy list for scan: %w", err)
 	}

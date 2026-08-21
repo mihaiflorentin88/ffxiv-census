@@ -139,7 +139,7 @@ func (f *FakeProxyRepository) ListForScan(_ context.Context, limit int) ([]contr
 			}
 		}
 	}
-	if len(result) > limit {
+	if limit > 0 && len(result) > limit {
 		result = result[:limit]
 	}
 	return result, nil
