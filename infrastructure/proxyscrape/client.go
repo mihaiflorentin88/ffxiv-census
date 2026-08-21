@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -47,7 +48,7 @@ type apiResponse struct {
 	Proxies []proxyResponse `json:"proxies"`
 }
 
-func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, error) {
+func (c *Client) FetchProxies(ctx context.Context, emit func(contract.ProxyRecord) error) error {
 	params := map[string]string{
 		"request":      "display_proxies",
 		"proxy_format": "protocolipport",
@@ -55,50 +56,107 @@ func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, erro
 		"timeout":      "10000",
 	}
 
-	resp, err := c.httpClient.Get(ctx, c.baseURL, params, map[string]string{"Accept": "application/json"})
-	if err != nil {
-		return nil, fmt.Errorf("proxyscrape fetch: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("proxyscrape: unexpected status %d", resp.StatusCode)
-	}
-
-	var apiResp apiResponse
-	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
-		return nil, fmt.Errorf("proxyscrape decode: %w", err)
-	}
-
-	now := time.Now().UTC()
-	var records []contract.ProxyRecord
-	for _, p := range apiResp.Proxies {
-		if !p.Alive {
-			continue
-		}
-		protocol := strings.ToLower(p.Protocol)
-		if protocol == "" {
-			protocol = "http"
+	return c.httpClient.GetStream(ctx, c.baseURL, params, map[string]string{"Accept": "application/json"}, func(statusCode int, body io.Reader) error {
+		if statusCode != 200 {
+			return fmt.Errorf("proxyscrape: unexpected status %d", statusCode)
 		}
 
-		rec := contract.ProxyRecord{
-			Protocol:    protocol,
-			IP:          p.IP,
-			Port:        p.Port,
-			FirstSeenAt: now,
-			Source:      providerName,
-			Status:      contract.ProxyStatusInactive,
-		}
-		if p.Country != "" {
-			rec.Country = &p.Country
-		}
-		if p.Anonymity != "" {
-			rec.Anonymity = &p.Anonymity
-		}
-		if p.Uptime > 0 {
-			rec.UptimePercent = &p.Uptime
-		}
-		records = append(records, rec)
-	}
+		now := time.Now().UTC()
+		decoder := json.NewDecoder(body)
 
-	return records, nil
+		// Read opening token
+		t, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("proxyscrape decode: %w", err)
+		}
+		if delim, ok := t.(json.Delim); !ok || delim != '{' {
+			return fmt.Errorf("proxyscrape decode: expected object, got %v", t)
+		}
+
+		// Find the "proxies" array
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return fmt.Errorf("proxyscrape decode key: %w", err)
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				continue
+			}
+			if key != "proxies" {
+				// Skip unknown fields
+				var skip json.RawMessage
+				if err := decoder.Decode(&skip); err != nil {
+					return fmt.Errorf("proxyscrape skip field: %w", err)
+				}
+				continue
+			}
+
+			// Read opening bracket of proxies array
+			delim, err := decoder.Token()
+			if err != nil {
+				return fmt.Errorf("proxyscrape proxies array: %w", err)
+			}
+			if d, ok := delim.(json.Delim); !ok || d != '[' {
+				return fmt.Errorf("proxyscrape proxies: expected array, got %v", delim)
+			}
+
+			// Decode each proxy one at a time
+			for decoder.More() {
+				var p proxyResponse
+				if err := decoder.Decode(&p); err != nil {
+					return fmt.Errorf("proxyscrape decode proxy: %w", err)
+				}
+
+				if !p.Alive {
+					continue
+				}
+				protocol := strings.ToLower(p.Protocol)
+				if protocol == "" {
+					protocol = "http"
+				}
+
+				rec := contract.ProxyRecord{
+					Protocol:    protocol,
+					IP:          p.IP,
+					Port:        p.Port,
+					FirstSeenAt: now,
+					Source:      providerName,
+					Status:      contract.ProxyStatusInactive,
+				}
+				if p.Country != "" {
+					rec.Country = &p.Country
+				}
+				if p.Anonymity != "" {
+					rec.Anonymity = &p.Anonymity
+				}
+				if p.Uptime > 0 {
+					rec.UptimePercent = &p.Uptime
+				}
+				if err := emit(rec); err != nil {
+					return err
+				}
+			}
+			// Consume closing bracket of the proxies array.
+			if _, err := decoder.Token(); err != nil {
+				return fmt.Errorf("proxyscrape close array: %w", err)
+			}
+			// Skip remaining top-level fields until closing brace.
+			for decoder.More() {
+				if _, err := decoder.Token(); err != nil {
+					return fmt.Errorf("proxyscrape skip remaining key: %w", err)
+				}
+				var skip json.RawMessage
+				if err := decoder.Decode(&skip); err != nil {
+					return fmt.Errorf("proxyscrape skip remaining value: %w", err)
+				}
+			}
+			// Consume closing brace of the top-level object.
+			if _, err := decoder.Token(); err != nil {
+				return fmt.Errorf("proxyscrape close object: %w", err)
+			}
+			return nil
+		}
+		return nil
+	})
 }

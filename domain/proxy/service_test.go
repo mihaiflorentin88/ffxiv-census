@@ -3,6 +3,8 @@ package proxy_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -38,14 +40,14 @@ func TestService_ProcessNewProxy_Success(t *testing.T) {
 
 	// ProcessNewProxy needs a checker, so let's test the service methods with a real checker
 	// that we control via httptest — but for unit tests we test the repo interaction
-	_, exists, err := repo.Upsert(context.Background(), contract.ProxyRecord{
+	_, inserted, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
 	if err != nil {
-		t.Fatalf("Upsert: %v", err)
+		t.Fatalf("InsertIfAbsent: %v", err)
 	}
-	if exists {
-		t.Fatal("expected new proxy, got exists=true")
+	if !inserted {
+		t.Fatal("expected new proxy, got inserted=false")
 	}
 
 	count, err := repo.Count(context.Background())
@@ -65,20 +67,20 @@ func TestService_ProcessNewProxy_Duplicate(t *testing.T) {
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test", Country: &country,
 	}
 
-	_, exists, err := repo.Upsert(context.Background(), rec)
+	_, inserted, err := repo.InsertIfAbsent(context.Background(), rec)
 	if err != nil {
-		t.Fatalf("Upsert 1: %v", err)
+		t.Fatalf("InsertIfAbsent 1: %v", err)
 	}
-	if exists {
-		t.Fatal("first upsert should be new")
+	if !inserted {
+		t.Fatal("first insert should be new")
 	}
 
-	_, exists, err = repo.Upsert(context.Background(), rec)
+	_, inserted, err = repo.InsertIfAbsent(context.Background(), rec)
 	if err != nil {
-		t.Fatalf("Upsert 2: %v", err)
+		t.Fatalf("InsertIfAbsent 2: %v", err)
 	}
-	if !exists {
-		t.Fatal("second upsert should report exists=true")
+	if inserted {
+		t.Fatal("second insert should report inserted=false")
 	}
 
 	count, err := repo.Count(context.Background())
@@ -92,11 +94,11 @@ func TestService_ProcessNewProxy_Duplicate(t *testing.T) {
 
 func TestService_ProcessScanProxy_BecomesActive(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
-	_, exists, err := repo.Upsert(context.Background(), contract.ProxyRecord{
+	_, inserted, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
-	if err != nil || exists {
-		t.Fatalf("Upsert: exists=%v err=%v", exists, err)
+	if err != nil || !inserted {
+		t.Fatalf("InsertIfAbsent: inserted=%v err=%v", inserted, err)
 	}
 
 	proxies, _ := repo.ListForScan(context.Background(), 10)
@@ -122,7 +124,7 @@ func TestService_ProcessScanProxy_BecomesActive(t *testing.T) {
 
 func TestService_ProcessScanProxy_BecomesDead(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
-	repo.Upsert(context.Background(), contract.ProxyRecord{
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
 	proxies, _ := repo.ListForScan(context.Background(), 10)
@@ -159,7 +161,11 @@ func TestFakeProvider_FetchProxies(t *testing.T) {
 	}
 	p := mockproxy.NewFakeProvider("test", proxies)
 
-	got, err := p.FetchProxies(context.Background())
+	var got []contract.ProxyRecord
+	err := p.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		got = append(got, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}
@@ -172,7 +178,9 @@ func TestFakeProvider_FetchProxies_Error(t *testing.T) {
 	p := mockproxy.NewFakeProvider("test", nil)
 	p.SetError(errors.New("provider unavailable"))
 
-	_, err := p.FetchProxies(context.Background())
+	err := p.FetchProxies(context.Background(), func(_ contract.ProxyRecord) error {
+		return nil
+	})
 	if err == nil {
 		t.Fatal("expected error from provider")
 	}
@@ -182,9 +190,9 @@ func TestFakeRepo_ListForScan_PriorityOrder(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 
 	// Insert 3 proxies with different statuses
-	repo.Upsert(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
-	repo.Upsert(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "2.2.2.2", Port: 80, Source: "test"})
-	repo.Upsert(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "3.3.3.3", Port: 80, Source: "test"})
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "2.2.2.2", Port: 80, Source: "test"})
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "3.3.3.3", Port: 80, Source: "test"})
 
 	proxies, _ := repo.ListForScan(context.Background(), 10)
 	// All should be inactive (new)
@@ -210,3 +218,43 @@ func TestFakeRepo_ListForScan_PriorityOrder(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func TestService_ProcessNewProxy_SkipsExistingWithoutWrite(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	// Seed one tuple via InsertIfAbsent.
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
+	})
+	// Reset counters after seeding.
+	repo.ExistsCalls = 0
+	repo.InsertCalls = 0
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := proxydomain.NewService(nil, repo, nil, logger, 48*time.Hour, 5)
+
+	err := svc.ProcessNewProxy(context.Background(), "http", "1.2.3.4", 8080, nil, nil, "test", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Exists returned true, so InsertIfAbsent must never have been called.
+	if repo.InsertCalls != 0 {
+		t.Errorf("InsertCalls = %d, want 0 (Exists returned true before InsertIfAbsent was called)", repo.InsertCalls)
+	}
+}
+
+func TestService_ProcessNewProxy_ExistsError(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	repo.ExistsErr = errors.New("db connection refused")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := proxydomain.NewService(nil, repo, nil, logger, 48*time.Hour, 5)
+
+	err := svc.ProcessNewProxy(context.Background(), "http", "1.2.3.4", 8080, nil, nil, "test", nil)
+	if err == nil {
+		t.Fatal("expected error when Exists fails")
+	}
+	// Exists failed, so InsertIfAbsent must never have been called.
+	if repo.InsertCalls != 0 {
+		t.Errorf("InsertCalls = %d, want 0", repo.InsertCalls)
+	}
+}

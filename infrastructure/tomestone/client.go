@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	xproxy "golang.org/x/net/proxy"
@@ -26,30 +25,60 @@ import (
 // maxSafeRate is the rate limit ceiling for tomestone.gg requests (calls/sec).
 const maxSafeRate = 20.0
 
+// ClientOption is a typed functional option for NewClient / NewClientWithProxy.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	providerLimiter   contract.ProviderRateLimiter
+	requestRate       *RequestRateController
+	sharedRateLimiter *rate.Limiter
+}
+
+// WithProviderRateLimiter sets the per-worker provider cooldown limiter.
+func WithProviderRateLimiter(l contract.ProviderRateLimiter) ClientOption {
+	return func(o *clientOptions) { o.providerLimiter = l }
+}
+
+// WithRequestRateController sets a shared request-rate controller for adaptive
+// backoff across multiple proxy clients.
+func WithRequestRateController(c *RequestRateController) ClientOption {
+	return func(o *clientOptions) { o.requestRate = c }
+}
+
+// WithSharedRateLimiter sets a shared *rate.Limiter (legacy, prefer
+// WithRequestRateController for new code).
+func WithSharedRateLimiter(l *rate.Limiter) ClientOption {
+	return func(o *clientOptions) { o.sharedRateLimiter = l }
+}
+
 type Client struct {
-	baseURL         string
-	apiToken        string
-	httpClient      *http.Client
-	limiter         *rate.Limiter
-	configuredRate  float64
-	mu              sync.Mutex
-	consecutive429s int
-	logger          contract.Logger
-	rateLimiter     contract.ProviderRateLimiter
+	baseURL     string
+	apiToken    string
+	httpClient  *http.Client
+	requestRate *RequestRateController
+	logger      contract.Logger
+	rateLimiter contract.ProviderRateLimiter
+}
+
+func applyClientOptions(opts []ClientOption) clientOptions {
+	var o clientOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
 }
 
 // NewClient constructs a new TomestoneClient adapter.
-func NewClient(cfg *config.TomestoneConfig, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+// Typed options: WithProviderRateLimiter, WithRequestRateController, WithSharedRateLimiter.
+func NewClient(cfg *config.TomestoneConfig, logger contract.Logger, opts ...ClientOption) (contract.TomestoneClient, error) {
 	if cfg == nil {
 		return nil, errors.New("tomestone config is nil")
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	var rl contract.ProviderRateLimiter
-	if len(rateLimiter) > 0 {
-		rl = rateLimiter[0]
-	}
+	o := applyClientOptions(opts)
+
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://tomestone.gg"
@@ -62,28 +91,34 @@ func NewClient(cfg *config.TomestoneConfig, logger contract.Logger, rateLimiter 
 		}
 	}
 
-	r := cfg.RateLimit
-	if r <= 0 {
-		r = 10.0
+	requestRate := o.requestRate
+	if requestRate == nil {
+		// Build a per-client controller from config, applying the clamp.
+		requestRate = NewRequestRateController(cfg.RateLimit)
 	}
-	if r > maxSafeRate {
-		r = maxSafeRate
+	// Legacy path: if a shared *rate.Limiter was passed, wrap it.
+	if o.sharedRateLimiter != nil {
+		requestRate = &RequestRateController{
+			limiter:        o.sharedRateLimiter,
+			configuredRate: requestRate.configuredRate,
+		}
 	}
+
 	return &Client{
-		baseURL:        baseURL,
-		apiToken:       strings.TrimSpace(cfg.APIToken),
-		httpClient:     &http.Client{Timeout: timeout},
-		limiter:        rate.NewLimiter(rate.Limit(r), 1),
-		configuredRate: r,
-		logger:         logger,
-		rateLimiter:    rl,
+		baseURL:     baseURL,
+		apiToken:    strings.TrimSpace(cfg.APIToken),
+		httpClient:  &http.Client{Timeout: timeout},
+		requestRate: requestRate,
+		logger:      logger,
+		rateLimiter: o.providerLimiter,
 	}, nil
 }
 
 // NewClientWithProxy creates a TomestoneClient that routes all requests
 // through the given proxy URL. The proxyURL must include the protocol
-// (http://, socks4://, socks5://).
-func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+// (http://, socks4://, socks5://). An optional shared *rate.Limiter may be
+// passed to share the token bucket across multiple proxy clients.
+func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger contract.Logger, opts ...ClientOption) (contract.TomestoneClient, error) {
 	if cfg == nil {
 		return nil, errors.New("tomestone config is nil")
 	}
@@ -93,10 +128,8 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	var rl contract.ProviderRateLimiter
-	if len(rateLimiter) > 0 {
-		rl = rateLimiter[0]
-	}
+	o := applyClientOptions(opts)
+
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://tomestone.gg"
@@ -107,14 +140,6 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		if d, err := time.ParseDuration(cfg.Timeout); err == nil && d > 0 {
 			timeout = d
 		}
-	}
-
-	r := cfg.RateLimit
-	if r <= 0 {
-		r = 10.0
-	}
-	if r > maxSafeRate {
-		r = maxSafeRate
 	}
 
 	// Build proxy-aware HTTP transport.
@@ -157,14 +182,24 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
 	}
 
+	requestRate := o.requestRate
+	if requestRate == nil {
+		requestRate = NewRequestRateController(cfg.RateLimit)
+	}
+	if o.sharedRateLimiter != nil {
+		requestRate = &RequestRateController{
+			limiter:        o.sharedRateLimiter,
+			configuredRate: requestRate.configuredRate,
+		}
+	}
+
 	return &Client{
-		baseURL:        baseURL,
-		apiToken:       strings.TrimSpace(cfg.APIToken),
-		httpClient:     &http.Client{Transport: transport, Timeout: timeout},
-		limiter:        rate.NewLimiter(rate.Limit(r), 1),
-		configuredRate: r,
-		logger:         logger,
-		rateLimiter:    rl,
+		baseURL:     baseURL,
+		apiToken:    strings.TrimSpace(cfg.APIToken),
+		httpClient:  &http.Client{Transport: transport, Timeout: timeout},
+		requestRate: requestRate,
+		logger:      logger,
+		rateLimiter: o.providerLimiter,
 	}, nil
 }
 
@@ -253,7 +288,7 @@ type jsonGear struct {
 }
 
 func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.TomestoneCharacter, error) {
-	if err := c.limiter.Wait(ctx); err != nil {
+	if err := c.requestRate.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("tomestone rate limiter wait: %w", err)
 	}
 
@@ -283,28 +318,7 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		c.mu.Lock()
-		if c.consecutive429s > 0 {
-			c.consecutive429s--
-			newRate := c.configuredRate
-			if c.consecutive429s > 0 {
-				shift := uint(c.consecutive429s)
-				if shift > 30 {
-					shift = 30
-				}
-				newRate = c.configuredRate / float64(uint(1)<<shift)
-				if newRate < 0.5 {
-					newRate = 0.5
-				}
-			}
-			c.limiter.SetLimit(rate.Limit(newRate))
-			c.logger.InfoContext(
-				ctx, "tomestone.rate_recovery",
-				slog.Int("consecutive_429s", c.consecutive429s),
-				slog.Float64("recovered_rate", newRate),
-			)
-		}
-		c.mu.Unlock()
+		c.requestRate.RecordSuccess(c.logger, ctx)
 	case http.StatusUnauthorized, http.StatusForbidden:
 		c.logger.ErrorContext(ctx, "tomestone.unauthenticated", slog.Int("status", resp.StatusCode), slog.String("body", string(bodyBytes)))
 		return nil, contract.ErrTomestoneUnauthenticated
@@ -312,19 +326,7 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		c.logger.DebugContext(ctx, "tomestone.not_found", slog.String("url", rawURL))
 		return nil, contract.ErrCharacterNotFound
 	case http.StatusTooManyRequests:
-		c.mu.Lock()
-		c.consecutive429s++
-		shift := uint(c.consecutive429s)
-		if shift > 30 {
-			shift = 30
-		}
-		newRate := c.configuredRate / float64(uint(1)<<shift)
-		if newRate < 0.5 {
-			newRate = 0.5
-		}
-		c.limiter.SetLimit(rate.Limit(newRate))
-		consecutive := c.consecutive429s
-		c.mu.Unlock()
+		consecutive := c.requestRate.RecordRateLimit(c.logger, ctx)
 
 		retryAfterHeader := resp.Header.Get("Retry-After")
 		var retryAfterDuration time.Duration
@@ -348,7 +350,6 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 			ctx, "tomestone.rate_limited",
 			slog.Int("status", resp.StatusCode),
 			slog.Int("consecutive_429s", consecutive),
-			slog.Float64("adjusted_rate", newRate),
 			slog.Duration("retry_after", retryAfterDuration),
 		)
 

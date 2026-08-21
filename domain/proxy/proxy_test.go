@@ -22,7 +22,7 @@ func TestProxy_CanUse_ActiveAndOwned(t *testing.T) {
 		LockedBy: &owner,
 		LockedAt: &now,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
@@ -48,7 +48,7 @@ func TestProxy_CanUse_ActiveAndStolen(t *testing.T) {
 		LockedBy: &other,
 		LockedAt: &now,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
@@ -70,7 +70,7 @@ func TestProxy_CanUse_Inactive(t *testing.T) {
 		Port:     8080,
 		Status:   contract.ProxyStatusInactive,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
@@ -92,7 +92,7 @@ func TestProxy_CanUse_Unlocked(t *testing.T) {
 		Port:     8080,
 		Status:   contract.ProxyStatusActive,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
@@ -118,7 +118,7 @@ func TestProxy_CanUse_ExpiredLock(t *testing.T) {
 		LockedBy: &owner,
 		LockedAt: &expiredTime,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
@@ -144,7 +144,7 @@ func TestProxy_CanUse_ExtendsLock(t *testing.T) {
 		LockedBy: &owner,
 		LockedAt: &oldTime,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), owner, 5*time.Minute)
@@ -177,7 +177,7 @@ func TestProxy_CanUse_WrongOwner(t *testing.T) {
 		LockedBy: &owner,
 		LockedAt: &now,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	ok, err := p.CanUse(context.Background(), other, 5*time.Minute)
@@ -202,7 +202,7 @@ func TestProxy_Release(t *testing.T) {
 		LockedBy: &owner,
 		LockedAt: &now,
 	}
-	repo.Upsert(context.Background(), rec)
+	repo.InsertIfAbsent(context.Background(), rec)
 
 	p := New(&rec, repo)
 	if err := p.Release(context.Background(), owner); err != nil {

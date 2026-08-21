@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"io"
 
 	requestdto "github.com/mihaiflorentin88/ffxiv-census/port/dto/request"
 	responsedto "github.com/mihaiflorentin88/ffxiv-census/port/dto/response"
@@ -14,4 +15,8 @@ type HTTPClient interface {
 	Post(ctx context.Context, url string, queryParams, headers map[string]string, body []byte) (responsedto.HTTPResponse, error)
 	Patch(ctx context.Context, url string, queryParams, headers map[string]string, body []byte) (responsedto.HTTPResponse, error)
 	Delete(ctx context.Context, url string, queryParams, headers map[string]string) (responsedto.HTTPResponse, error)
+	// GetStream performs a GET request and passes the live response body to consume.
+	// The body is closed after consume returns. The callback receives every HTTP
+	// status code — the caller decides what constitutes a retryable or fatal status.
+	GetStream(ctx context.Context, url string, queryParams, headers map[string]string, consume func(statusCode int, body io.Reader) error) error
 }

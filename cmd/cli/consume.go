@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/time/rate"
 
 	"github.com/mihaiflorentin88/ffxiv-census/container"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
@@ -104,7 +105,7 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 	}
 
 	// Create proxy-aware client factories.
-	newLodestoneClient := func(proxyURL string) (contract.LodestoneClient, error) {
+	newLodestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 		cfg := container.Load.Config().Lodestone
 		if cfg == nil {
 			return nil, fmt.Errorf("lodestone config missing")
@@ -117,18 +118,33 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 		}
 		return lodestone.NewClientWithProxy(cfg, proxyURL, logger)
 	}
-	newTomestoneClient := func(proxyURL string) (contract.TomestoneClient, error) {
-		cfg := container.Load.Config().Tomestone
-		if cfg == nil {
+	// Create a shared rate limiter for all proxy Tomestone clients.
+	tomestoneCfg := container.Load.Config().Tomestone
+	var sharedTomestoneLimiter *rate.Limiter
+	if tomestoneCfg != nil {
+		r := tomestoneCfg.RateLimit
+		if r <= 0 {
+			r = 10.0
+		}
+		sharedTomestoneLimiter = rate.NewLimiter(rate.Limit(r), 1)
+	}
+	newTomestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+		if tomestoneCfg == nil {
 			return nil, fmt.Errorf("tomestone config missing")
+		}
+		opts := []tomestone.ClientOption{
+			tomestone.WithProviderRateLimiter(limiter),
+		}
+		if sharedTomestoneLimiter != nil {
+			opts = append(opts, tomestone.WithSharedRateLimiter(sharedTomestoneLimiter))
 		}
 		// Override timeout from proxy consumer config if set.
 		if proxyRequestTimeout != "" {
-			override := *cfg
+			override := *tomestoneCfg
 			override.Timeout = proxyRequestTimeout
-			return tomestone.NewClientWithProxy(&override, proxyURL, logger)
+			return tomestone.NewClientWithProxy(&override, proxyURL, logger, opts...)
 		}
-		return tomestone.NewClientWithProxy(cfg, proxyURL, logger)
+		return tomestone.NewClientWithProxy(tomestoneCfg, proxyURL, logger, opts...)
 	}
 	newRateLimiter := func() contract.ProviderRateLimiter {
 		return provider.NewProxyRateLimiter()

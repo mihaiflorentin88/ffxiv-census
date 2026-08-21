@@ -36,8 +36,8 @@ func newTestDriver(t *testing.T) contract.DatabaseDriver {
 
 func cleanTables(driver contract.DatabaseDriver) {
 	_, _ = driver.Execute(context.Background(), `
-		TRUNCATE characters, character_jobs, character_gear, character_milestones,
-		         milestone_achievements, free_companies, census_runs, queue_jobs
+		TRUNCATE proxies, characters, character_jobs, character_gear, character_milestones,
+		         milestone_achievements, census_runs
 		RESTART IDENTITY CASCADE
 	`)
 }

@@ -38,15 +38,21 @@ type ProxyRecord struct {
 type ProxyProvider interface {
 	// Name returns the provider identifier (e.g. "proxyscrape", "geonode").
 	Name() string
-	// FetchProxies retrieves the current proxy list from the provider.
-	FetchProxies(ctx context.Context) ([]ProxyRecord, error)
+	// FetchProxies streams proxy records from the provider, calling emit for each
+	// one. If emit returns an error, FetchProxies stops and returns it immediately.
+	FetchProxies(ctx context.Context, emit func(ProxyRecord) error) error
 }
 
 // ProxyRepository persists proxy records.
 type ProxyRepository interface {
-	// Upsert inserts a new proxy or updates an existing one (matched by protocol+ip+ port).
-	// Returns the proxy ID and whether it already existed.
-	Upsert(ctx context.Context, rec ProxyRecord) (id int64, exists bool, err error)
+	// Exists returns true if a proxy with the exact (protocol, ip, port) tuple
+	// already exists in the database. Read-only check, no side effects.
+	Exists(ctx context.Context, protocol, ip string, port int) (bool, error)
+	// InsertIfAbsent inserts a new proxy only if no row with the same
+	// (protocol, ip, port) exists. Returns the proxy ID, whether it was
+	// actually inserted, and any error. On conflict, returns (0, false, nil)
+	// without modifying the existing row.
+	InsertIfAbsent(ctx context.Context, rec ProxyRecord) (id int64, inserted bool, err error)
 	// Get returns a proxy by ID, or nil (no error) if not found.
 	Get(ctx context.Context, id int64) (*ProxyRecord, error)
 	// UpdateStatus updates a proxy's status, latency, fail_count, and last_alive_at.
@@ -78,4 +84,8 @@ type ProxyRepository interface {
 	// with an incremented fail count. This prevents a TOCTOU race where another
 	// worker could claim the proxy between Release and UpdateStatus.
 	MarkFailedProxy(ctx context.Context, id int64, owner string) error
+	// RandomActive returns a random active proxy, optionally excluding IDs.
+	// Returns nil (no error) if no eligible proxy exists. Does NOT claim or lock
+	// the proxy — used only for discovery/provider scraping, never for Lodestone.
+	RandomActive(ctx context.Context, excludeIDs []int64) (*ProxyRecord, error)
 }

@@ -76,13 +76,19 @@ type Queue interface {
 }
 ```
 
-**`Publish`** sends a single job to the `census` exchange with routing key = `job.Type`. The payload is JSON bytes. Returns error on failure.
+**`Publish`** sends a single job to the `census` exchange with routing key = `job.Type`. The payload is JSON bytes. It uses deferred publisher confirms (`PublishWithDeferredConfirmWithContext`) so a successful return guarantees the durable target queue accepted the message. After confirmation, `Publish` drains the mandatory return channel — if RabbitMQ reports the message as unroutable, the call returns an error with the AMQP reply code and routing key. This fail-fast behaviour means callers never silently lose messages to misconfigured bindings.
 
 **`Consume`** starts `concurrency` worker goroutines. Each worker opens a dedicated AMQP channel with `prefetch(1)`, consumes from all specified event type queues, and dispatches messages to the handler. On handler return:
 - `nil` → message is acked
 - `error` → message is published to the failed queue (retry or permanent), then acked
 
 The original message is always acked — failed messages are forwarded, not requeued. This prevents redelivery loops.
+
+**Dual-context shutdown:** `Consume` creates two independent contexts:
+1. **`stopClaiming`** — derived from the caller's `ctx`. When `ctx` is cancelled (SIGTERM), `stopClaiming` cancels immediately. Workers stop claiming new deliveries; any unclaimed delivery is Nack'd with `requeue=true` so RabbitMQ redelivers it to another consumer.
+2. **`processCtx`** — an independent context cancelled only after all in-flight handlers have finished (`wg.Wait()`). Handlers that are already running continue to completion against `processCtx`, giving them time to finish gracefully.
+
+This two-phase shutdown ensures no message is lost: unclaimed messages are requeued, and in-flight handlers either succeed (ack) or fail (forward to dead-letter) before the worker exits.
 
 **Worker usage:**
 
@@ -190,6 +196,8 @@ Concurrency is set per-deployment via the `-c` flag. The default is 4 if not spe
 **Scaling:** Increase `replicaCount` or `-c` to handle higher throughput. RabbitMQ distributes messages across consumers automatically (round-robin with prefetch=1). There is no risk of double-delivery — each message is delivered to exactly one consumer.
 
 **Graceful shutdown:** On SIGTERM, the context is cancelled. Workers stop accepting new messages and finish their current handler calls. The `terminationGracePeriodSeconds` (default 180s) gives in-flight jobs time to complete.
+
+**`Close`** closes the publishing channel first, then the AMQP connection. Both errors are joined with `errors.Join` so callers see every failure. Channel-before-connection ordering prevents the connection from closing while a publish confirm is still in flight.
 
 ## Monitoring
 

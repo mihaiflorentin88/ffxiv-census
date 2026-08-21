@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
@@ -48,8 +49,7 @@ type apiResponse struct {
 	Limit int             `json:"limit"`
 }
 
-func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, error) {
-	var allRecords []contract.ProxyRecord
+func (c *Client) FetchProxies(ctx context.Context, emit func(contract.ProxyRecord) error) error {
 	page := 1
 	limit := 100
 
@@ -61,21 +61,29 @@ func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, erro
 			"sort_type": "desc",
 		}
 
-		resp, err := c.httpClient.Get(ctx, c.baseURL, params, map[string]string{"Accept": "application/json"})
-		if err != nil {
-			return nil, fmt.Errorf("geonode fetch page %d: %w", page, err)
-		}
-		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("geonode: unexpected status %d on page %d", resp.StatusCode, page)
-		}
+		var pageData []proxyResponse
+		var pageTotal int
 
-		var apiResp apiResponse
-		if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
-			return nil, fmt.Errorf("geonode decode page %d: %w", page, err)
+		err := c.httpClient.GetStream(ctx, c.baseURL, params, map[string]string{"Accept": "application/json"}, func(statusCode int, body io.Reader) error {
+			if statusCode != 200 {
+				return fmt.Errorf("geonode: unexpected status %d on page %d", statusCode, page)
+			}
+
+			var apiResp apiResponse
+			if err := json.NewDecoder(body).Decode(&apiResp); err != nil {
+				return fmt.Errorf("geonode decode page %d: %w", page, err)
+			}
+
+			pageData = apiResp.Data
+			pageTotal = apiResp.Total
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("geonode fetch page %d: %w", page, err)
 		}
 
 		now := time.Now().UTC()
-		for _, p := range apiResp.Data {
+		for _, p := range pageData {
 			port, err := strconv.Atoi(p.Port)
 			if err != nil {
 				continue
@@ -98,15 +106,21 @@ func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, erro
 				if p.UpTime > 0 {
 					rec.UptimePercent = &p.UpTime
 				}
-				allRecords = append(allRecords, rec)
+				if err := emit(rec); err != nil {
+					return err
+				}
 			}
 		}
 
-		if len(apiResp.Data) < limit || page*limit >= apiResp.Total {
+		pageCount := len(pageData)
+		// Release page data before requesting next page
+		pageData = nil
+
+		if pageCount < limit || page*limit >= pageTotal {
 			break
 		}
 		page++
 	}
 
-	return allRecords, nil
+	return nil
 }

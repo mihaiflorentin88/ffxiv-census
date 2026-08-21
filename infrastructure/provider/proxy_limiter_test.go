@@ -103,3 +103,34 @@ func TestProxyRateLimiter_EarliestAvailable(t *testing.T) {
 		t.Fatal("expected non-zero earliest available")
 	}
 }
+
+func TestProxyRateLimiter_Pause_Monotonicity(t *testing.T) {
+	r := NewProxyRateLimiter()
+
+	// Pause for a long duration.
+	r.Pause(contract.ProviderLodestone, 1*time.Hour, "long")
+	longUntil, paused := r.PausedUntil(contract.ProviderLodestone)
+	if !paused {
+		t.Fatal("expected provider to be paused after long pause")
+	}
+
+	// Attempt to shorten with a shorter duration — must be ignored.
+	r.Pause(contract.ProviderLodestone, 1*time.Minute, "short")
+	shortUntil, paused := r.PausedUntil(contract.ProviderLodestone)
+	if !paused {
+		t.Fatal("expected provider to still be paused")
+	}
+
+	// The stored timestamp must still be the original long pause.
+	if !shortUntil.Equal(longUntil) {
+		t.Fatalf("expected monotonic pause: long=%v, short=%v", longUntil, shortUntil)
+	}
+
+	// The reason must also be preserved from the longer pause.
+	r.mu.RLock()
+	reason := r.reasons[contract.ProviderLodestone]
+	r.mu.RUnlock()
+	if reason != "long" {
+		t.Fatalf("expected reason 'long', got %q", reason)
+	}
+}

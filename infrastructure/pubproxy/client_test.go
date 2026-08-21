@@ -1,8 +1,10 @@
 package pubproxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -41,6 +43,16 @@ func (f *fakeHTTPClient) Delete(_ context.Context, _ string, _, _ map[string]str
 	return response.HTTPResponse{}, fmt.Errorf("not implemented")
 }
 
+func (f *fakeHTTPClient) GetStream(_ context.Context, url string, _, _ map[string]string, consume func(int, io.Reader) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	if resp, ok := f.responses[url]; ok {
+		return consume(resp.StatusCode, bytes.NewReader(resp.Body))
+	}
+	return consume(404, bytes.NewReader(nil))
+}
+
 func TestFetchProxies_Success(t *testing.T) {
 	body := `{
 		"data": [
@@ -56,7 +68,11 @@ func TestFetchProxies_Success(t *testing.T) {
 		},
 	}, "")
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}
@@ -102,7 +118,11 @@ func TestFetchProxies_EmptyData(t *testing.T) {
 		},
 	}, "")
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}
@@ -127,7 +147,11 @@ func TestFetchProxies_InvalidPort(t *testing.T) {
 		},
 	}, "")
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}

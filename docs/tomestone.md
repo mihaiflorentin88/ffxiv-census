@@ -19,7 +19,7 @@ timeout = "10s"
 | ------------ | --------------------- | ---------------------- | ------------------------------------------------------------------ |
 | `api_token`  | `""`                  | `TOMESTONE_API_TOKEN`  | Laravel Sanctum Bearer token for authentication.                   |
 | `base_url`   | `https://tomestone.gg`| `TOMESTONE_BASE_URL`   | Base URL for Tomestone.gg REST API.                                |
-| `rate_limit` | `5.0`                 | `TOMESTONE_RATE_LIMIT` | Token-bucket rate limiter ceiling in requests per second.         |
+| `rate_limit` | `5.0`                 | `TOMESTONE_RATE_LIMIT` | Token-bucket rate limiter ceiling in requests per second. Shared across all proxy clients in a process. |
 | `timeout`    | `10s`                 | `TOMESTONE_TIMEOUT`    | HTTP client timeout per request.                                   |
 
 ## Port & Architecture
@@ -65,9 +65,19 @@ Tomestone.gg serves as the **primary provider for `id-sweep`** (character discov
 - Explicit `--source tomestone` on `id-sweep` queries Tomestone.gg directly without querying Lodestone.
 - Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into downstream jobs (`achievement-census`, and `fc-census` when affiliated with a free company) via `BuildDependentCharacterJobs`.
 - When Lodestone is rate-limited, workers automatically switch dual-source queues (`id-sweep`, `character-census`) to Tomestone while pausing Lodestone-exclusive queues.
+### Rate Limiting in Proxy Mode
+
+All proxy Tomestone clients in a process share a single `RequestRateController` at the configured `rate_limit` (default 5 req/s). The `RequestRateController` manages the token bucket, configured/clamped rate, and global consecutive-429 adaptive backoff state. This prevents N proxy goroutines from each creating an independent 5 req/s bucket, which would allow N×5 requests/second. Tokens are charged per HTTP attempt — each retry acquires a new token.
+
+Per-worker `ProviderRateLimiter` handles cooldown pauses: when a proxy goroutine receives a 429 from Tomestone, it pauses Tomestone in its local limiter without affecting other goroutines. Lodestone 429s pause only Lodestone, and Tomestone 429s pause only Tomestone — provider cooldowns are isolated.
+
+**Typed functional options:** `NewClientWithProxy` accepts typed `ClientOption` values:
+- `WithProviderRateLimiter(l contract.ProviderRateLimiter)` — injects the per-worker cooldown limiter
+- `WithRequestRateController(c *RequestRateController)` — injects the shared process-wide rate controller
+
 ### Proxy-Aware Client
 
-`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a TomestoneClient that routes all requests through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`).
+`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a TomestoneClient that routes all requests through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`). The `rateLimiter` parameter is the shared process-wide Tomestone bucket.
 
 **Protocol support:**
 - **HTTP/HTTPS**: Uses `http.Transport.Proxy` for standard HTTP proxy tunneling

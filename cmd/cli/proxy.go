@@ -2,11 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
 
@@ -18,33 +18,44 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
+// errPublishFailed wraps a queue publish error so callers can distinguish
+// emit/publish failures from provider fetch/decode errors.
+var errPublishFailed = errors.New("publish failed")
+
 var proxyCmd = &cobra.Command{
 	Use:   "proxy",
 	Short: "Proxy pool management (discover, scan, consume)",
 }
 
+// errLookupFailed wraps a repository lookup error so callers can distinguish
+// lookup failures from publish failures.
+var errLookupFailed = errors.New("proxy lookup failed")
+
 // publishDiscoveredProxies fetches proxies from each provider sequentially,
-// builds jobs for one provider at a time, and publishes them via publishAll.
-// It continues past individual provider fetch failures but returns an error
+// publishing each record to the queue as it is emitted by the provider.
+// It checks the repository for existing tuples before publishing.
+// It continues past individual provider failures but returns an error
 // when no provider publishes anything and at least one failed.
-func publishDiscoveredProxies(ctx context.Context, q contract.Queue, logger contract.Logger, providers []contract.ProxyProvider) (int, error) {
+func publishDiscoveredProxies(ctx context.Context, q contract.Queue, repo contract.ProxyRepository, logger contract.Logger, providers []contract.ProxyProvider) (int, error) {
 	totalPublished := 0
 	totalErrors := 0
 
 	for _, p := range providers {
 		logger.InfoContext(ctx, "proxy.discover.fetching", "provider", p.Name())
 		start := time.Now()
-		proxies, err := p.FetchProxies(ctx)
-		if err != nil {
-			logger.ErrorContext(ctx, "proxy.discover.provider_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
-			totalErrors++
-			continue
-		}
-		logger.InfoContext(ctx, "proxy.discover.provider_done", "provider", p.Name(), "fetched", len(proxies), "duration", time.Since(start))
+		publishedForProvider := 0
+		skippedExistingForProvider := 0
 
-		var jobs []contract.QueueJob
-		for _, rec := range proxies {
-			jobs = append(jobs, handler.NewProxyJob(handler.NewProxyPayload{
+		err := p.FetchProxies(ctx, func(rec contract.ProxyRecord) error {
+			exists, lookupErr := repo.Exists(ctx, rec.Protocol, rec.IP, rec.Port)
+			if lookupErr != nil {
+				return fmt.Errorf("%w: %w", errLookupFailed, lookupErr)
+			}
+			if exists {
+				skippedExistingForProvider++
+				return nil
+			}
+			job := handler.NewProxyJob(handler.NewProxyPayload{
 				Protocol:      rec.Protocol,
 				IP:            rec.IP,
 				Port:          rec.Port,
@@ -52,22 +63,26 @@ func publishDiscoveredProxies(ctx context.Context, q contract.Queue, logger cont
 				Anonymity:     rec.Anonymity,
 				Source:        rec.Source,
 				UptimePercent: rec.UptimePercent,
-			}))
-		}
-
-		if len(jobs) > 0 {
-			confirmed, err := publishAll(q, logger, ctx, jobs)
-			totalPublished += confirmed
-			if err != nil {
-				logger.ErrorContext(ctx, "proxy.discover.publish_failed", "provider", p.Name(), "error", err)
-				totalErrors++
+			})
+			if err := q.Publish(ctx, job); err != nil {
+				return fmt.Errorf("%w: %w", errPublishFailed, err)
 			}
+			publishedForProvider++
+			totalPublished++
+			return nil
+		})
+		if err != nil {
+			if errors.Is(err, errLookupFailed) {
+				logger.ErrorContext(ctx, "proxy.discover.lookup_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+			} else if errors.Is(err, errPublishFailed) {
+				logger.ErrorContext(ctx, "proxy.discover.publish_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+			} else {
+				logger.ErrorContext(ctx, "proxy.discover.provider_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+			}
+			totalErrors++
+			continue
 		}
-		logger.InfoContext(ctx, "proxy.discover.provider_published", "provider", p.Name(), "published", len(jobs))
-
-		// Release proxy data for this provider before fetching the next one.
-		proxies = nil
-		runtime.GC()
+		logger.InfoContext(ctx, "proxy.discover.provider_done", "provider", p.Name(), "published", publishedForProvider, "skipped_existing", skippedExistingForProvider, "duration", time.Since(start))
 	}
 
 	if totalPublished == 0 && totalErrors > 0 {
@@ -95,6 +110,11 @@ var proxyDiscoverCmd = &cobra.Command{
 			}
 		}()
 
+		repo := container.Load.ProxyRepository()
+		if repo == nil {
+			return fmt.Errorf("proxy repository not initialised")
+		}
+
 		svc := container.Load.ProxyService()
 		if svc == nil {
 			return fmt.Errorf("proxy service not initialised")
@@ -106,7 +126,7 @@ var proxyDiscoverCmd = &cobra.Command{
 		}
 		logger.InfoContext(ctx, "proxy.discover.providers", "count", len(providers))
 
-		published, err := publishDiscoveredProxies(ctx, q, logger, providers)
+		published, err := publishDiscoveredProxies(ctx, q, repo, logger, providers)
 		if err != nil {
 			return err
 		}

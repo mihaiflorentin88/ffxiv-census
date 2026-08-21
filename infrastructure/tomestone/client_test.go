@@ -305,8 +305,8 @@ func TestFetchCharacterProfile_AdaptiveRateAndRetryAfter(t *testing.T) {
 	c := rawClient.(*Client)
 
 	// Initial rate limit
-	if c.limiter.Limit() != 10.0 {
-		t.Errorf("initial limit = %v, want 10.0", c.limiter.Limit())
+	if c.requestRate.Rate() != 10.0 {
+		t.Errorf("initial limit = %v, want 10.0", c.requestRate.Rate())
 	}
 
 	// 1st 429: rate halves to 5.0
@@ -315,8 +315,8 @@ func TestFetchCharacterProfile_AdaptiveRateAndRetryAfter(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on 429")
 	}
-	if c.limiter.Limit() != 5.0 {
-		t.Errorf("after 1st 429, limit = %v, want 5.0", c.limiter.Limit())
+	if c.requestRate.Rate() != 5.0 {
+		t.Errorf("after 1st 429, limit = %v, want 5.0", c.requestRate.Rate())
 	}
 
 	// 2nd 429: rate halves to 2.5
@@ -324,8 +324,8 @@ func TestFetchCharacterProfile_AdaptiveRateAndRetryAfter(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on 429")
 	}
-	if c.limiter.Limit() != 2.5 {
-		t.Errorf("after 2nd 429, limit = %v, want 2.5", c.limiter.Limit())
+	if c.requestRate.Rate() != 2.5 {
+		t.Errorf("after 2nd 429, limit = %v, want 2.5", c.requestRate.Rate())
 	}
 
 	// Success on 200: rate recovers towards 5.0 then 10.0
@@ -334,16 +334,16 @@ func TestFetchCharacterProfile_AdaptiveRateAndRetryAfter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error on 200: %v", err)
 	}
-	if c.limiter.Limit() != 5.0 {
-		t.Errorf("after 1st recovery, limit = %v, want 5.0", c.limiter.Limit())
+	if c.requestRate.Rate() != 5.0 {
+		t.Errorf("after 1st recovery, limit = %v, want 5.0", c.requestRate.Rate())
 	}
 
 	_, err = c.FetchCharacterProfile(context.Background(), 123, false)
 	if err != nil {
 		t.Fatalf("unexpected error on 200: %v", err)
 	}
-	if c.limiter.Limit() != 10.0 {
-		t.Errorf("after 2nd recovery, limit = %v, want 10.0", c.limiter.Limit())
+	if c.requestRate.Rate() != 10.0 {
+		t.Errorf("after 2nd recovery, limit = %v, want 10.0", c.requestRate.Rate())
 	}
 }
 

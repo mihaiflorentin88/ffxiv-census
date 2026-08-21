@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -50,45 +51,33 @@ func scanProxy(row rowScanner) (*contract.ProxyRecord, error) {
 	return &p, nil
 }
 
-func (r *ProxyRepository) Upsert(ctx context.Context, rec contract.ProxyRecord) (int64, bool, error) {
+func (r *ProxyRepository) Exists(ctx context.Context, protocol, ip string, port int) (bool, error) {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	var exists bool
+	err = db.QueryRowContext(
+		ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM proxies
+			WHERE protocol = $1 AND ip = $2 AND port = $3
+		)`,
+		protocol, ip, port,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("proxy exists: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *ProxyRepository) InsertIfAbsent(ctx context.Context, rec contract.ProxyRecord) (int64, bool, error) {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
 		return 0, false, err
 	}
 
-	// Check if the proxy already exists.
-	var existingID int64
-	err = db.QueryRowContext(
-		ctx,
-		`SELECT id FROM proxies WHERE protocol = $1 AND ip = $2 AND port = $3`,
-		rec.Protocol, rec.IP, rec.Port,
-	).Scan(&existingID)
-
-	if err == nil {
-		// Already exists — update metadata.
-		_, err = db.ExecContext(
-			ctx,
-			`UPDATE proxies SET
-				country = COALESCE($1, country),
-				anonymity = COALESCE($2, anonymity),
-				uptime_percent = COALESCE($3, uptime_percent),
-				source = $4,
-				updated_at = $5
-			WHERE id = $6`,
-			nullableString(rec.Country), nullableString(rec.Anonymity),
-			nullableFloat64(rec.UptimePercent), rec.Source,
-			time.Now().UTC(), existingID,
-		)
-		if err != nil {
-			return existingID, true, fmt.Errorf("proxy upsert update: %w", err)
-		}
-		return existingID, true, nil
-	}
-	if err != sql.ErrNoRows {
-		return 0, false, fmt.Errorf("proxy upsert check: %w", err)
-	}
-
-	// Insert new proxy.
 	now := time.Now().UTC()
 	var newID int64
 	err = db.QueryRowContext(
@@ -96,6 +85,7 @@ func (r *ProxyRepository) Upsert(ctx context.Context, rec contract.ProxyRecord) 
 		`INSERT INTO proxies (protocol, ip, port, country, anonymity, latency_ms, uptime_percent,
 			status, last_scanned_at, last_alive_at, first_seen_at, source, fail_count, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (protocol, ip, port) DO NOTHING
 		RETURNING id`,
 		rec.Protocol, rec.IP, rec.Port,
 		nullableString(rec.Country), nullableString(rec.Anonymity),
@@ -104,9 +94,13 @@ func (r *ProxyRepository) Upsert(ctx context.Context, rec contract.ProxyRecord) 
 		now, rec.Source, 0, now, now,
 	).Scan(&newID)
 	if err != nil {
-		return 0, false, fmt.Errorf("proxy upsert insert: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			// Another delivery already inserted this tuple.
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("proxy insert if absent: %w", err)
 	}
-	return newID, false, nil
+	return newID, true, nil
 }
 
 func (r *ProxyRepository) Get(ctx context.Context, id int64) (*contract.ProxyRecord, error) {
@@ -384,4 +378,27 @@ func (r *ProxyRepository) MarkFailedProxy(ctx context.Context, id int64, owner s
 		return fmt.Errorf("proxy mark failed: %w", err)
 	}
 	return nil
+}
+
+func (r *ProxyRepository) RandomActive(ctx context.Context, excludeIDs []int64) (*contract.ProxyRecord, error) {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	row := db.QueryRowContext(ctx,
+		`SELECT `+proxyColumns+` FROM proxies
+		WHERE status = 'active'
+		  AND protocol IN ('http', 'https', 'socks4', 'socks5')
+		  AND (cardinality($1::bigint[]) = 0 OR id <> ALL($1::bigint[]))
+		ORDER BY RANDOM()
+		LIMIT 1`,
+		excludeIDs)
+	rec, err := scanProxy(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("proxy random active: %w", err)
+	}
+	return rec, nil
 }

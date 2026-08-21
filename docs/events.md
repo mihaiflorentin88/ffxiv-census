@@ -34,7 +34,7 @@ Handlers return the downstream jobs they want published; the worker publishes ea
 
 ## Loop safety
 
-Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs. RabbitMQ does not deduplicate at the queue level — idempotency is enforced by the database layer.
+Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs. RabbitMQ does not deduplicate at the queue level — idempotency is enforced by the database layer. The `proxy discover` command checks PostgreSQL read-only before publishing each `new-proxy` event; existing tuples are counted as `skipped_existing` and never published. Lookup errors fail closed per provider. The consumer independently checks then inserts conflict-safely via `INSERT ... ON CONFLICT DO NOTHING`.
 
 ## Dual-source ingest, Fallback & Provider Rate-Limit Coordination
 
@@ -95,3 +95,7 @@ When `consume --proxy` is used, the event pipeline runs through proxy-aware clie
 ```
 
 `consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` divides the sweep range into `chunk-size`-sized jobs.
+
+**`publishAll` behaviour:** Each publish call waits for a broker confirmation before returning. If any publish is nacked or the connection drops, the command fails immediately rather than continuing to enqueue jobs that may never be delivered. After all publishes succeed, the queue connection is closed so the process exits cleanly.
+
+**`proxy discover` callback publication:** Providers stream records one at a time via a callback (`emit`). Inside the callback, each record is published immediately as a `new-proxy` event — the first queue publish happens before the provider fetches its next record/page. This keeps memory bounded regardless of provider response size. If a publish fails, that provider is stopped (logged as `proxy.discover.publish_failed`) and the command continues to the next provider. Partial provider failures are tolerated: the command reports per-provider fetched/published counts and returns an error only when every provider fails (`proxy discovery failed: all providers failed (%d errors)`).

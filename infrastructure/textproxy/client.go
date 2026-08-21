@@ -1,8 +1,11 @@
 package textproxy
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -10,6 +13,10 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
+
+// errEmitFailed wraps an error returned by the emit callback so callers can
+// distinguish callback-directed failures from fetch/decode/scan errors.
+var errEmitFailed = errors.New("emit failed")
 
 // Client implements contract.ProxyProvider for plain-text ip:port proxy lists.
 // Used for GitHub-hosted lists like Proxifly and TheSpeedX.
@@ -26,72 +33,73 @@ func New(httpClient contract.HTTPClient, name string, urls map[string]string) *C
 
 func (c *Client) Name() string { return c.name }
 
-func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, error) {
-	var allRecords []contract.ProxyRecord
+func (c *Client) FetchProxies(ctx context.Context, emit func(contract.ProxyRecord) error) error {
+	fetched := 0
 
 	for protocol, url := range c.urls {
-		records, err := c.fetchFromURL(ctx, url, protocol)
+		err := c.fetchFromURL(ctx, url, protocol, emit, &fetched)
 		if err != nil {
+			// Emit errors are caller-directed and must propagate immediately;
+			// only fetch/decode/scan failures participate in partial-failure policy.
+			if errors.Is(err, errEmitFailed) {
+				return err
+			}
 			logging.Warn(c.name, fmt.Sprintf("failed to fetch %s proxies from %s: %v", protocol, url, err))
 			continue
 		}
-		allRecords = append(allRecords, records...)
 	}
 
-	if len(allRecords) == 0 {
-		return nil, fmt.Errorf("%s: no proxies fetched from any source", c.name)
+	if fetched == 0 {
+		return fmt.Errorf("%s: no proxies fetched from any source", c.name)
 	}
 
-	return allRecords, nil
+	return nil
 }
 
-func (c *Client) fetchFromURL(ctx context.Context, url, protocol string) ([]contract.ProxyRecord, error) {
-	resp, err := c.httpClient.Get(ctx, url, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%s fetch %s: %w", c.name, protocol, err)
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("%s: unexpected status %d for %s", c.name, resp.StatusCode, protocol)
-	}
-
-	now := time.Now().UTC()
-	var records []contract.ProxyRecord
-
-	lines := strings.Split(string(resp.Body), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+func (c *Client) fetchFromURL(ctx context.Context, url, protocol string, emit func(contract.ProxyRecord) error, fetched *int) error {
+	return c.httpClient.GetStream(ctx, url, nil, nil, func(statusCode int, body io.Reader) error {
+		if statusCode != 200 {
+			return fmt.Errorf("%s: unexpected status %d for %s", c.name, statusCode, protocol)
 		}
 
-		// Strip protocol prefix if present (e.g. "http://1.2.3.4:8080" -> "1.2.3.4:8080")
-		if idx := strings.Index(line, "://"); idx != -1 {
-			line = line[idx+3:]
-		}
+		now := time.Now().UTC()
+		scanner := bufio.NewScanner(body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
 
-		host, portStr, err := net.SplitHostPort(line)
-		if err != nil {
-			logging.Warn(c.name, fmt.Sprintf("skipping malformed line %q: %v", line, err))
-			continue
-		}
+			// Strip protocol prefix if present (e.g. "http://1.2.3.4:8080" -> "1.2.3.4:8080")
+			if idx := strings.Index(line, "://"); idx != -1 {
+				line = line[idx+3:]
+			}
 
-		var port int
-		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
-			logging.Warn(c.name, fmt.Sprintf("skipping invalid port in %q: %v", line, err))
-			continue
-		}
+			host, portStr, err := net.SplitHostPort(line)
+			if err != nil {
+				logging.Warn(c.name, fmt.Sprintf("skipping malformed line %q: %v", line, err))
+				continue
+			}
 
-		rec := contract.ProxyRecord{
-			Protocol:    protocol,
-			IP:          host,
-			Port:        port,
-			FirstSeenAt: now,
-			Source:      c.name,
-			Status:      contract.ProxyStatusInactive,
-		}
-		records = append(records, rec)
-	}
+			var port int
+			if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+				logging.Warn(c.name, fmt.Sprintf("skipping invalid port in %q: %v", line, err))
+				continue
+			}
 
-	return records, nil
+			rec := contract.ProxyRecord{
+				Protocol:    protocol,
+				IP:          host,
+				Port:        port,
+				FirstSeenAt: now,
+				Source:      c.name,
+				Status:      contract.ProxyStatusInactive,
+			}
+			if err := emit(rec); err != nil {
+				return fmt.Errorf("%w: %w", errEmitFailed, err)
+			}
+			*fetched++
+		}
+		return scanner.Err()
+	})
 }

@@ -99,9 +99,10 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 - `MaxCharacterID(ctx)` — returns the highest known character ID in the repository (excluding deleted characters), used for auto-discovery sweeps.
 - `IsActive(latestAt)` — true when the latest achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`).
 - `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
-- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the latest achievement is within the activity window and max-level means having at least one job at or above `max_level`.
+- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the latest achievement is within the activity window and max-level means having at least one job at or above `max_level`. Fans out three database queries concurrently (`Count`, `CountActive`, `Count` with `MinLevel`) and joins results with deterministic error precedence (total → active → max-level).
 - `ListCharacters(ctx, filter, limit, offset)` — one page of characters matching `filter` plus the matching count (the HTTP pagination/filtering source).
 - `CharacterDetail(ctx, id)` — character plus jobs and milestones, with the free company when the character is in one; `nil` when the id is unknown.
+- `WorldDetail(ctx, worldName)` — full census stats for a specific world, returned as `WorldDetailStats` (total population, active players, new characters in last 30 days, race breakdown, MSQ completions, 30-day new-character timeline, and a sample character). Fans out seven database queries concurrently and joins results with deterministic error precedence.
 - `Breakdown(ctx, by)` — per-`race`/`world`/`datacenter`/`region` totals and active counts; any other dimension returns `ErrInvalidDimension`.
 - `NewCharacters(ctx, since, until)` — characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`. The Chocobo milestone is the canonical definition for "new character" as it indicates the character has started playing.
 - `ExpansionCompletions(ctx)` — distinct characters per expansion that completed that expansion's MSQ.

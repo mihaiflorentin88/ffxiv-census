@@ -37,10 +37,15 @@ func (r *ProxyRateLimiter) IsAvailable(p contract.Provider) bool {
 }
 
 // Pause pauses the provider for the specified duration with a reason.
+// If the provider is already paused for longer, the existing pause is preserved.
 func (r *ProxyRateLimiter) Pause(p contract.Provider, d time.Duration, reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pausedUntil[p] = time.Now().Add(d)
+	newUntil := time.Now().Add(d)
+	if current := r.pausedUntil[p]; current.After(newUntil) {
+		return
+	}
+	r.pausedUntil[p] = newUntil
 	r.reasons[p] = reason
 }
 

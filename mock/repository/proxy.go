@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"math/rand/v2"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,48 +15,58 @@ type FakeProxyRepository struct {
 	mu      sync.Mutex
 	proxies map[int64]contract.ProxyRecord
 	nextID  int64
+	// Rand is an optional injectable RNG for deterministic RandomActive selection.
+	// When nil, a default PCG source is used.
+	Rand *rand.Rand
+	// ExistsErr is returned by Exists when set.
+	ExistsErr error
+	// InsertErr is returned by InsertIfAbsent when set.
+	InsertErr error
+	// ExistsCalls counts how many times Exists was called.
+	ExistsCalls int
+	// InsertCalls counts how many times InsertIfAbsent was called.
+	InsertCalls int
 }
 
 func NewFakeProxyRepository() *FakeProxyRepository {
 	return &FakeProxyRepository{proxies: make(map[int64]contract.ProxyRecord)}
 }
 
-func (f *FakeProxyRepository) Upsert(_ context.Context, rec contract.ProxyRecord) (int64, bool, error) {
+func (f *FakeProxyRepository) Exists(_ context.Context, protocol, ip string, port int) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.ExistsCalls++
+	if f.ExistsErr != nil {
+		return false, f.ExistsErr
+	}
+	for _, p := range f.proxies {
+		if p.Protocol == protocol && p.IP == ip && p.Port == port {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *FakeProxyRepository) InsertIfAbsent(_ context.Context, rec contract.ProxyRecord) (int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.InsertCalls++
+	if f.InsertErr != nil {
+		return 0, false, f.InsertErr
+	}
 	for _, p := range f.proxies {
 		if p.Protocol == rec.Protocol && p.IP == rec.IP && p.Port == rec.Port {
-			if rec.Country != nil {
-				p.Country = rec.Country
-			}
-			if rec.Anonymity != nil {
-				p.Anonymity = rec.Anonymity
-			}
-			if rec.UptimePercent != nil {
-				p.UptimePercent = rec.UptimePercent
-			}
-			p.Source = rec.Source
-			if rec.Status != "" {
-				p.Status = rec.Status
-			}
-			if rec.LockedBy != nil {
-				p.LockedBy = rec.LockedBy
-			}
-			if rec.LockedAt != nil {
-				p.LockedAt = rec.LockedAt
-			}
-			p.UpdatedAt = time.Now().UTC()
-			f.proxies[p.ID] = p
-			return p.ID, true, nil
+			return 0, false, nil
 		}
 	}
 	f.nextID++
 	rec.ID = f.nextID
 	rec.Status = contract.ProxyStatusInactive
+	rec.FailCount = 0
 	rec.CreatedAt = time.Now().UTC()
 	rec.UpdatedAt = rec.CreatedAt
 	f.proxies[rec.ID] = rec
-	return rec.ID, false, nil
+	return rec.ID, true, nil
 }
 
 func (f *FakeProxyRepository) Get(_ context.Context, id int64) (*contract.ProxyRecord, error) {
@@ -291,6 +303,40 @@ func (f *FakeProxyRepository) MarkFailedProxy(_ context.Context, id int64, owner
 	p.UpdatedAt = time.Now().UTC()
 	f.proxies[id] = p
 	return nil
+}
+
+func (f *FakeProxyRepository) RandomActive(_ context.Context, excludeIDs []int64) (*contract.ProxyRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	excludeSet := make(map[int64]bool, len(excludeIDs))
+	for _, id := range excludeIDs {
+		excludeSet[id] = true
+	}
+	var eligible []contract.ProxyRecord
+	for _, p := range f.proxies {
+		if p.Status != contract.ProxyStatusActive {
+			continue
+		}
+		if p.Protocol != "http" && p.Protocol != "https" && p.Protocol != "socks4" && p.Protocol != "socks5" {
+			continue
+		}
+		if excludeSet[p.ID] {
+			continue
+		}
+		eligible = append(eligible, p)
+	}
+	if len(eligible) == 0 {
+		return nil, nil
+	}
+	// Sort by ID for deterministic iteration order before random selection.
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].ID < eligible[j].ID })
+	r := f.Rand
+	if r == nil {
+		r = rand.New(rand.NewPCG(1, 2))
+	}
+	idx := r.IntN(len(eligible))
+	rec := eligible[idx]
+	return &rec, nil
 }
 
 func priority(p contract.ProxyRecord) int {

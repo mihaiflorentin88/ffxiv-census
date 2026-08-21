@@ -27,6 +27,7 @@ import (
 
 type InfrastructureContainer struct {
 	httpClient            contract.HTTPClient
+	discoveryHTTPClient   contract.HTTPClient
 	statsd                contract.StatsdClient
 	prometheusRegistry    *metrics.Registry
 	databaseDriver        contract.DatabaseDriver
@@ -65,6 +66,64 @@ func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
 	client := httpclient.New(nil)
 	s.infrastructure.httpClient = client
 	return client
+}
+
+// DiscoveryHTTPClient returns an HTTPClient that routes requests through a
+// rotating pool of active proxies for public proxy-list providers. Falls back
+// to the direct client when no proxy is available. Must not be used for
+// Lodestone or Tomestone APIs.
+func (s *ServiceContainer) DiscoveryHTTPClient() contract.HTTPClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.discoveryHTTPClientUnlocked()
+}
+
+// discoveryHTTPClientUnlocked returns the discovery HTTP client without acquiring
+// the mutex. Callers that already hold s.mu MUST use this method to avoid deadlock.
+func (s *ServiceContainer) discoveryHTTPClientUnlocked() contract.HTTPClient {
+	if s.infrastructure.discoveryHTTPClient != nil {
+		return s.infrastructure.discoveryHTTPClient
+	}
+	// Build the proxy hub using unlocked accessors since we already hold the lock.
+	driver := s.databaseUnlocked()
+	if driver == nil {
+		return s.HTTPClient()
+	}
+	repo := s.infrastructure.proxyRepository
+	if repo == nil {
+		repo = repository.NewProxyRepository(driver)
+		s.infrastructure.proxyRepository = repo
+	}
+	lockTTL := 5 * time.Minute
+	if cfg := s.configUnlocked().Proxy; cfg != nil && cfg.Consumer.LockTTL != "" {
+		if d, err := time.ParseDuration(cfg.Consumer.LockTTL); err == nil && d > 0 {
+			lockTTL = d
+		}
+	}
+	// Inline checker creation to avoid re-locking.
+	checker := s.infrastructure.proxyChecker
+	if checker == nil {
+		testURL := "https://na.finalfantasyxiv.com/lodestone/"
+		timeout := 15 * time.Second
+		if cfg := s.configUnlocked().Proxy; cfg != nil {
+			if cfg.TestURL != "" {
+				testURL = cfg.TestURL
+			}
+			if cfg.TestTimeout != "" {
+				if d, err := time.ParseDuration(cfg.TestTimeout); err == nil {
+					timeout = d
+				}
+			}
+		}
+		checker = proxyinfra.NewChecker(testURL, timeout, logging.Logger)
+		s.infrastructure.proxyChecker = checker
+	}
+	hub := proxydomain.NewProxyHub(repo, lockTTL, checker)
+	if hub == nil {
+		return s.HTTPClient()
+	}
+	s.infrastructure.discoveryHTTPClient = httpclient.NewRotatingProxyClient(hub, s.HTTPClient(), 30*time.Second)
+	return s.infrastructure.discoveryHTTPClient
 }
 
 func (s *ServiceContainer) Statsd() contract.StatsdClient {
@@ -206,7 +265,7 @@ func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
 		logging.Warn("container.tomestone", "tomestone config missing")
 		return nil
 	}
-	client, err := tomestone.NewClient(cfg, s.Logger(), s.providerRateLimiterUnlocked())
+	client, err := tomestone.NewClient(cfg, s.Logger(), tomestone.WithProviderRateLimiter(s.providerRateLimiterUnlocked()))
 	if err != nil {
 		logging.Error("container.tomestone", fmt.Sprintf("failed to create tomestone client: %v", err))
 		return nil
@@ -308,7 +367,7 @@ func (s *ServiceContainer) ProxyScrapeProvider() contract.ProxyProvider {
 	if cfg == nil || !cfg.Providers.ProxyScrape {
 		return nil
 	}
-	s.infrastructure.proxyScrapeProvider = proxyscrape.New(s.HTTPClient(), cfg.Providers.ProxyScrapeURL)
+	s.infrastructure.proxyScrapeProvider = proxyscrape.New(s.discoveryHTTPClientUnlocked(), cfg.Providers.ProxyScrapeURL)
 	return s.infrastructure.proxyScrapeProvider
 }
 
@@ -322,7 +381,7 @@ func (s *ServiceContainer) GeonodeProvider() contract.ProxyProvider {
 	if cfg == nil || !cfg.Providers.Geonode {
 		return nil
 	}
-	s.infrastructure.geonodeProvider = geonode.New(s.HTTPClient(), cfg.Providers.GeonodeURL)
+	s.infrastructure.geonodeProvider = geonode.New(s.discoveryHTTPClientUnlocked(), cfg.Providers.GeonodeURL)
 	return s.infrastructure.geonodeProvider
 }
 
@@ -336,7 +395,7 @@ func (s *ServiceContainer) PubProxyProvider() contract.ProxyProvider {
 	if cfg == nil || !cfg.Providers.PubProxy {
 		return nil
 	}
-	s.infrastructure.pubProxyProvider = pubproxy.New(s.HTTPClient(), cfg.Providers.PubProxyURL)
+	s.infrastructure.pubProxyProvider = pubproxy.New(s.discoveryHTTPClientUnlocked(), cfg.Providers.PubProxyURL)
 	return s.infrastructure.pubProxyProvider
 }
 
@@ -351,7 +410,7 @@ func (s *ServiceContainer) ProxiflyProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.ProxiflyURL, "/")
-	s.infrastructure.proxiflyProvider = textproxy.New(s.HTTPClient(), "proxifly", map[string]string{
+	s.infrastructure.proxiflyProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "proxifly", map[string]string{
 		"http":   base + "/http/data.txt",
 		"socks4": base + "/socks4/data.txt",
 		"socks5": base + "/socks5/data.txt",
@@ -370,7 +429,7 @@ func (s *ServiceContainer) TheSpeedXProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.TheSpeedXURL, "/")
-	s.infrastructure.theSpeedXProvider = textproxy.New(s.HTTPClient(), "thespeedx", map[string]string{
+	s.infrastructure.theSpeedXProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "thespeedx", map[string]string{
 		"http":   base + "/http.txt",
 		"socks4": base + "/socks4.txt",
 		"socks5": base + "/socks5.txt",
@@ -389,7 +448,7 @@ func (s *ServiceContainer) MonosansProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.MonosansURL, "/")
-	s.infrastructure.monosansProvider = textproxy.New(s.HTTPClient(), "monosans", map[string]string{
+	s.infrastructure.monosansProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "monosans", map[string]string{
 		"http":   base + "/http.txt",
 		"socks4": base + "/socks4.txt",
 		"socks5": base + "/socks5.txt",
@@ -408,7 +467,7 @@ func (s *ServiceContainer) GfpcomProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.GfpcomURL, "/")
-	s.infrastructure.gfpcomProvider = textproxy.New(s.HTTPClient(), "gfpcom", map[string]string{
+	s.infrastructure.gfpcomProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "gfpcom", map[string]string{
 		"http":   base + "/http.txt",
 		"socks4": base + "/socks4.txt",
 		"socks5": base + "/socks5.txt",
@@ -427,7 +486,7 @@ func (s *ServiceContainer) ThordataProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.ThordataURL, "/")
-	s.infrastructure.thordataProvider = textproxy.New(s.HTTPClient(), "thordata", map[string]string{
+	s.infrastructure.thordataProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "thordata", map[string]string{
 		"http": base + "/http.txt",
 	})
 	return s.infrastructure.thordataProvider
@@ -444,7 +503,7 @@ func (s *ServiceContainer) HproxyProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.HproxyURL, "/")
-	s.infrastructure.hproxyProvider = textproxy.New(s.HTTPClient(), "hproxy", map[string]string{
+	s.infrastructure.hproxyProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "hproxy", map[string]string{
 		"http":   base + "/http.txt",
 		"socks4": base + "/socks4.txt",
 		"socks5": base + "/socks5.txt",
@@ -463,7 +522,7 @@ func (s *ServiceContainer) Sage520Provider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.Sage520URL, "/")
-	s.infrastructure.sage520Provider = textproxy.New(s.HTTPClient(), "sage520", map[string]string{
+	s.infrastructure.sage520Provider = textproxy.New(s.discoveryHTTPClientUnlocked(), "sage520", map[string]string{
 		"http":   base + "/http.txt",
 		"socks4": base + "/socks4.txt",
 		"socks5": base + "/socks5.txt",
@@ -482,7 +541,7 @@ func (s *ServiceContainer) ErcinDedeogluProvider() contract.ProxyProvider {
 		return nil
 	}
 	base := strings.TrimRight(cfg.Providers.ErcinDedeogluURL, "/")
-	s.infrastructure.ercindedeogluProvider = textproxy.New(s.HTTPClient(), "ercindedeoglu", map[string]string{
+	s.infrastructure.ercindedeogluProvider = textproxy.New(s.discoveryHTTPClientUnlocked(), "ercindedeoglu", map[string]string{
 		"http":   base + "/http.txt",
 		"socks5": base + "/socks5.txt",
 	})

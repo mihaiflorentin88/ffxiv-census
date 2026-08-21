@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -46,56 +47,112 @@ type apiResponse struct {
 	Count int             `json:"count"`
 }
 
-func (c *Client) FetchProxies(ctx context.Context) ([]contract.ProxyRecord, error) {
+func (c *Client) FetchProxies(ctx context.Context, emit func(contract.ProxyRecord) error) error {
 	params := map[string]string{
 		"format": "json",
 		"limit":  "5",
 	}
 
-	resp, err := c.httpClient.Get(ctx, c.baseURL, params, map[string]string{"Accept": "application/json"})
-	if err != nil {
-		return nil, fmt.Errorf("pubproxy fetch: %w", err)
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("pubproxy: unexpected status %d", resp.StatusCode)
-	}
-
-	var apiResp apiResponse
-	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
-		return nil, fmt.Errorf("pubproxy decode: %w", err)
-	}
-
-	now := time.Now().UTC()
-	var records []contract.ProxyRecord
-
-	for _, p := range apiResp.Data {
-		var port int
-		if _, err := fmt.Sscanf(p.Port, "%d", &port); err != nil {
-			continue
+	return c.httpClient.GetStream(ctx, c.baseURL, params, map[string]string{"Accept": "application/json"}, func(statusCode int, body io.Reader) error {
+		if statusCode != 200 {
+			return fmt.Errorf("pubproxy: unexpected status %d", statusCode)
 		}
 
-		protocol := strings.ToLower(p.Type)
-		if protocol == "" {
-			protocol = "http"
+		now := time.Now().UTC()
+		decoder := json.NewDecoder(body)
+
+		// Read opening token
+		t, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("pubproxy decode: %w", err)
+		}
+		if delim, ok := t.(json.Delim); !ok || delim != '{' {
+			return fmt.Errorf("pubproxy decode: expected object, got %v", t)
 		}
 
-		rec := contract.ProxyRecord{
-			Protocol:    protocol,
-			IP:          p.IP,
-			Port:        port,
-			FirstSeenAt: now,
-			Source:      providerName,
-			Status:      contract.ProxyStatusInactive,
-		}
-		if p.Country != "" {
-			rec.Country = &p.Country
-		}
-		if p.ProxyLevel != "" {
-			rec.Anonymity = &p.ProxyLevel
-		}
-		records = append(records, rec)
-	}
+		// Find the "data" array
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return fmt.Errorf("pubproxy decode key: %w", err)
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				continue
+			}
+			if key != "data" {
+				// Skip unknown fields
+				var skip json.RawMessage
+				if err := decoder.Decode(&skip); err != nil {
+					return fmt.Errorf("pubproxy skip field: %w", err)
+				}
+				continue
+			}
 
-	return records, nil
+			// Read opening bracket of data array
+			delim, err := decoder.Token()
+			if err != nil {
+				return fmt.Errorf("pubproxy data array: %w", err)
+			}
+			if d, ok := delim.(json.Delim); !ok || d != '[' {
+				return fmt.Errorf("pubproxy data: expected array, got %v", delim)
+			}
+
+			// Decode each proxy one at a time
+			for decoder.More() {
+				var p proxyResponse
+				if err := decoder.Decode(&p); err != nil {
+					return fmt.Errorf("pubproxy decode proxy: %w", err)
+				}
+
+				var port int
+				if _, err := fmt.Sscanf(p.Port, "%d", &port); err != nil {
+					continue
+				}
+
+				protocol := strings.ToLower(p.Type)
+				if protocol == "" {
+					protocol = "http"
+				}
+
+				rec := contract.ProxyRecord{
+					Protocol:    protocol,
+					IP:          p.IP,
+					Port:        port,
+					FirstSeenAt: now,
+					Source:      providerName,
+					Status:      contract.ProxyStatusInactive,
+				}
+				if p.Country != "" {
+					rec.Country = &p.Country
+				}
+				if p.ProxyLevel != "" {
+					rec.Anonymity = &p.ProxyLevel
+				}
+				if err := emit(rec); err != nil {
+					return err
+				}
+			}
+			// Consume closing bracket of the data array.
+			if _, err := decoder.Token(); err != nil {
+				return fmt.Errorf("pubproxy close array: %w", err)
+			}
+			// Skip remaining top-level fields until closing brace.
+			for decoder.More() {
+				if _, err := decoder.Token(); err != nil {
+					return fmt.Errorf("pubproxy skip remaining key: %w", err)
+				}
+				var skip json.RawMessage
+				if err := decoder.Decode(&skip); err != nil {
+					return fmt.Errorf("pubproxy skip remaining value: %w", err)
+				}
+			}
+			// Consume closing brace of the top-level object.
+			if _, err := decoder.Token(); err != nil {
+				return fmt.Errorf("pubproxy close object: %w", err)
+			}
+			return nil
+		}
+		return nil
+	})
 }

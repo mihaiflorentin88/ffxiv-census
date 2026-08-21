@@ -153,6 +153,18 @@ func TestDashboardHandler_RaceChartLayout(t *testing.T) {
 	if !strings.Contains(body, `align: "center"`) && !strings.Contains(body, `align:"center"`) {
 		t.Error(`expected legend align: "center"`)
 	}
+	// Legend must use circular point style markers, not stretched rectangles.
+	if !strings.Contains(body, `usePointStyle: true`) {
+		t.Error("expected usePointStyle: true in race chart legend")
+	}
+	if !strings.Contains(body, `pointStyle: "circle"`) {
+		t.Error(`expected pointStyle: "circle" in race chart legend`)
+	}
+	// pointStyleWidth forces a fixed 10px marker that stretches differently
+	// from the font-derived height; it must be absent.
+	if strings.Contains(body, `pointStyleWidth`) {
+		t.Error("race chart legend must not contain pointStyleWidth")
+	}
 }
 
 func TestWorldDrilldownHandler(t *testing.T) {

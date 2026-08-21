@@ -47,6 +47,17 @@ func (s *Service) Providers() []contract.ProxyProvider {
 func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port int, country, anonymity *string, source string, uptimePercent *float64) error {
 	s.logger.InfoContext(ctx, "proxy.process_new.start", "protocol", protocol, "ip", ip, "port", port, "source", source)
 
+	// Pre-insert existence check (read-only, no database write).
+	exists, err := s.repo.Exists(ctx, protocol, ip, port)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "proxy.process_new.exists_failed", "protocol", protocol, "ip", ip, "port", port, "error", err)
+		return err
+	}
+	if exists {
+		s.logger.InfoContext(ctx, "proxy.process_new.skipped_exists", "protocol", protocol, "ip", ip, "port", port)
+		return nil
+	}
+
 	rec := contract.ProxyRecord{
 		Protocol:      protocol,
 		IP:            ip,
@@ -57,13 +68,14 @@ func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port
 		UptimePercent: uptimePercent,
 	}
 
-	id, exists, err := s.repo.Upsert(ctx, rec)
+	id, inserted, err := s.repo.InsertIfAbsent(ctx, rec)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "proxy.process_new.upsert_failed", "ip", ip, "port", port, "error", err)
+		s.logger.ErrorContext(ctx, "proxy.process_new.insert_failed", "ip", ip, "port", port, "error", err)
 		return err
 	}
-	if exists {
-		s.logger.InfoContext(ctx, "proxy.process_new.skipped_exists", "proxy_id", id, "ip", ip, "port", port)
+	if !inserted {
+		// Concurrent delivery race: another process inserted this tuple.
+		s.logger.InfoContext(ctx, "proxy.process_new.skipped_exists", "protocol", protocol, "ip", ip, "port", port)
 		return nil
 	}
 

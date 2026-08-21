@@ -2,6 +2,7 @@ package mockhttpclient
 
 import (
 	"context"
+	"io"
 
 	requestdto "github.com/mihaiflorentin88/ffxiv-census/port/dto/request"
 	responsedto "github.com/mihaiflorentin88/ffxiv-census/port/dto/response"
@@ -9,10 +10,11 @@ import (
 
 // Client is a lightweight test double for the HTTP client contract.
 type Client struct {
-	DoFunc   func(ctx context.Context, req requestdto.HTTPRequest) (responsedto.HTTPResponse, error)
-	Response responsedto.HTTPResponse
-	Err      error
-	Requests []requestdto.HTTPRequest
+	DoFunc      func(ctx context.Context, req requestdto.HTTPRequest) (responsedto.HTTPResponse, error)
+	GetStreamFn func(ctx context.Context, url string, queryParams, headers map[string]string, consume func(int, io.Reader) error) error
+	Response    responsedto.HTTPResponse
+	Err         error
+	Requests    []requestdto.HTTPRequest
 }
 
 func (c *Client) Do(ctx context.Context, req requestdto.HTTPRequest) (responsedto.HTTPResponse, error) {
@@ -59,4 +61,11 @@ func (c *Client) Delete(ctx context.Context, url string, queryParams, headers ma
 		QueryParams: queryParams,
 		Headers:     headers,
 	})
+}
+
+func (c *Client) GetStream(ctx context.Context, url string, queryParams, headers map[string]string, consume func(int, io.Reader) error) error {
+	if c.GetStreamFn != nil {
+		return c.GetStreamFn(ctx, url, queryParams, headers, consume)
+	}
+	return c.Err
 }

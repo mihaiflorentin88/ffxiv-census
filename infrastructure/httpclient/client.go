@@ -29,22 +29,25 @@ func New(httpClient *http.Client) contract.HTTPClient {
 	return &client{httpClient: httpClient}
 }
 
-func (c *client) Do(ctx context.Context, req requestdto.HTTPRequest) (responsedto.HTTPResponse, error) {
+// buildRequest validates the request DTO, encodes query parameters, applies an
+// optional per-request timeout, and returns a ready *http.Request plus a cancel
+// function that the caller MUST defer.
+func (c *client) buildRequest(ctx context.Context, req requestdto.HTTPRequest) (*http.Request, context.CancelFunc, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
-		return responsedto.HTTPResponse{}, fmt.Errorf("http method is required")
+		return nil, nil, fmt.Errorf("http method is required")
 	}
 	if strings.TrimSpace(req.URL) == "" {
-		return responsedto.HTTPResponse{}, fmt.Errorf("request url is required")
+		return nil, nil, fmt.Errorf("request url is required")
 	}
 
 	parsedURL, err := url.Parse(req.URL)
 	if err != nil {
-		return responsedto.HTTPResponse{}, fmt.Errorf("parse url %q: %w", req.URL, err)
+		return nil, nil, fmt.Errorf("parse url %q: %w", req.URL, err)
 	}
 
 	query := parsedURL.Query()
@@ -58,25 +61,35 @@ func (c *client) Do(ctx context.Context, req requestdto.HTTPRequest) (responsedt
 	if req.Timeout > 0 {
 		requestCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 	}
-	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(requestCtx, method, parsedURL.String(), bytes.NewReader(req.Body))
 	if err != nil {
-		return responsedto.HTTPResponse{}, fmt.Errorf("build request %s %s: %w", method, parsedURL.String(), err)
+		cancel()
+		return nil, nil, fmt.Errorf("build request %s %s: %w", method, parsedURL.String(), err)
 	}
 	for key, value := range req.Headers {
 		httpReq.Header.Set(key, value)
 	}
 
+	return httpReq, cancel, nil
+}
+
+func (c *client) Do(ctx context.Context, req requestdto.HTTPRequest) (responsedto.HTTPResponse, error) {
+	httpReq, cancel, err := c.buildRequest(ctx, req)
+	if err != nil {
+		return responsedto.HTTPResponse{}, err
+	}
+	defer cancel()
+
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return responsedto.HTTPResponse{}, fmt.Errorf("execute request %s %s: %w", method, parsedURL.String(), err)
+		return responsedto.HTTPResponse{}, fmt.Errorf("execute request %s %s: %w", httpReq.Method, httpReq.URL.String(), err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return responsedto.HTTPResponse{}, fmt.Errorf("read response body %s %s: %w", method, parsedURL.String(), err)
+		return responsedto.HTTPResponse{}, fmt.Errorf("read response body %s %s: %w", httpReq.Method, httpReq.URL.String(), err)
 	}
 
 	response := responsedto.HTTPResponse{
@@ -90,10 +103,42 @@ func (c *client) Do(ctx context.Context, req requestdto.HTTPRequest) (responsedt
 		if message == "" {
 			message = http.StatusText(resp.StatusCode)
 		}
-		return response, fmt.Errorf("request %s %s failed with status %d: %s", method, parsedURL.String(), resp.StatusCode, message)
+		return response, fmt.Errorf("request %s %s failed with status %d: %s", httpReq.Method, httpReq.URL.String(), resp.StatusCode, message)
 	}
 
 	return response, nil
+}
+
+func (c *client) GetStream(
+	ctx context.Context,
+	rawURL string,
+	queryParams, headers map[string]string,
+	consume func(int, io.Reader) error,
+) error {
+	if consume == nil {
+		return fmt.Errorf("stream response consumer is required")
+	}
+	req, cancel, err := c.buildRequest(ctx, requestdto.HTTPRequest{
+		Method:      http.MethodGet,
+		URL:         rawURL,
+		QueryParams: queryParams,
+		Headers:     headers,
+	})
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &transportError{err: fmt.Errorf("execute request %s %s: %w", req.Method, req.URL.String(), err)}
+	}
+	defer resp.Body.Close()
+
+	if consume == nil {
+		return fmt.Errorf("stream response consumer is required")
+	}
+	return consume(resp.StatusCode, resp.Body)
 }
 
 func (c *client) Get(ctx context.Context, url string, queryParams, headers map[string]string) (responsedto.HTTPResponse, error) {

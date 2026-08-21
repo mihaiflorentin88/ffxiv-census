@@ -1,10 +1,10 @@
 package textproxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"io"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -43,14 +43,19 @@ func (f *fakeHTTPClient) Delete(_ context.Context, _ string, _, _ map[string]str
 	return response.HTTPResponse{}, fmt.Errorf("not implemented")
 }
 
-func TestFetchProxies_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "1.2.3.4:8080\n5.6.7.8:1080\n9.10.11.12:4145\n")
-	}))
-	defer server.Close()
+func (f *fakeHTTPClient) GetStream(_ context.Context, url string, _, _ map[string]string, consume func(int, io.Reader) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	if resp, ok := f.responses[url]; ok {
+		return consume(resp.StatusCode, bytes.NewReader(resp.Body))
+	}
+	return consume(404, bytes.NewReader(nil))
+}
 
-	httpURL := server.URL + "/http.txt"
-	socks4URL := server.URL + "/socks4.txt"
+func TestFetchProxies_Success(t *testing.T) {
+	httpURL := "http://test/http.txt"
+	socks4URL := "http://test/socks4.txt"
 
 	client := New(&fakeHTTPClient{
 		responses: map[string]response.HTTPResponse{
@@ -62,7 +67,11 @@ func TestFetchProxies_Success(t *testing.T) {
 		"socks4": socks4URL,
 	})
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}
@@ -95,7 +104,11 @@ func TestFetchProxies_SkipsMalformedLines(t *testing.T) {
 		"http": "http://test/http.txt",
 	})
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}
@@ -116,7 +129,11 @@ func TestFetchProxies_PartialFailure(t *testing.T) {
 		"socks5": "http://test/socks5.txt",
 	})
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}
@@ -138,7 +155,9 @@ func TestFetchProxies_AllFail(t *testing.T) {
 		"http": "http://test/http.txt",
 	})
 
-	_, err := client.FetchProxies(context.Background())
+	err := client.FetchProxies(context.Background(), func(_ contract.ProxyRecord) error {
+		return nil
+	})
 	if err == nil {
 		t.Fatal("expected error when all sources fail")
 	}
@@ -154,7 +173,11 @@ func TestFetchProxies_StripsProtocolPrefix(t *testing.T) {
 		"http": "http://test/http.txt",
 	})
 
-	records, err := client.FetchProxies(context.Background())
+	var records []contract.ProxyRecord
+	err := client.FetchProxies(context.Background(), func(rec contract.ProxyRecord) error {
+		records = append(records, rec)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("FetchProxies: %v", err)
 	}

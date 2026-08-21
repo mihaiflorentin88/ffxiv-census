@@ -160,8 +160,8 @@ The `consume` command supports a `--proxy` flag for per-goroutine proxy isolatio
 
 ### How It Works
 
-1. Each worker goroutine calls `ProxyHub.NewProxy()` to acquire an available proxy from the database
-2. The proxy is locked to that goroutine (process name + goroutine ID)
+1. Each worker goroutine calls `ProxyHub.NewProxy(ctx, owner)` to acquire an available proxy from the database. The `owner` is constructed as `census-consume-<hostname>-p<pid>-w<workerID>` (e.g. `census-consume-worker-pod-abc-p43-w2`)
+2. The proxy is locked to that goroutine by owner name
 3. Proxy-aware Lodestone and Tomestone clients are created for that goroutine
 4. ALL requests route through the proxy — no direct requests
 5. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy
@@ -169,7 +169,9 @@ The `consume` command supports a `--proxy` flag for per-goroutine proxy isolatio
 
 ### ProxyHub — Atomic Proxy Acquisition with Test-Before-Handout
 
-`ProxyHub` (`domain/proxy/hub.go`) manages proxy acquisition for worker goroutines. Each call to `NewProxy(ctx, owner)` atomically claims the best available proxy using `FOR UPDATE SKIP LOCKED` in PostgreSQL, then **tests it before handing it to the worker**.
+`ProxyHub` (`domain/proxy/hub.go`) manages proxy acquisition for worker goroutines. Each call to `NewProxy(ctx, owner)` atomically claims the best available proxy using `FOR UPDATE SKIP LOCKED` in PostgreSQL, then **tests it before handing it to the worker**. The `owner` parameter is the command-constructed worker identity (e.g. `census-consume-<hostname>-p<pid>-w<workerID>`); the hub itself does not generate owner names.
+
+**Replacement and cooldown:** When a proxy fails during use, `replaceProxy` acquires a replacement through `NewProxy` *before* releasing or marking-failed the previous proxy. This ordering prevents a window where the worker holds no proxy at all. If building new clients from the replacement fails, the replacement claim is released and the previous proxy state is preserved for cleanup. `MarkFailed` and `Release` errors on the old proxy are logged but do not prevent the replacement from being used. A 429/rate-limit error is a provider cooldown, not a dead proxy — it pauses the provider in the goroutine-local rate limiter and never triggers a swap.
 
 **Test-before-handout flow** (up to 3 attempts):
 
@@ -193,6 +195,19 @@ This ensures workers get the most reliable proxies from the scan pool. The scan 
 **Why test-before-handout:** Previously, `NewProxy` returned proxies from the database without verifying they still work. Workers would receive dead proxies and waste time on connection failures before marking them failed. Now the proxy is tested at claim time — if it can't reach the Lodestone, it's immediately marked failed and the next candidate is tried. This eliminates the "dead proxy on first job" problem entirely.
 
 **Why this design:** Free proxies are inherently unreliable. The scan identifies which proxies can reach Lodestone right now. The ClaimProxy query prioritizes those, reducing wasted time on dead proxies. When a proxy fails during use, `MarkFailed` increments its `fail_count` and sets it to `inactive`, preventing other workers from picking it up until the next scan re-validates it.
+
+### Random Unlocked Discovery Selection
+
+`ProxyHub` also exposes `RandomActive(ctx)` and `SwapActive(ctx, current)` for public proxy-list provider scraping. These methods return an unlocked, untested proxy selected at random from the active pool. They intentionally neither claim nor mutate locks and do not mark a proxy inactive when an external provider blocks it.
+
+- `RandomActive` returns any active proxy (no exclusion).
+- `SwapActive` returns a different active proxy than `current`, falling back to `RandomActive` when `current` is nil.
+
+**These methods must not be used for Lodestone APIs.** Lodestone workers must use `NewProxy` so proxies are checked and atomically owner-locked. The random selection is only for the discovery pipeline, where the rotating discovery HTTP client (`DiscoveryHTTPClient`) routes provider requests through active proxies and swaps on 403/429/5xx or transport failure.
+
+**Discovery streaming:** The `proxy discover` command streams each provider's response directly to RabbitMQ via a callback. Providers never accumulate complete response bodies or record lists in memory. This keeps the discovery job's memory footprint bounded regardless of provider response size, fitting within the existing 1 GiB Kubernetes pod limit.
+
+**Discovery deduplication:** Each emitted tuple is checked read-only against PostgreSQL before RabbitMQ publication. Existing rows are counted as `skipped_existing` and never published. Lookup errors fail closed per provider — a failed `Exists` query stops that provider's callback without publishing. The consumer independently checks then inserts conflict-safely via `INSERT ... ON CONFLICT DO NOTHING`. Migration `00012_deduplicate_proxies.sql` removes any legacy exact duplicates and restores the `(protocol, ip, port)` tuple uniqueness invariant, keeping the newest row by `updated_at DESC, id DESC`.
 
 ### Proxy Domain Object
 
@@ -249,11 +264,12 @@ All proxy protocols are supported end-to-end:
 
 ### Container Accessors
 
-- `container.Load.ProxyHub(owner)` — creates a ProxyHub for the given owner (reads lock TTL from `[proxy.consumer]` config)
+- `container.Load.ProxyHub()` — creates a ProxyHub (reads lock TTL from `[proxy.consumer]` config). The owner is constructed by the CLI command (e.g. `census-consume-<hostname>-p<pid>-w<workerID>`) and passed to `RunEventsWithProxy`, not to the hub accessor
 - `container.Load.ProxyCensusHandlers(lodestone, tomestone, rateLimiter)` — handler registry wired to proxy-aware clients
 - `container.Load.ProxyRepository()` — proxy persistence layer
 - `container.Load.ProxyScrapeProvider()` / `GeonodeProvider()` — proxy discovery providers
 - `container.Load.ProxyChecker()` — proxy health checker
+- `container.Load.DiscoveryHTTPClient()` — rotating-proxy HTTP client for public proxy-list providers. Falls back to the direct client when no active proxy exists. Must not be used for Lodestone or Tomestone APIs
 
 ### Configuration
 
@@ -303,8 +319,7 @@ When troubleshooting proxy issues, the following diagnostic fields are logged:
 - **`scraper`** — godestone scraper instance pointer (e.g. `0x1fd97eeaf9d0`) — useful for verifying that each goroutine has its own scraper
 - **`lodestone_client`** — LodestoneClient pointer — useful for verifying client isolation
 - **`worker_id`** — worker goroutine index
-- **`goroutine_id`** — Go runtime goroutine ID
 - **`handler`** — handler instance pointer
-- **`owner`** — lock owner name (e.g. `census-consume-g5-p43`)
+- **`owner`** — lock owner name in the format `census-consume-<hostname>-p<pid>-w<workerID>` (e.g. `census-consume-worker-pod-abc-p43-w2`)
 
 These fields appear in `worker.job_start`, `lodestone.scrape_retry`, `handler.achievement_census`, and `worker.proxy_bad`/`worker.proxy_reacquired` log entries.

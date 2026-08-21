@@ -25,9 +25,14 @@ func (f *FakeProvider) Name() string {
 	return f.name
 }
 
-func (f *FakeProvider) FetchProxies(_ context.Context) ([]contract.ProxyRecord, error) {
+func (f *FakeProvider) FetchProxies(_ context.Context, emit func(contract.ProxyRecord) error) error {
 	if f.fetchErr != nil {
-		return nil, f.fetchErr
+		return f.fetchErr
 	}
-	return f.proxies, nil
+	for _, p := range f.proxies {
+		if err := emit(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }

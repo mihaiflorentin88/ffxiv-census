@@ -16,7 +16,7 @@ container.Load = serviceContainer
 
 ## Usage Tips
 
-1. Always request dependencies through container accessors (e.g., `container.Load.Database()`, `container.Load.Queue()`, `container.Load.LodestoneClient()`, `container.Load.TomestoneClient()`, `container.Load.ProxyHub(owner)`).
+1. Always request dependencies through container accessors (e.g., `container.Load.Database()`, `container.Load.Queue()`, `container.Load.LodestoneClient()`, `container.Load.TomestoneClient()`, `container.Load.ProxyHub()`).
 2. Keep constructors pure; inject interfaces from `port/contract`.
 3. Infrastructure accessors are lazy singletons, so the first call constructs the adapter and subsequent calls reuse it.
 4. When adding a new service, update `DomainContainer` and document it here.
@@ -27,7 +27,8 @@ Previous versions used MySQL, then SQLite. The project now runs on PostgreSQL. T
 
 **Proxy accessors:**
 - `ProxyRepository()` — proxy persistence layer (`contract.ProxyRepository`)
-- `ProxyHub(owner)` — creates a per-goroutine proxy acquisition hub. Reads lock TTL from `[proxy.consumer].lock_ttl` config. Each call creates a new instance (not cached) since different owners need different hubs
+- `ProxyHub()` — creates a proxy acquisition hub. Reads lock TTL from `[proxy.consumer].lock_ttl` config. The owner is constructed by the CLI command (e.g. `census-consume-<hostname>-p<pid>-w<workerID>`) and passed to `RunEventsWithProxy`, not to the hub accessor
 - `ProxyCensusHandlers(lodestone, tomestone, rateLimiter)` — handler registry wired to proxy-aware clients. Used by `consume --proxy` — each goroutine creates its own handlers with its own proxy-aware clients
 - `ProxyScrapeProvider()` / `GeonodeProvider()` — proxy discovery providers
 - `ProxyChecker()` — proxy health checker (HTTP/SOCKS GET to Lodestone)
+- `DiscoveryHTTPClient()` — rotating-proxy HTTP client for public proxy-list providers. Falls back to the direct client when no active proxy exists. Must not be used for Lodestone or Tomestone APIs

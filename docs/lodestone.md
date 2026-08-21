@@ -20,7 +20,7 @@ The Lodestone client serves as the **primary data provider for `character-census
 
 ## Rate limiting
 
-A token bucket (`golang.org/x/time/rate`) gates **every** method call: one token, refilled at `rate_limit` per second.
+A token bucket (`golang.org/x/time/rate`) gates **every** method call: one token, refilled at `rate_limit` per second. Tokens are charged per HTTP attempt — each retry acquires a new token from the bucket.
 
 ```toml
 [lodestone]
@@ -35,7 +35,9 @@ max_retries = 3
 
 Environment overrides work like the other sections: `LODESTONE_RATE_LIMIT=0.5`, `LODESTONE_MAX_RETRIES=5`. Note that rates configured above `1.0` are clamped to `1.0` for safety.
 
-**Limitation:** throttling is per *method call*, not per HTTP request. `FetchCharacter` issues 2 internal requests (profile page + class/job page), so character throughput is up to `2 × rate_limit`. A per-request throttle would require forking godestone — accepted for now.
+**Process-wide vs per-proxy buckets:** The non-proxy consumer shares a single process-wide token bucket at `rate_limit` req/s. In proxy mode, each owner-locked proxy goroutine gets its own independent token bucket at `[proxy.consumer].lodestone_rate_limit` req/s (default 1.0). This means N proxy goroutines can collectively make up to N requests/second to Lodestone, each through a different IP.
+
+**Limitation:** throttling is per *method call*, not per HTTP request. `FetchCharacter` is a single scraper call that internally performs 2 HTTP requests (profile page + class/job page) behind one token. Retries consume new tokens, but each `FetchCharacter` invocation charges one token regardless of its internal request count. A per-request throttle would require deeper godestone changes — accepted for now.
 
 ## Error handling & Retry policy
 
