@@ -20,19 +20,25 @@ import (
 // Worker consumes jobs from configured event types and dispatches them to registered
 // handlers using push-based consumption from the queue.
 type Worker struct {
-	queue    contract.Queue
-	handlers *handler.Registry
-	logger   contract.Logger
+	queue       contract.Queue
+	handlers    *handler.Registry
+	logger      contract.Logger
+	rateLimiter contract.ProviderRateLimiter
 }
 
-func New(q contract.Queue, h *handler.Registry, logger contract.Logger, _ ...contract.ProviderRateLimiter) *Worker {
+func New(q contract.Queue, h *handler.Registry, logger contract.Logger, rateLimiter ...contract.ProviderRateLimiter) *Worker {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	var rl contract.ProviderRateLimiter
+	if len(rateLimiter) > 0 {
+		rl = rateLimiter[0]
+	}
 	return &Worker{
-		queue:    q,
-		handlers: h,
-		logger:   logger,
+		queue:       q,
+		handlers:    h,
+		logger:      logger,
+		rateLimiter: rl,
 	}
 }
 
@@ -68,6 +74,14 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		if !ok {
 			w.logger.ErrorContext(ctx, "worker.missing_handler", slog.String("event_type", job.Type))
 			return fmt.Errorf("no handler registered for event %s", job.Type)
+		}
+
+		// Wait for required providers to become available before processing.
+		// This avoids wasting queue round-trips when providers are rate-limited.
+		if w.rateLimiter != nil {
+			if err := w.waitForProviders(ctx, job.Type); err != nil {
+				return err
+			}
 		}
 
 		start := time.Now()
@@ -133,6 +147,37 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		return nil
 	}
 	return err
+}
+
+// waitForProviders blocks until the providers required by the event type are available.
+// - id-sweep: dual-source (Lodestone or Tomestone)
+// - character-census: dual-source (Lodestone or Tomestone)
+// - achievement-census: Lodestone-only
+func (w *Worker) waitForProviders(ctx context.Context, eventType string) error {
+	switch eventType {
+	case handler.EventAchievementCensus:
+		// Lodestone-only: wait for Lodestone to become available.
+		if !w.rateLimiter.IsAvailable(contract.ProviderLodestone) {
+			w.logger.InfoContext(ctx, "worker.waiting_for_provider", slog.String("event_type", eventType), slog.String("provider", "lodestone"))
+			return w.rateLimiter.WaitUntilAvailable(ctx, contract.ProviderLodestone)
+		}
+	case handler.EventIDSweep, handler.EventCharacterCensus:
+		// Dual-source: if both are unavailable, wait for the earliest one.
+		lodestoneAvail := w.rateLimiter.IsAvailable(contract.ProviderLodestone)
+		tomestoneAvail := w.rateLimiter.IsAvailable(contract.ProviderTomestone)
+		if !lodestoneAvail && !tomestoneAvail {
+			w.logger.InfoContext(ctx, "worker.waiting_for_provider", slog.String("event_type", eventType), slog.String("provider", "any"))
+			earliest := w.rateLimiter.EarliestAvailable()
+			if !earliest.IsZero() {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Until(earliest)):
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // isProxyError returns true if the error indicates a proxy connection failure.

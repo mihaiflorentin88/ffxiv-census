@@ -70,7 +70,7 @@ pause affected provider queues while letting others continue.`,
 			return runProxyConsumer(ctx, q, eventTypes, concurrency)
 		}
 
-		w := worker.New(q, container.Load.Handlers(), container.Load.Logger())
+		w := worker.New(q, container.Load.Handlers(), container.Load.Logger(), container.Load.ProviderRateLimiter())
 		return w.RunEvents(ctx, eventTypes, concurrency)
 	},
 }

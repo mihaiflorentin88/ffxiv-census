@@ -172,31 +172,14 @@ workers:
     volumeMounts: []
     volumes: []
   instances:
-    # --- Per-event-type consumers (push-based from RabbitMQ) ---
-    - name: id-sweep
+    # --- Census consumer (all census event types, rate-limited) ---
+    - name: census-consumer
       replicaCount: 1
       command:
         - /app/ffxiv-census
         - consume
-        - id-sweep
         - -c
         - "50"
-    - name: character-census
-      replicaCount: 1
-      command:
-        - /app/ffxiv-census
-        - consume
-        - character-census
-        - -c
-        - "30"
-    - name: achievement-census
-      replicaCount: 1
-      command:
-        - /app/ffxiv-census
-        - consume
-        - achievement-census
-        - -c
-        - "10"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
     - name: proxy-id-sweep
       replicaCount: 1
