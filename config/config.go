@@ -99,7 +99,7 @@ func (p *PostgresConfig) GetDSN() string {
 type RabbitMQConfig struct {
 	URL      string `mapstructure:"url"`
 	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
+	AMQPPort int    `mapstructure:"amqp_port"`
 	User     string `mapstructure:"user"`
 	Password string `mapstructure:"password"`
 	Vhost    string `mapstructure:"vhost"`
@@ -113,7 +113,7 @@ func (r *RabbitMQConfig) GetURL() string {
 	if host == "" {
 		host = "localhost"
 	}
-	port := r.Port
+	port := r.AMQPPort
 	if port == 0 {
 		port = 5672
 	}

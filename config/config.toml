@@ -37,7 +37,7 @@ max_idle_conns = 5
 [rabbitmq]
 url      = "amqp://guest:guest@localhost:5672/ffxiv-census"
 host     = "localhost"
-port     = 5672
+amqp_port = 5672
 user     = "guest"
 password = "guest"
 vhost    = "ffxiv-census"
