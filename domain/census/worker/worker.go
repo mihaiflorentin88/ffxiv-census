@@ -74,24 +74,28 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 	w.logger.InfoContext(ctx, "worker.start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 
-	processJob := func(ctx context.Context, job contract.QueueJob) error {
+	// Capture the outer context (signal-aware) for shutdown checks.
+	// The inner ctx from Consume is processCtx (not cancelled on shutdown).
+	shutdownCtx := ctx
+
+	processJob := func(processCtx context.Context, job contract.QueueJob) error {
 		h, ok := w.handlers.Get(job.Type)
 		if !ok {
-			w.logger.ErrorContext(ctx, "worker.missing_handler", slog.String("event_type", job.Type))
+			w.logger.ErrorContext(processCtx, "worker.missing_handler", slog.String("event_type", job.Type))
 			return fmt.Errorf("no handler registered for event %s", job.Type)
 		}
 
 		// Wait for required providers to become available before processing.
-		// This avoids wasting queue round-trips when providers are rate-limited.
+		// Use shutdownCtx so we can exit during graceful shutdown.
 		if w.rateLimiter != nil {
-			if err := w.waitForProviders(ctx, job.Type); err != nil {
+			if err := w.waitForProviders(shutdownCtx, job.Type); err != nil {
 				return err
 			}
 		}
 
 		start := time.Now()
 		w.logger.InfoContext(
-			ctx, "worker.job_start",
+			processCtx, "worker.job_start",
 			slog.String("event_type", job.Type),
 			slog.String("handler", fmt.Sprintf("%p", h)),
 		)
@@ -105,19 +109,19 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 					err = fmt.Errorf("worker panic: %v\nstack: %s", r, debug.Stack())
 				}
 			}()
-			next, err = h.Handle(ctx, job.Payload)
+			next, err = h.Handle(processCtx, job.Payload)
 		}()
 
 		if err != nil {
 			w.logger.WarnContext(
-				ctx, "worker.job_retry",
+				processCtx, "worker.job_retry",
 				slog.String("event_type", job.Type),
 				slog.Duration("duration", time.Since(start)),
 				slog.Any("error", err),
 			)
 			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
 				select {
-				case <-ctx.Done():
+				case <-shutdownCtx.Done():
 					return err
 				case <-time.After(200 * time.Millisecond):
 				}
@@ -126,7 +130,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 
 		w.logger.InfoContext(
-			ctx, "worker.job_done",
+			processCtx, "worker.job_done",
 			slog.String("event_type", job.Type),
 			slog.Duration("duration", time.Since(start)),
 			slog.Int("chained", len(next)),
@@ -134,9 +138,9 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 		// Publish downstream jobs individually.
 		for _, nextJob := range next {
-			if pubErr := w.queue.Publish(ctx, nextJob); pubErr != nil {
+			if pubErr := w.queue.Publish(processCtx, nextJob); pubErr != nil {
 				w.logger.ErrorContext(
-					ctx, "worker.publish_error",
+					processCtx, "worker.publish_error",
 					slog.String("event_type", nextJob.Type),
 					slog.Any("error", pubErr),
 				)
@@ -332,21 +336,29 @@ func (w *Worker) proxyWorkerLoop(
 
 	processJob := func(ctx context.Context, job contract.QueueJob) error {
 		// Check proxy ownership and extend the lock.
+		// Use a short-lived context so shutdown doesn't block lock extension.
+		lockCtx, lockCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		lockTTL := proxyHub.LockTTL()
-		canUse, canErr := proxy.CanUse(ctx, owner, lockTTL)
+		canUse, canErr := proxy.CanUse(lockCtx, owner, lockTTL)
+		lockCancel()
 		if canErr != nil {
 			w.logger.WarnContext(ctx, "worker.proxy_canuse_error", slog.Int("worker_id", workerID), slog.Any("error", canErr))
 		}
 		if !canUse {
 			w.logger.InfoContext(ctx, "worker.proxy_lost", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
-			newProxy, perr := proxyHub.NewProxy(ctx, owner)
+			acquireCtx, acquireCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			newProxy, perr := proxyHub.NewProxy(acquireCtx, owner)
+			acquireCancel()
 			if perr != nil {
 				return fmt.Errorf("proxy re-acquire: %w", perr)
 			}
 			if newProxy == nil {
 				return fmt.Errorf("no proxy available for worker %d", workerID)
 			}
-			_ = proxy.Release(context.Background(), owner)
+			// Release old proxy before switching.
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = proxy.Release(releaseCtx, owner)
+			releaseCancel()
 			proxy = newProxy
 			w.logger.InfoContext(ctx, "worker.proxy_reacquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 
