@@ -270,8 +270,7 @@ cronjobs:
         - character-census
         - --limit
         - "500"
-        - --chunk-size
-        - "1"
+
     - name: publish-id-sweep
       schedule: "*/10 * * * *"
       command:
