@@ -320,8 +320,13 @@ func (w *Worker) proxyWorkerLoop(
 	// Release proxy on exit (graceful shutdown or error).
 	defer func() {
 		if proxy != nil {
-			_ = proxy.Release(context.Background(), owner)
-			w.logger.InfoContext(claimCtx, "worker.proxy_released", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer releaseCancel()
+			if err := proxy.Release(releaseCtx, owner); err != nil {
+				w.logger.WarnContext(releaseCtx, "worker.proxy_release_error", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.Any("error", err))
+			} else {
+				w.logger.InfoContext(releaseCtx, "worker.proxy_released", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+			}
 		}
 	}()
 

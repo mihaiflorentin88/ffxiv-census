@@ -482,9 +482,17 @@ func mergeDeliveries(ctx context.Context, channels []<-chan amqp.Delivery) <-cha
 		wg.Add(1)
 		go func(c <-chan amqp.Delivery) {
 			defer wg.Done()
-			for msg := range c {
+			for {
 				select {
-				case merged <- msg:
+				case msg, ok := <-c:
+					if !ok {
+						return
+					}
+					select {
+					case merged <- msg:
+					case <-ctx.Done():
+						return
+					}
 				case <-ctx.Done():
 					return
 				}
