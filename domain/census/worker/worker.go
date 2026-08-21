@@ -62,6 +62,11 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 	}
 
 	for _, eventType := range eventTypes {
+		// Skip validation for failed queue names — they don't have handlers,
+		// but messages from failed queues have the original event type as routing key.
+		if strings.HasSuffix(eventType, ".failed") {
+			continue
+		}
 		if _, ok := w.handlers.Get(eventType); !ok {
 			return fmt.Errorf("no handler registered for event %q", eventType)
 		}
@@ -154,6 +159,11 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 // - character-census: dual-source (Lodestone or Tomestone)
 // - achievement-census: Lodestone-only
 func (w *Worker) waitForProviders(ctx context.Context, eventType string) error {
+	// Failed queue retries don't need provider checks — the original handler
+	// will check providers when it processes the message.
+	if strings.HasSuffix(eventType, ".failed") {
+		return nil
+	}
 	switch eventType {
 	case handler.EventAchievementCensus:
 		// Lodestone-only: wait for Lodestone to become available.

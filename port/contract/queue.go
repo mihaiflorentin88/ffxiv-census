@@ -25,10 +25,11 @@ type Queue interface {
 	//             it is sent to the dead-letter queue
 	// Consume blocks until ctx is cancelled.
 	Consume(ctx context.Context, eventTypes []string, concurrency int, handler func(ctx context.Context, job QueueJob) error) error
-	// ConsumeFailed consumes from all per-event-type failed queues and
+	// ConsumeFailed consumes from per-event-type failed queues and
 	// re-publishes messages back to the main queues. Messages that have
 	// exceeded maxFailedAttempts are permanently discarded.
-	ConsumeFailed(ctx context.Context, concurrency int) error
+	// If eventTypes is empty, consumes from all failed queues.
+	ConsumeFailed(ctx context.Context, eventTypes []string, concurrency int) error
 	// Close closes the underlying connection.
 	Close() error
 }

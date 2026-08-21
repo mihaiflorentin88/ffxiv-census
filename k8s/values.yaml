@@ -172,12 +172,14 @@ workers:
     volumeMounts: []
     volumes: []
   instances:
-    # --- Census consumer (all census event types, rate-limited) ---
+    # --- Census consumer (all census events + failed retries, rate-limited) ---
     - name: census-consumer
       replicaCount: 1
       command:
         - /app/ffxiv-census
         - consume
+        - --events
+        - "id-sweep,character-census,achievement-census,id-sweep.failed,character-census.failed,achievement-census.failed"
         - -c
         - "50"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
@@ -226,13 +228,15 @@ workers:
         - scan-proxy
         - -c
         - "50"
-    # --- Failed queue retry consumer ---
-    - name: failed-retry
+    # --- Census failed queue retry consumer ---
+    - name: census-retry
       replicaCount: 1
       command:
         - /app/ffxiv-census
         - consume
         - failed
+        - --events
+        - "id-sweep,character-census,achievement-census"
         - -c
         - "10"
 

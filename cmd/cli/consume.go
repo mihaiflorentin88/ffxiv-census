@@ -82,6 +82,7 @@ func init() {
 	consumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 	consumeCmd.Flags().Bool("proxy", false, "run in proxy mode: each goroutine acquires its own proxy from the pool")
 	consumeFailedCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
+	consumeFailedCmd.Flags().StringP("events", "e", "all", "comma-separated event types for failed queues (e.g. id-sweep,character-census or 'all')")
 }
 
 // runProxyConsumer starts the census consumer in proxy mode. Each worker goroutine
@@ -144,11 +145,25 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 var consumeFailedCmd = &cobra.Command{
 	Use:   "failed",
 	Short: "Consume from failed queues and re-publish to main queues",
-	Long: `Run a long-running consumer that reads from all per-event-type failed queues
+	Long: `Run a long-running consumer that reads from per-event-type failed queues
 and re-publishes messages back to the main queues for retry. Messages that have
-exceeded 100 failure attempts are permanently discarded.`,
+exceeded 100 failure attempts are permanently discarded.
+
+Use --events to filter which failed queues to consume from (e.g. --events "id-sweep,character-census").`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
+		eventsFlag, _ := cmd.Flags().GetString("events")
+
+		var eventTypes []string
+		if eventsFlag != "" && eventsFlag != "all" {
+			parts := strings.Split(eventsFlag, ",")
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					eventTypes = append(eventTypes, p)
+				}
+			}
+		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -158,7 +173,7 @@ exceeded 100 failure attempts are permanently discarded.`,
 			return fmt.Errorf("queue not initialised")
 		}
 
-		container.Load.Logger().InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency))
-		return q.ConsumeFailed(ctx, concurrency)
+		container.Load.Logger().InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency), slog.Any("event_types", eventTypes))
+		return q.ConsumeFailed(ctx, eventTypes, concurrency)
 	},
 }

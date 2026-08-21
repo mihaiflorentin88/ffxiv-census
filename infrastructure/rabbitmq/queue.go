@@ -169,19 +169,25 @@ func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency in
 	return nil
 }
 
-// ConsumeFailed consumes from all per-event-type failed queues and re-publishes
+// ConsumeFailed consumes from per-event-type failed queues and re-publishes
 // messages back to the main exchange. Each message's attempt count is incremented.
 // Messages that have exceeded maxFailedAttempts (100) are permanently discarded.
-// Blocks until ctx is cancelled.
-func (q *Queue) ConsumeFailed(ctx context.Context, concurrency int) error {
+// If eventTypes is empty, consumes from all failed queues.
+func (q *Queue) ConsumeFailed(ctx context.Context, types []string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = 4
 	}
 
 	// Build list of failed queue names.
 	var failedQueues []string
-	for _, et := range eventTypes() {
-		failedQueues = append(failedQueues, "census."+et+".failed")
+	if len(types) == 0 {
+		for _, et := range eventTypes() {
+			failedQueues = append(failedQueues, "census."+et+".failed")
+		}
+	} else {
+		for _, et := range types {
+			failedQueues = append(failedQueues, "census."+et+".failed")
+		}
 	}
 
 	stopClaiming, stopClaimingCancel := context.WithCancel(context.Background())

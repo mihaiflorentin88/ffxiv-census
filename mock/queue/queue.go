@@ -54,4 +54,4 @@ func (f *Fake) Consume(ctx context.Context, _ []string, _ int, handler func(ctx 
 func (f *Fake) Close() error { return nil }
 
 // ConsumeFailed is a no-op for the mock queue.
-func (f *Fake) ConsumeFailed(_ context.Context, _ int) error { return nil }
+func (f *Fake) ConsumeFailed(_ context.Context, _ []string, _ int) error { return nil }
