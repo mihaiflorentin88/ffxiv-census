@@ -114,13 +114,31 @@ func (q *Queue) Publish(ctx context.Context, job contract.QueueJob) error {
 // Consume starts concurrency consumers for the given event types. Each message
 // is dispatched to handler. On handler return:
 //   - nil → ack
-//   - error → publish to failed queue with TTL (retry) or without TTL (permanent)
+//   - error → retry with exponential backoff; after maxAttempts → dead-letter
 //
-// Consume blocks until ctx is cancelled.
+// Consume blocks until ctx is cancelled. On cancellation, it stops accepting
+// new messages but allows in-flight handlers to finish before returning.
 func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency int, handler func(ctx context.Context, job contract.QueueJob) error) error {
 	if concurrency <= 0 {
 		concurrency = 4
 	}
+
+	// stopClaiming is cancelled when the signal arrives, causing workers to
+	// stop accepting new messages. processCtx stays alive so in-flight
+	// handlers can finish their work.
+	stopClaiming, stopClaimingCancel := context.WithCancel(context.Background())
+	defer stopClaimingCancel()
+
+	// Watch for the signal context to cancel stopClaiming.
+	go func() {
+		<-ctx.Done()
+		stopClaimingCancel()
+	}()
+
+	// processCtx is used for in-flight handler calls — it is NOT cancelled
+	// by the signal, so handlers can complete gracefully.
+	processCtx, processCancel := context.WithCancel(context.Background())
+	defer processCancel()
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
@@ -129,7 +147,7 @@ func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency in
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			if err := q.consumeWorker(ctx, eventTypes, workerID, handler); err != nil && ctx.Err() == nil {
+			if err := q.consumeWorker(stopClaiming, processCtx, eventTypes, workerID, handler); err != nil && stopClaiming.Err() == nil {
 				errCh <- err
 			}
 		}(i)
@@ -151,7 +169,9 @@ func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency in
 }
 
 // consumeWorker creates a dedicated channel and consumes from the specified queues.
-func (q *Queue) consumeWorker(ctx context.Context, eventTypes []string, workerID int, handler func(ctx context.Context, job contract.QueueJob) error) error {
+// stopClaiming controls when to stop accepting new messages.
+// processCtx is passed to handlers so they can finish during graceful shutdown.
+func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.Context, eventTypes []string, workerID int, handler func(ctx context.Context, job contract.QueueJob) error) error {
 	ch, err := q.conn.Channel()
 	if err != nil {
 		return fmt.Errorf("worker %d channel: %w", workerID, err)
@@ -172,11 +192,11 @@ func (q *Queue) consumeWorker(ctx context.Context, eventTypes []string, workerID
 		deliveries = append(deliveries, del)
 	}
 
-	merged := mergeDeliveries(ctx, deliveries)
+	merged := mergeDeliveries(stopClaiming, deliveries)
 
 	for msg := range merged {
 		select {
-		case <-ctx.Done():
+		case <-stopClaiming.Done():
 			_ = msg.Nack(false, true)
 			return nil
 		default:
@@ -187,9 +207,9 @@ func (q *Queue) consumeWorker(ctx context.Context, eventTypes []string, workerID
 			Payload: msg.Body,
 		}
 
-		err := handler(ctx, job)
+		err := handler(processCtx, job)
 		if err != nil {
-			q.handleFailure(ctx, msg, err)
+			q.handleFailure(processCtx, msg, err)
 		} else {
 			_ = msg.Ack(false)
 		}
