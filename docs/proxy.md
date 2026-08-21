@@ -120,7 +120,7 @@ geonode     = true
 |-------|---------|-------------|-------------|
 | `test_url` | `https://na.finalfantasyxiv.com/lodestone/` | `PROXY_TEST_URL` | URL to test proxies against |
 | `test_timeout` | `15s` | `PROXY_TEST_TIMEOUT` | Timeout per proxy test request |
-| `scan_batch_size` | `0` | `PROXY_SCAN_BATCH_SIZE` | Max proxies to queue per scan cron (0 = no limit) |
+| `scan_batch_size` | `5000` | `PROXY_SCAN_BATCH_SIZE` | Max proxies to queue per scan cron (0 = no limit) |
 | `dead_threshold_days` | `2` | `PROXY_DEAD_THRESHOLD_DAYS` | Days inactive before marking dead |
 | `dead_scan_interval_days` | `3` | `PROXY_DEAD_SCAN_INTERVAL_DAYS` | Days between dead proxy re-scans |
 | `fail_count_threshold` | `5` | `PROXY_FAIL_COUNT_THRESHOLD` | Consecutive failures before dead |

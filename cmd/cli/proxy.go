@@ -167,6 +167,13 @@ var proxyScanCmd = &cobra.Command{
 		if limit < 0 {
 			limit = 0
 		}
+		// When flag not explicitly set, fall back to config.
+		if !cmd.Flags().Changed("limit") {
+			cfg := container.Load.Config().Proxy
+			if cfg != nil && cfg.ScanBatchSize > 0 {
+				limit = cfg.ScanBatchSize
+			}
+		}
 		if limit == 0 {
 			logger.InfoContext(ctx, "proxy.scan.querying", "limit", "all")
 		} else {

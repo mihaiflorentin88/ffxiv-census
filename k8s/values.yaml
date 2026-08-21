@@ -271,6 +271,8 @@ cronjobs:
         - character-census
         - --limit
         - "5000"
+        - --chunk-size
+        - 1
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
@@ -280,6 +282,8 @@ cronjobs:
         - --auto
         - --count
         - "10000"
+        - --chunk-size
+        - 1
 
     # - name: publish-fill-gaps commented for now, please do not remove or uncomment
     #   schedule: "0 3 1 * *"
@@ -302,3 +306,5 @@ cronjobs:
         - /app/ffxiv-census
         - proxy
         - scan
+        - --limit
+        - 0
