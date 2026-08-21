@@ -269,7 +269,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "600"
+        - "500"
 
     - name: publish-id-sweep
       schedule: "*/1 * * * *"
@@ -279,7 +279,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --count
-        - "650"
+        - "400"
         - --chunk-size
         - "1"
 
@@ -299,4 +299,4 @@ cronjobs:
         - proxy
         - discover
         - --limit
-        - "600"
+        - "400"
