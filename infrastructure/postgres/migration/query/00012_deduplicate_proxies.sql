@@ -1,4 +1,5 @@
 -- +goose Up
+-- +goose StatementBegin
 -- Remove exact (protocol, ip, port) duplicates, keeping the most recently
 -- updated row, then restore the tuple uniqueness constraint if absent.
 WITH ranked AS (
@@ -13,7 +14,9 @@ DELETE FROM proxies p
 USING ranked r
 WHERE p.id = r.id
   AND r.duplicate_rank > 1;
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -29,6 +32,7 @@ BEGIN
     END IF;
 END
 $$;
+-- +goose StatementEnd
 
 -- +goose Down
 -- Irreversible data cleanup; retain the original tuple uniqueness invariant.
