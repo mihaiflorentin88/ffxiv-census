@@ -262,6 +262,14 @@ func (w *Worker) proxyWorkerLoop(
 	handlers := newHandlers(lodestoneClient, tomestoneClient, proxyLimiter)
 
 	// Use queue.Consume with a handler that uses proxy-aware clients.
+	// Release proxy on exit (graceful shutdown or error).
+	defer func() {
+		if proxy != nil {
+			_ = proxy.Release(context.Background(), owner)
+			w.logger.InfoContext(claimCtx, "worker.proxy_released", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+		}
+	}()
+
 	processJob := func(ctx context.Context, job contract.QueueJob) error {
 		// Check proxy ownership and extend the lock.
 		lockTTL := proxyHub.LockTTL()

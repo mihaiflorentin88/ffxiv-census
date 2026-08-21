@@ -52,3 +52,6 @@ func (f *Fake) Consume(ctx context.Context, _ []string, _ int, handler func(ctx 
 
 // Close is a no-op.
 func (f *Fake) Close() error { return nil }
+
+// ConsumeFailed is a no-op for the mock queue.
+func (f *Fake) ConsumeFailed(_ context.Context, _ int) error { return nil }

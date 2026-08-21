@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	exchangeMain   = "census"
-	headerAttempts = "x-attempts"
-	maxAttempts    = 5
-	backoffBaseSec = 5
-	maxBackoffSec  = 3600
+	exchangeMain      = "census"
+	headerAttempts    = "x-attempts"
+	maxAttempts       = 5
+	maxFailedAttempts = 100
+	backoffBaseSec    = 5
+	maxBackoffSec     = 3600
 )
 
 // Queue is a RabbitMQ-backed work queue implementing contract.Queue.
@@ -165,6 +166,135 @@ func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency in
 	if len(errs) > 0 {
 		return fmt.Errorf("consume errors: %v", errs)
 	}
+	return nil
+}
+
+// ConsumeFailed consumes from all per-event-type failed queues and re-publishes
+// messages back to the main exchange. Each message's attempt count is incremented.
+// Messages that have exceeded maxFailedAttempts (100) are permanently discarded.
+// Blocks until ctx is cancelled.
+func (q *Queue) ConsumeFailed(ctx context.Context, concurrency int) error {
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+
+	// Build list of failed queue names.
+	var failedQueues []string
+	for _, et := range eventTypes() {
+		failedQueues = append(failedQueues, "census."+et+".failed")
+	}
+
+	stopClaiming, stopClaimingCancel := context.WithCancel(context.Background())
+	defer stopClaimingCancel()
+
+	go func() {
+		<-ctx.Done()
+		stopClaimingCancel()
+	}()
+
+	processCtx, processCancel := context.WithCancel(context.Background())
+	defer processCancel()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, concurrency)
+
+	for i := range concurrency {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			if err := q.failedWorker(stopClaiming, processCtx, failedQueues, workerID); err != nil && stopClaiming.Err() == nil {
+				errCh <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	var errs []error
+	for err := range errCh {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed consumer errors: %v", errs)
+	}
+	return nil
+}
+
+// failedWorker consumes from failed queues and re-publishes to main exchange.
+func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Context, failedQueues []string, workerID int) error {
+	ch, err := q.conn.Channel()
+	if err != nil {
+		return fmt.Errorf("failed worker %d channel: %w", workerID, err)
+	}
+	defer ch.Close()
+
+	if err := ch.Qos(1, 0, false); err != nil {
+		return fmt.Errorf("failed worker %d qos: %w", workerID, err)
+	}
+
+	var deliveries []<-chan amqp.Delivery
+	for _, fq := range failedQueues {
+		del, err := ch.Consume(fq, "", false, false, false, false, nil)
+		if err != nil {
+			return fmt.Errorf("failed worker %d consume %s: %w", workerID, fq, err)
+		}
+		deliveries = append(deliveries, del)
+	}
+
+	merged := mergeDeliveries(stopClaiming, deliveries)
+
+	for msg := range merged {
+		select {
+		case <-stopClaiming.Done():
+			_ = msg.Nack(false, true)
+			return nil
+		default:
+		}
+
+		attempts := getAttempts(msg.Headers) + 1
+		eventType := msg.RoutingKey
+
+		if attempts >= maxFailedAttempts {
+			// Permanently discard — too many failures.
+			q.logger.WarnContext(
+				processCtx, "rabbitmq.failed.permanent_discard",
+				slog.String("event_type", eventType),
+				slog.Int("attempts", attempts),
+			)
+			_ = msg.Ack(false)
+			continue
+		}
+
+		// Re-publish to main exchange with incremented attempt count.
+		newHeaders := copyHeaders(msg.Headers, attempts)
+		pubErr := ch.PublishWithContext(processCtx, exchangeMain, eventType, false, false, amqp.Publishing{
+			ContentType:  "application/json",
+			DeliveryMode: amqp.Persistent,
+			Body:         msg.Body,
+			Headers:      newHeaders,
+		})
+		if pubErr != nil {
+			q.logger.ErrorContext(
+				processCtx, "rabbitmq.failed.republish_error",
+				slog.String("event_type", eventType),
+				slog.Int("attempts", attempts),
+				slog.Any("error", pubErr),
+			)
+			_ = msg.Nack(false, true)
+			continue
+		}
+
+		_ = msg.Ack(false)
+		q.logger.InfoContext(
+			processCtx, "rabbitmq.failed.republished",
+			slog.String("event_type", eventType),
+			slog.Int("attempts", attempts),
+		)
+	}
+
 	return nil
 }
 

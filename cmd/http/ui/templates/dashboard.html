@@ -28,32 +28,21 @@
 
 <!-- Race Distribution & Expansion Completion -->
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
-    <!-- Race Distribution Pie Chart -->
     <div class="panel" style="margin-bottom: 0;">
         <div class="panel-header">
-            <h2 class="panel-title">
-                <span>🧬</span>
-                <span>Race Distribution</span>
-            </h2>
+            <h2 class="panel-title"><span>🧬</span><span>Race Distribution</span></h2>
         </div>
         <div class="panel-body">
             {{if .Data.RaceLabels}}
-            <div class="chart-container" style="height: 280px;">
-                <canvas id="racePieChart"></canvas>
-            </div>
+            <div class="chart-container" style="height: 280px;"><canvas id="racePieChart"></canvas></div>
             {{else}}
             <p class="text-dim">No race data available yet.</p>
             {{end}}
         </div>
     </div>
-
-    <!-- Expansion Completion -->
     <div class="panel" style="margin-bottom: 0;">
         <div class="panel-header">
-            <h2 class="panel-title">
-                <span>⚔️</span>
-                <span>MSQ Expansion Completion</span>
-            </h2>
+            <h2 class="panel-title"><span>⚔️</span><span>MSQ Expansion Completion</span></h2>
         </div>
         <div class="panel-body">
             {{if .Data.ExpansionCompletions}}
@@ -64,14 +53,10 @@
                     <div style="flex: 1;">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
                             <span style="font-size: 0.85rem; font-weight: 600;">{{.Name}}</span>
-                            <span style="font-size: 0.8rem; color: var(--gold);">{{formatNumber .Count}}
-                                ({{.Percent}})</span>
+                            <span style="font-size: 0.8rem; color: var(--gold);">{{formatNumber .Count}} ({{.Percent}})</span>
                         </div>
-                        <div
-                            style="background: var(--bg-secondary); border-radius: 4px; height: 6px; overflow: hidden;">
-                            <div
-                                style="background: linear-gradient(90deg, var(--gold), var(--gold-light)); height: 100%; width: {{.Percent}}; border-radius: 4px; min-width: 2px;">
-                            </div>
+                        <div style="background: var(--bg-secondary); border-radius: 4px; height: 6px; overflow: hidden;">
+                            <div style="background: linear-gradient(90deg, var(--gold), var(--gold-light)); height: 100%; width: {{.Percent}}; border-radius: 4px; min-width: 2px;"></div>
                         </div>
                     </div>
                 </div>
@@ -87,65 +72,33 @@
 <!-- Time Series Chart Panel -->
 <div class="panel">
     <div class="panel-header">
-        <h2 class="panel-title">
-            <span>📈</span>
-            <span>New Characters Created (Last 30 days)</span>
-        </h2>
+        <h2 class="panel-title"><span>📈</span><span>New Characters Created (Last 30 days)</span></h2>
     </div>
     <div class="panel-body">
-        <div class="chart-container">
-            <canvas id="newCharactersChart"></canvas>
-        </div>
+        <div class="chart-container"><canvas id="newCharactersChart"></canvas></div>
     </div>
 </div>
 
 <!-- Region Breakdown Panel -->
 <div class="panel">
     <div class="panel-header">
-        <h2 class="panel-title">
-            <span>🌐</span>
-            <span>Regional Demographics &amp; World Drill-Down</span>
-        </h2>
+        <h2 class="panel-title"><span>🌐</span><span>Regional Demographics &amp; World Drill-Down</span></h2>
     </div>
     <div class="panel-body">
         {{if .Data.Regions}}
         <div class="table-responsive">
             <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Region</th>
-                        <th class="text-right">Total Population</th>
-                        <th class="text-right">Active Players (30d)</th>
-                        <th class="text-right">Active %</th>
-                        <th class="text-center">Action</th>
-                    </tr>
-                </thead>
+                <thead><tr><th>Region</th><th class="text-right">Total Population</th><th class="text-right">Active Players (30d)</th><th class="text-right">Active %</th><th class="text-center">Action</th></tr></thead>
                 <tbody>
                     {{range .Data.Regions}}
                     <tr>
-                        <td>
-                            <span class="badge badge-region" style="font-size: 0.88rem; padding: 0.35rem 0.75rem;">
-                                {{.Region}}
-                            </span>
-                        </td>
+                        <td><span class="badge badge-region" style="font-size: 0.88rem; padding: 0.35rem 0.75rem;">{{.Region}}</span></td>
                         <td class="text-right"><strong>{{formatNumber .Total}}</strong></td>
                         <td class="text-right" style="color: var(--cyan);">{{formatNumber .Active}}</td>
-                        <td class="text-right">
-                            <span class="badge badge-active">{{.ActiveRatio}}</span>
-                        </td>
-                        <td class="text-center">
-                            <button class="btn btn-outline" style="font-size: 0.8rem; padding: 0.3rem 0.75rem;"
-                                onclick="toggleWorldDrilldown(this, '{{.Region}}')">
-                                View Worlds ▾
-                            </button>
-                        </td>
+                        <td class="text-right"><span class="badge badge-active">{{.ActiveRatio}}</span></td>
+                        <td class="text-center"><button class="btn btn-outline" style="font-size: 0.8rem; padding: 0.3rem 0.75rem;" onclick="toggleWorldDrilldown(this, '{{.Region}}')">View Worlds ▾</button></td>
                     </tr>
-                    <tr>
-                        <td colspan="5" style="padding: 0; border-bottom: 1px solid var(--border-color);">
-                            <div id="drilldown-{{.Region}}" style="padding: 0.5rem 1rem; background: rgba(0,0,0,0.2);">
-                            </div>
-                        </td>
-                    </tr>
+                    <tr><td colspan="5" style="padding: 0; border-bottom: 1px solid var(--border-color);"><div id="drilldown-{{.Region}}" style="padding: 0.5rem 1rem; background: rgba(0,0,0,0.2);"></div></td></tr>
                     {{end}}
                 </tbody>
             </table>
@@ -157,137 +110,34 @@
 </div>
 
 <script>
-    document.addEventListener("DOMContentLoaded", function () {
-        // New Characters Line Chart
-        var lineCtx = document.getElementById('newCharactersChart');
-        if (lineCtx) {
-            var chartLabels = {{jsonSafe .Data.ChartLabels}}
-        };
-        var chartData = {{jsonSafe .Data.ChartData}}
-    };
-
-    new Chart(lineCtx, {
-        type: 'line',
-        data: {
-            labels: chartLabels,
-            datasets: [{
-                label: 'New Characters',
-                data: chartData,
-                borderColor: '#38bdf8',
-                backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                borderWidth: 2,
-                fill: true,
-                tension: 0.3,
-                pointBackgroundColor: '#d4af37',
-                pointBorderColor: '#0b0e14',
-                pointRadius: 4,
-                pointHoverRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {display: false},
-                tooltip: {
-                    backgroundColor: '#141923',
-                    borderColor: '#263248',
-                    borderWidth: 1,
-                    titleColor: '#d4af37',
-                    bodyColor: '#f1f5f9',
-                    padding: 10
-                }
-            },
-            scales: {
-                x: {
-                    grid: {color: 'rgba(255, 255, 255, 0.05)'},
-                    ticks: {color: '#94a3b8'}
-                },
-                y: {
-                    beginAtZero: true,
-                    grid: {color: 'rgba(255, 255, 255, 0.05)'},
-                    ticks: {color: '#94a3b8', precision: 0}
-                }
-            }
-        }
-    });
+document.addEventListener("DOMContentLoaded", function() {
+    var lineCtx = document.getElementById("newCharactersChart");
+    if (lineCtx) {
+        var chartLabels = {{jsonSafe .Data.ChartLabels}};
+        var chartData = {{jsonSafe .Data.ChartData}};
+        new Chart(lineCtx, {
+            type: "line",
+            data: { labels: chartLabels, datasets: [{ label: "New Characters", data: chartData, borderColor: "#38bdf8", backgroundColor: "rgba(56,189,248,0.1)", borderWidth: 2, fill: true, tension: 0.3, pointBackgroundColor: "#d4af37", pointBorderColor: "#0b0e14", pointRadius: 4, pointHoverRadius: 6 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#94a3b8" } }, y: { beginAtZero: true, grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#94a3b8", precision: 0 } } } }
+        });
     }
-
-    // Race Distribution Pie Chart
-    var pieCtx = document.getElementById('racePieChart');
+    var pieCtx = document.getElementById("racePieChart");
     if (pieCtx) {
-        var raceLabels = {{jsonSafe .Data.RaceLabels}}
-    };
-    var raceData = {{jsonSafe .Data.RaceData}};
-
-    var colors = [
-        '#d4af37', '#38bdf8', '#f472b6', '#34d399',
-        '#a78bfa', '#fb923c', '#e879f9', '#22d3ee',
-        '#fbbf24', '#60a5fa', '#f87171', '#4ade80'
-    ];
-
-    new Chart(pieCtx, {
-        type: 'doughnut',
-        data: {
-            labels: raceLabels,
-            datasets: [{
-                data: raceData,
-                backgroundColor: colors.slice(0, raceLabels.length),
-                borderColor: '#0b0e14',
-                borderWidth: 2
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: '55%',
-            plugins: {
-                legend: {
-                    position: 'right',
-                    labels: {
-                        color: '#94a3b8',
-                        padding: 10,
-                        font: {size: 11},
-                        usePointStyle: true,
-                        pointStyleWidth: 8
-                    }
-                },
-                tooltip: {
-                    backgroundColor: '#141923',
-                    borderColor: '#263248',
-                    borderWidth: 1,
-                    titleColor: '#d4af37',
-                    bodyColor: '#f1f5f9',
-                    padding: 10,
-                    callbacks: {
-                        label: function (ctx) {
-                            var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0);
-                            var pct = ((ctx.parsed / total) * 100).toFixed(1);
-                            return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';
-                        }
-                    }
-                }
-            }
-        }
-    });
+        var raceLabels = {{jsonSafe .Data.RaceLabels}};
+        var raceData = {{jsonSafe .Data.RaceData}};
+        var colors = ["#d4af37","#38bdf8","#f472b6","#34d399","#a78bfa","#fb923c","#e879f9","#22d3ee","#fbbf24","#60a5fa","#f87171","#4ade80"];
+        new Chart(pieCtx, {
+            type: "doughnut",
+            data: { labels: raceLabels, datasets: [{ data: raceData, backgroundColor: colors.slice(0, raceLabels.length), borderColor: "#0b0e14", borderWidth: 2 }] },
+            options: { responsive: true, maintainAspectRatio: false, cutout: "55%", plugins: { legend: { position: "right", labels: { color: "#94a3b8", padding: 10, font: { size: 11 }, usePointStyle: true, pointStyleWidth: 8 } }, tooltip: { backgroundColor: "#141923", borderColor: "#263248", borderWidth: 1, titleColor: "#d4af37", bodyColor: "#f1f5f9", padding: 10, callbacks: { label: function(ctx) { var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0); var pct = ((ctx.parsed/total)*100).toFixed(1); return ctx.label+": "+ctx.parsed.toLocaleString()+" ("+pct+"%)"; } } } } }
+        });
     }
 });
-
-    function toggleWorldDrilldown(btn, region) {
-        var target = document.getElementById('drilldown-' + region);
-        if (!target) return;
-        if (target.innerHTML.trim().length > 0) {
-            target.innerHTML = '';
-            btn.innerHTML = 'View Worlds ▾';
-            btn.classList.remove('active');
-        } else {
-            htmx.ajax('GET', '/ui/partials/world-breakdown?region=' + encodeURIComponent(region), {
-                target: target,
-                swap: 'innerHTML'
-            });
-            btn.innerHTML = 'Hide Worlds ▴';
-            btn.classList.add('active');
-        }
-    }
+function toggleWorldDrilldown(btn, region) {
+    var target = document.getElementById("drilldown-" + region);
+    if (!target) return;
+    if (target.innerHTML.trim().length > 0) { target.innerHTML = ""; btn.innerHTML = "View Worlds ▾"; btn.classList.remove("active"); }
+    else { htmx.ajax("GET", "/ui/partials/world-breakdown?region=" + encodeURIComponent(region), { target: target, swap: "innerHTML" }); btn.innerHTML = "Hide Worlds ▴"; btn.classList.add("active"); }
+}
 </script>
 {{end}}

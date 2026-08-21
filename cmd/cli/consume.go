@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -76,9 +77,11 @@ pause affected provider queues while letting others continue.`,
 
 func init() {
 	rootCmd.AddCommand(consumeCmd)
+	consumeCmd.AddCommand(consumeFailedCmd)
 	consumeCmd.Flags().StringP("events", "e", "all", "comma-separated event types to consume (e.g. id-sweep,character-census or 'all')")
 	consumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 	consumeCmd.Flags().Bool("proxy", false, "run in proxy mode: each goroutine acquires its own proxy from the pool")
+	consumeFailedCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 }
 
 // runProxyConsumer starts the census consumer in proxy mode. Each worker goroutine
@@ -136,4 +139,26 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 
 	w := worker.New(q, container.Load.Handlers(), logger)
 	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
+}
+
+var consumeFailedCmd = &cobra.Command{
+	Use:   "failed",
+	Short: "Consume from failed queues and re-publish to main queues",
+	Long: `Run a long-running consumer that reads from all per-event-type failed queues
+and re-publishes messages back to the main queues for retry. Messages that have
+exceeded 100 failure attempts are permanently discarded.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		concurrency, _ := cmd.Flags().GetInt("concurrency")
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		q := container.Load.Queue()
+		if q == nil {
+			return fmt.Errorf("queue not initialised")
+		}
+
+		container.Load.Logger().InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency))
+		return q.ConsumeFailed(ctx, concurrency)
+	},
 }

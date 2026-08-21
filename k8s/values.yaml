@@ -242,7 +242,16 @@ workers:
         - consume
         - scan-proxy
         - -c
-        - "5"
+        - "50"
+    # --- Failed queue retry consumer ---
+    - name: failed-retry
+      replicaCount: 1
+      command:
+        - /app/ffxiv-census
+        - consume
+        - failed
+        - -c
+        - "10"
 
 cronjobs:
   defaults:
