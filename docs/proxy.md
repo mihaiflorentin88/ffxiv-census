@@ -41,7 +41,7 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 ### Cronjob Scheduling
 
 In Kubernetes:
-- `proxy discover` runs as a CronJob every hour with `--limit 5000`
+- `proxy discover` runs as a CronJob every two minutes (`*/2 * * * *`) with `--limit 600`
 - `proxy scan` runs as a long-running Deployment with `-c 50`
 - `proxy consume` runs as a long-running Deployment for new-proxy events
 
@@ -207,9 +207,11 @@ This ensures workers get the most reliable proxies from the scan pool. The scan 
 
 **These methods must not be used for Lodestone APIs.** Lodestone workers must use `NewProxy` so proxies are checked and atomically owner-locked. The random selection is only for the discovery pipeline, where the rotating discovery HTTP client (`DiscoveryHTTPClient`) routes provider requests through active proxies and swaps on 403/429/5xx or transport failure.
 
-**Discovery streaming:** The `proxy discover` command streams each provider's response directly to RabbitMQ via a callback. Providers never accumulate complete response bodies or record lists in memory. This keeps the discovery job's memory footprint bounded regardless of provider response size, fitting within the existing 1 GiB Kubernetes pod limit.
+**Discovery streaming:** The `proxy discover` command streams each provider's response directly to RabbitMQ via a callback. Providers are invoked sequentially in configured order. Providers never accumulate complete response bodies or record lists in memory. This keeps the discovery job's memory footprint bounded regardless of provider response size, fitting within the existing 1 GiB Kubernetes pod limit.
 
-**Discovery deduplication:** Each emitted tuple is checked read-only against PostgreSQL before RabbitMQ publication. Existing rows are counted as `skipped_existing` and never published. Lookup errors fail closed per provider — a failed `Exists` query stops that provider's callback without publishing. The consumer independently checks then inserts conflict-safely via `INSERT ... ON CONFLICT DO NOTHING`. Migration `00012_deduplicate_proxies.sql` removes any legacy exact duplicates and restores the `(protocol, ip, port)` tuple uniqueness invariant, keeping the newest row by `updated_at DESC, id DESC`.
+**Discovery deduplication:** Each emitted tuple is checked read-only against PostgreSQL before RabbitMQ publication. Existing rows are counted as `skipped_existing` and never published; database-existing tuples do not consume the global publication limit. Lookup errors fail closed per provider — a failed `Exists` query stops that provider's callback without publishing. The consumer independently checks then inserts conflict-safely via `INSERT ... ON CONFLICT DO NOTHING`. Migration `00012_deduplicate_proxies.sql` removes any legacy exact duplicates and restores the `(protocol, ip, port)` tuple uniqueness invariant, keeping the newest row by `updated_at DESC, id DESC`.
+
+**Discovery limit semantics:** The `--limit` flag sets a global publication cap across the entire discovery run (not per provider). When the limit is reached, the current provider's stream is aborted and all remaining providers are skipped entirely. When a provider exhausts its records below the limit, the next provider in configured order is invoked to fill the remaining quota. `--limit 0` disables the cap (unlimited).
 
 ### Proxy Domain Object
 

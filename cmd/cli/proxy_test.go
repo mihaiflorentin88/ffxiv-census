@@ -17,14 +17,21 @@ type fakeProvider struct {
 	name    string
 	records []contract.ProxyRecord
 	err     error
+	// fetchCalls counts how many times FetchProxies was invoked.
+	fetchCalls int
+	// emittedRecords counts how many records were successfully emitted
+	// (i.e. emit returned nil) before FetchProxies returned.
+	emittedRecords int
 }
 
 func (p *fakeProvider) Name() string { return p.name }
 func (p *fakeProvider) FetchProxies(_ context.Context, emit func(contract.ProxyRecord) error) error {
+	p.fetchCalls++
 	if p.err != nil {
 		return p.err
 	}
 	for _, rec := range p.records {
+		p.emittedRecords++
 		if err := emit(rec); err != nil {
 			return err
 		}
@@ -271,5 +278,89 @@ func TestPublishDiscoveredProxies_ZeroLimitIsUnlimited(t *testing.T) {
 	}
 	if published != 3 {
 		t.Errorf("published = %d, want 3 (unlimited)", published)
+	}
+}
+
+func TestPublishDiscoveredProxies_LimitStopsProviderEarly(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	q := &errorQueue{failOn: 0}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Provider 1 has three new tuples; limit is 2.
+	// Provider 1 must stop after emitting/publishing the second tuple.
+	// Provider 2 must never be invoked.
+	p1 := &fakeProvider{name: "p1", records: []contract.ProxyRecord{
+		{Protocol: "http", IP: "10.0.0.1", Port: 3128},
+		{Protocol: "http", IP: "10.0.0.2", Port: 3128},
+		{Protocol: "http", IP: "10.0.0.3", Port: 3128}, // never reached
+	}}
+	p2 := &fakeProvider{name: "p2", records: []contract.ProxyRecord{
+		{Protocol: "http", IP: "10.0.0.4", Port: 3128},
+	}}
+
+	published, err := publishDiscoveredProxies(context.Background(), q, repo, logger, []contract.ProxyProvider{p1, p2}, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if published != 2 {
+		t.Errorf("published = %d, want 2", published)
+	}
+	if q.calls != 2 {
+		t.Errorf("queue Publish calls = %d, want 2", q.calls)
+	}
+	if p1.fetchCalls != 1 {
+		t.Errorf("p1 fetchCalls = %d, want 1", p1.fetchCalls)
+	}
+	if p1.emittedRecords != 2 {
+		t.Errorf("p1 emittedRecords = %d, want 2 (stopped after second emission)", p1.emittedRecords)
+	}
+	if p2.fetchCalls != 0 {
+		t.Errorf("p2 fetchCalls = %d, want 0 (should never be invoked)", p2.fetchCalls)
+	}
+}
+
+func TestPublishDiscoveredProxies_LimitCrossProviderFallback(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	// Seed one existing tuple — it must not consume the limit.
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
+	})
+	repo.ExistsCalls = 0
+
+	q := &errorQueue{failOn: 0}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Provider 1: one existing + one new → exhausts below limit (published=1).
+	// Provider 2: two new → first fills the cumulative limit (published=2), second never reached.
+	p1 := &fakeProvider{name: "p1", records: []contract.ProxyRecord{
+		{Protocol: "http", IP: "1.2.3.4", Port: 8080},  // existing — skipped, no quota consumed
+		{Protocol: "http", IP: "10.0.0.1", Port: 3128}, // new — published, cumulative 1
+	}}
+	p2 := &fakeProvider{name: "p2", records: []contract.ProxyRecord{
+		{Protocol: "http", IP: "10.0.0.2", Port: 3128}, // new — published, cumulative 2 → limit reached
+		{Protocol: "http", IP: "10.0.0.3", Port: 3128}, // never reached
+	}}
+
+	published, err := publishDiscoveredProxies(context.Background(), q, repo, logger, []contract.ProxyProvider{p1, p2}, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if published != 2 {
+		t.Errorf("published = %d, want 2", published)
+	}
+	if q.calls != 2 {
+		t.Errorf("queue Publish calls = %d, want 2", q.calls)
+	}
+	if p1.fetchCalls != 1 {
+		t.Errorf("p1 fetchCalls = %d, want 1", p1.fetchCalls)
+	}
+	if p1.emittedRecords != 2 {
+		t.Errorf("p1 emittedRecords = %d, want 2 (exhausted all records)", p1.emittedRecords)
+	}
+	if p2.fetchCalls != 1 {
+		t.Errorf("p2 fetchCalls = %d, want 1 (invoked after p1 exhausted below limit)", p2.fetchCalls)
+	}
+	if p2.emittedRecords != 1 {
+		t.Errorf("p2 emittedRecords = %d, want 1 (stopped after first emission filled limit)", p2.emittedRecords)
 	}
 }

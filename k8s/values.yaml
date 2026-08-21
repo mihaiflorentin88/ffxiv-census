@@ -2,7 +2,7 @@ namespace: default
 
 image:
   repository: mihaiflorentin88/census
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
   tag: latest
 
 registry:
@@ -184,14 +184,14 @@ workers:
         - "30"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
     - name: proxy-id-sweep
-      replicaCount: 1
+      replicaCount: 2
       command:
         - /app/ffxiv-census
         - consume
         - id-sweep
         - --proxy
         - -c
-        - "40"
+        - "25"
     - name: proxy-character-census
       replicaCount: 1
       command:
@@ -200,7 +200,7 @@ workers:
         - character-census
         - --proxy
         - -c
-        - "10"
+        - "5"
     - name: proxy-achievement-census
       replicaCount: 1
       command:
@@ -209,7 +209,7 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "10"
+        - "5"
     # --- Proxy discovery/scanning ---
     - name: proxy-new
       replicaCount: 1
@@ -226,7 +226,7 @@ workers:
         - proxy
         - scan
         - -c
-        - "50"
+        - "150"
     # --- Census failed queue retry consumer ---
     - name: census-retry
       replicaCount: 1
@@ -272,7 +272,7 @@ cronjobs:
         - "600"
 
     - name: publish-id-sweep
-      schedule: "*/2 * * * *"
+      schedule: "*/1 * * * *"
       command:
         - /app/ffxiv-census
         - publish
@@ -293,7 +293,7 @@ cronjobs:
     #     - --chunk-size
     #     - "100"
     - name: proxy-discover
-      schedule: "*/3 * * * *"
+      schedule: "*/2 * * * *"
       command:
         - /app/ffxiv-census
         - proxy
