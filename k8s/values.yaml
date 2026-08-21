@@ -270,7 +270,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "6000"
+        - "5000"
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
@@ -278,11 +278,9 @@ cronjobs:
         - publish
         - id-sweep
         - --auto
-        - --batch-size
-        - "4000"
-        - --chunk-size
-        - "10"
-        
+        - --count
+        - "10000"
+
     # - name: publish-fill-gaps commented for now, please do not remove or uncomment
     #   schedule: "0 3 1 * *"
     #   command:
