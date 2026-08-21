@@ -63,8 +63,12 @@ func (f *FakeProxyRepository) InsertIfAbsent(_ context.Context, rec contract.Pro
 	rec.ID = f.nextID
 	rec.Status = contract.ProxyStatusInactive
 	rec.FailCount = 0
-	rec.CreatedAt = time.Now().UTC()
-	rec.UpdatedAt = rec.CreatedAt
+	now := time.Now().UTC()
+	rec.CreatedAt = now
+	rec.UpdatedAt = now
+	if rec.FirstSeenAt.IsZero() {
+		rec.FirstSeenAt = now
+	}
 	f.proxies[rec.ID] = rec
 	return rec.ID, true, nil
 }

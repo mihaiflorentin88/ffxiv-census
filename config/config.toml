@@ -54,8 +54,7 @@ timeout = "10s"
 
 [proxy]
 test_url                = "https://na.finalfantasyxiv.com/lodestone/"
-test_timeout            = "15s"
-scan_batch_size         = 5000
+test_timeout            = "5s"
 dead_threshold_days     = 2
 dead_scan_interval_days = 3
 fail_count_threshold    = 5

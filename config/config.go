@@ -156,7 +156,6 @@ type CensusConfig struct {
 type ProxyConfig struct {
 	TestURL              string              `mapstructure:"test_url"`
 	TestTimeout          string              `mapstructure:"test_timeout"`
-	ScanBatchSize        int                 `mapstructure:"scan_batch_size"`
 	DeadThresholdDays    int                 `mapstructure:"dead_threshold_days"`
 	DeadScanIntervalDays int                 `mapstructure:"dead_scan_interval_days"`
 	FailCountThreshold   int                 `mapstructure:"fail_count_threshold"`

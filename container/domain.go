@@ -153,7 +153,6 @@ func (s *ServiceContainer) ProxyHandlers() *proxyhandler.Registry {
 		return reg
 	}
 	reg.Register(proxyhandler.EventNewProxy, proxyhandler.NewNewProxy(svc, s.Logger()))
-	reg.Register(proxyhandler.EventScanProxy, proxyhandler.NewScanProxy(svc, s.Logger()))
 	return reg
 }
 

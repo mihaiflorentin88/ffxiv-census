@@ -34,6 +34,11 @@ type ProxyRecord struct {
 	UpdatedAt     time.Time
 }
 
+// ProxyChecker tests whether a proxy endpoint is reachable and measures latency.
+type ProxyChecker interface {
+	Check(ctx context.Context, protocol, ip string, port int) (latencyMS int, err error)
+}
+
 // ProxyProvider fetches proxy lists from an external source.
 type ProxyProvider interface {
 	// Name returns the provider identifier (e.g. "proxyscrape", "geonode").

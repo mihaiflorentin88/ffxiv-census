@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -12,7 +11,7 @@ import (
 type Service struct {
 	providers          []contract.ProxyProvider
 	repo               contract.ProxyRepository
-	checker            *proxy.Checker
+	checker            contract.ProxyChecker
 	logger             contract.Logger
 	deadThreshold      time.Duration
 	failCountThreshold int
@@ -22,7 +21,7 @@ type Service struct {
 func NewService(
 	providers []contract.ProxyProvider,
 	repo contract.ProxyRepository,
-	checker *proxy.Checker,
+	checker contract.ProxyChecker,
 	logger contract.Logger,
 	deadThreshold time.Duration,
 	failCountThreshold int,
@@ -94,17 +93,9 @@ func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port
 }
 
 // ProcessScanProxy tests an existing proxy and updates its status.
-func (s *Service) ProcessScanProxy(ctx context.Context, proxyID int64) error {
-	p, err := s.repo.Get(ctx, proxyID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "proxy.process_scan.get_failed", "proxy_id", proxyID, "error", err)
-		return err
-	}
-	if p == nil {
-		s.logger.WarnContext(ctx, "proxy.process_scan.not_found", "proxy_id", proxyID)
-		return nil // proxy deleted between queue and processing
-	}
-
+// The caller provides the already-selected ProxyRecord directly, avoiding
+// a redundant repository Get round trip.
+func (s *Service) ProcessScanProxy(ctx context.Context, p *contract.ProxyRecord) error {
 	s.logger.InfoContext(ctx, "proxy.process_scan.start", "proxy_id", p.ID, "ip", p.IP, "port", p.Port, "protocol", p.Protocol, "current_status", p.Status, "fail_count", p.FailCount)
 
 	return s.processProxyCheck(ctx, p)

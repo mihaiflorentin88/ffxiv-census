@@ -50,7 +50,6 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 	if len(eventTypes) == 0 {
 		eventTypes = []string{
 			handler.EventNewProxy,
-			handler.EventScanProxy,
 		}
 	}
 

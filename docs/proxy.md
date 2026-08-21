@@ -14,8 +14,9 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 | Domain service | `domain/proxy/service.go` | Business logic for proxy check and status management |
 | Domain objects | `domain/proxy/proxy.go` | `Proxy` — wraps `ProxyRecord` with lock management, `CanUse()`, `MarkFailed()` |
 | Domain objects | `domain/proxy/hub.go` | `ProxyHub` — atomic proxy acquisition with `NewProxy()` |
-| Domain handlers | `domain/proxy/handler/` | `new-proxy` and `scan-proxy` event handlers |
-| Domain worker | `domain/proxy/worker/worker.go` | Queue consumer with dedicated goroutines per event type |
+| Domain handlers | `domain/proxy/handler/` | `new-proxy` event handler |
+| Domain worker | `domain/proxy/worker/worker.go` | Queue consumer for new-proxy events |
+| Domain worker | `domain/proxy/worker/scan.go` | Direct database scan worker |
 | Infrastructure | `infrastructure/proxy/` | Proxy checker (HTTP/SOCKS GET through proxy to Lodestone) |
 | Infrastructure | `infrastructure/proxyscrape/` | ProxyScrape API v4 client |
 | Infrastructure | `infrastructure/geonode/` | Geonode API client |
@@ -28,28 +29,29 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 
 ```bash
 # Discover proxies from all configured providers, publish new-proxy events
-./bin/ffxiv-census proxy discover
+./bin/ffxiv-census proxy discover [--limit 0]   # 0 = no limit (publish all)
 
-# Scan proxies from DB, publish scan-proxy events (priority-ordered)
-./bin/ffxiv-census proxy scan [--limit 0]   # 0 = no limit (scan all)
+# Run a long-running scan worker (direct database batches)
+./bin/ffxiv-census proxy scan [--concurrency 4]   # concurrency = batch size
 
-# Consume new-proxy and scan-proxy events (long-running)
+# Consume new-proxy events (long-running)
 ./bin/ffxiv-census proxy consume [--concurrency 4]
 ```
 
 ### Cronjob Scheduling
 
 In Kubernetes:
-- `proxy discover` runs as a CronJob every hour
-- `proxy scan` runs as a CronJob every 20 minutes
-- `proxy consume` runs as a long-running Deployment
+- `proxy discover` runs as a CronJob every hour with `--limit 5000`
+- `proxy scan` runs as a long-running Deployment with `-c 50`
+- `proxy consume` runs as a long-running Deployment for new-proxy events
 
 ## Events
 
 | Event | Payload | Purpose |
 |-------|---------|---------|
 | `new-proxy` | `{"protocol", "ip", "port", "country", "anonymity", "source", "uptime_percent"}` | Register and test a newly discovered proxy |
-| `scan-proxy` | `{"proxy_id"}` | Re-test an existing proxy and update its status |
+
+Recurring scans are performed directly by the `proxy scan` database worker, not via queue events.
 
 ## Proxy Status Lifecycle
 
@@ -105,8 +107,7 @@ This ensures that proxies of all protocols discovered by the providers can be te
 ```toml
 [proxy]
 test_url                = "https://na.finalfantasyxiv.com/lodestone/"
-test_timeout            = "15s"
-scan_batch_size         = 50
+test_timeout            = "5s"
 dead_threshold_days     = 2
 dead_scan_interval_days = 3
 fail_count_threshold    = 5
@@ -119,30 +120,31 @@ geonode     = true
 | Field | Default | Env Override | Description |
 |-------|---------|-------------|-------------|
 | `test_url` | `https://na.finalfantasyxiv.com/lodestone/` | `PROXY_TEST_URL` | URL to test proxies against |
-| `test_timeout` | `15s` | `PROXY_TEST_TIMEOUT` | Timeout per proxy test request |
-| `scan_batch_size` | `5000` | `PROXY_SCAN_BATCH_SIZE` | Max proxies to queue per scan cron (0 = no limit) |
+| `test_timeout` | `5s` | `PROXY_TEST_TIMEOUT` | Timeout per proxy test request |
 | `dead_threshold_days` | `2` | `PROXY_DEAD_THRESHOLD_DAYS` | Days inactive before marking dead |
 | `dead_scan_interval_days` | `3` | `PROXY_DEAD_SCAN_INTERVAL_DAYS` | Days between dead proxy re-scans |
 | `fail_count_threshold` | `5` | `PROXY_FAIL_COUNT_THRESHOLD` | Consecutive failures before dead |
 
 ## Worker
 
-The proxy consumer (`proxy consume`) uses push-based consumption via RabbitMQ:
+The proxy consumer (`proxy consume`) uses push-based consumption via RabbitMQ for `new-proxy` events only:
 
 - **Push-based**: The queue delivers messages directly to the handler — no polling, no `pollInterval`
-- **Concurrency**: Each event type gets its own goroutine pool sized by the `--concurrency` flag
+- **Concurrency**: Sized by the `--concurrency` flag
 - **Retry/fail**: Handled internally by the queue adapter (retry exchange with TTL backoff, dead-letter for permanent failures)
 - **Graceful shutdown**: Cancels the consumption context, finishes in-flight jobs
 
+The `proxy scan` worker is a separate long-running process that reads batches directly from the database, bypassing RabbitMQ entirely.
+
 ## Scan Priority
 
-The `proxy scan` command queries the database with priority ordering:
+The `proxy scan` worker queries the database with priority ordering:
 
 1. **Inactive** proxies (oldest scan first)
 2. **Active** proxies not scanned in 10 minutes
 3. **Dead** proxies not scanned in 3 days
 
-By default (`--limit 0`), all matching proxies are scanned. Pass `--limit N` to cap the batch size. All matching proxies are published as individual `scan-proxy` events, processed FIFO by the consumer.
+The SQL `LIMIT` equals the `-c/--concurrency` flag value. After each batch completes, the next batch is fetched immediately. After empty batches or per-record errors, the worker waits one minute before querying again. Cancellation during the idle wait returns cleanly.
 
 ---
 

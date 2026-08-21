@@ -97,3 +97,13 @@ func TestNewConfig_EnvOverrides(t *testing.T) {
 		})
 	}
 }
+
+func TestNewConfig_ProxyTestTimeout(t *testing.T) {
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatalf("unexpected error loading defaults: %v", err)
+	}
+	if cfg.Proxy.TestTimeout != "5s" {
+		t.Errorf("expected Proxy.TestTimeout '5s', got %q", cfg.Proxy.TestTimeout)
+	}
+}

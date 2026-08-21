@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	proxyinfra "github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -14,11 +13,11 @@ import (
 type ProxyHub struct {
 	repo    contract.ProxyRepository
 	lockTTL time.Duration
-	checker *proxyinfra.Checker
+	checker contract.ProxyChecker
 }
 
 // NewProxyHub creates a ProxyHub with the given repository, lock TTL, and optional checker.
-func NewProxyHub(repo contract.ProxyRepository, lockTTL time.Duration, checker *proxyinfra.Checker) *ProxyHub {
+func NewProxyHub(repo contract.ProxyRepository, lockTTL time.Duration, checker contract.ProxyChecker) *ProxyHub {
 	return &ProxyHub{repo: repo, lockTTL: lockTTL, checker: checker}
 }
 

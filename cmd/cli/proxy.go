@@ -22,6 +22,10 @@ import (
 // emit/publish failures from provider fetch/decode errors.
 var errPublishFailed = errors.New("publish failed")
 
+// errDiscoveryLimitReached is returned when the successful-publication limit
+// has been reached. It signals successful completion, not an error.
+var errDiscoveryLimitReached = errors.New("discovery limit reached")
+
 var proxyCmd = &cobra.Command{
 	Use:   "proxy",
 	Short: "Proxy pool management (discover, scan, consume)",
@@ -36,7 +40,10 @@ var errLookupFailed = errors.New("proxy lookup failed")
 // It checks the repository for existing tuples before publishing.
 // It continues past individual provider failures but returns an error
 // when no provider publishes anything and at least one failed.
-func publishDiscoveredProxies(ctx context.Context, q contract.Queue, repo contract.ProxyRepository, logger contract.Logger, providers []contract.ProxyProvider) (int, error) {
+func publishDiscoveredProxies(ctx context.Context, q contract.Queue, repo contract.ProxyRepository, logger contract.Logger, providers []contract.ProxyProvider, limit int) (int, error) {
+	if limit < 0 {
+		limit = 0
+	}
 	totalPublished := 0
 	totalErrors := 0
 
@@ -69,9 +76,16 @@ func publishDiscoveredProxies(ctx context.Context, q contract.Queue, repo contra
 			}
 			publishedForProvider++
 			totalPublished++
+			if limit > 0 && totalPublished >= limit {
+				return errDiscoveryLimitReached
+			}
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errDiscoveryLimitReached) {
+				logger.InfoContext(ctx, "proxy.discover.limit_reached", "provider", p.Name(), "published", publishedForProvider, "skipped_existing", skippedExistingForProvider, "total", totalPublished, "duration", time.Since(start))
+				return totalPublished, nil
+			}
 			if errors.Is(err, errLookupFailed) {
 				logger.ErrorContext(ctx, "proxy.discover.lookup_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
 			} else if errors.Is(err, errPublishFailed) {
@@ -126,7 +140,12 @@ var proxyDiscoverCmd = &cobra.Command{
 		}
 		logger.InfoContext(ctx, "proxy.discover.providers", "count", len(providers))
 
-		published, err := publishDiscoveredProxies(ctx, q, repo, logger, providers)
+		limit, _ := cmd.Flags().GetInt("limit")
+		if limit < 0 {
+			limit = 0
+		}
+
+		published, err := publishDiscoveredProxies(ctx, q, repo, logger, providers, limit)
 		if err != nil {
 			return err
 		}
@@ -138,108 +157,43 @@ var proxyDiscoverCmd = &cobra.Command{
 
 var proxyScanCmd = &cobra.Command{
 	Use:   "scan",
-	Short: "Publish scan-proxy events for proxies needing verification",
+	Short: "Run a long-running proxy scan worker (direct database batches)",
+	Long: `Run a long-running scan worker that reads priority-ordered proxy batches
+directly from the database and scans them concurrently. Concurrency controls
+both the goroutine limit per batch and the SQL LIMIT. Waits one minute after
+empty batches or per-record errors before querying again.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
+		concurrency, _ := cmd.Flags().GetInt("concurrency")
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
 		logger := container.Load.Logger()
-
-		logger.InfoContext(ctx, "proxy.scan.start")
-
-		q := container.Load.Queue()
-		if q == nil {
-			return fmt.Errorf("queue not initialised")
-		}
-		defer func() {
-			if err := q.Close(); err != nil {
-				logger.ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
-			}
-		}()
+		logger.InfoContext(ctx, "proxy.scan.start", "concurrency", concurrency)
 
 		repo := container.Load.ProxyRepository()
 		if repo == nil {
 			return fmt.Errorf("proxy repository not initialised")
 		}
 
-		counts, _ := repo.CountByStatus(ctx)
-		logger.InfoContext(ctx, "proxy.scan.db_stats", "active", counts["active"], "inactive", counts["inactive"], "dead", counts["dead"], "total", counts["active"]+counts["inactive"]+counts["dead"])
-
-		limit, _ := cmd.Flags().GetInt("limit")
-		if limit < 0 {
-			limit = 0
-		}
-		// When flag not explicitly set, fall back to config.
-		if !cmd.Flags().Changed("limit") {
-			cfg := container.Load.Config().Proxy
-			if cfg != nil && cfg.ScanBatchSize > 0 {
-				limit = cfg.ScanBatchSize
-			}
-		}
-		if limit == 0 {
-			logger.InfoContext(ctx, "proxy.scan.querying", "limit", "all")
-		} else {
-			logger.InfoContext(ctx, "proxy.scan.querying", "limit", limit)
+		svc := container.Load.ProxyService()
+		if svc == nil {
+			return fmt.Errorf("proxy service not initialised")
 		}
 
-		start := time.Now()
-		proxies, err := repo.ListForScan(ctx, limit)
-		if err != nil {
-			return fmt.Errorf("list proxies for scan: %w", err)
-		}
-		logger.InfoContext(ctx, "proxy.scan.found", "scannable", len(proxies), "duration", time.Since(start))
-
-		if len(proxies) == 0 {
-			logger.InfoContext(ctx, "proxy.scan.complete", "published", 0, "reason", "no proxies need scanning")
-			return nil
-		}
-
-		var inactive, active, dead int
-		for _, p := range proxies {
-			switch p.Status {
-			case "inactive":
-				inactive++
-			case "active":
-				active++
-			case "dead":
-				dead++
-			}
-		}
-		logger.InfoContext(ctx, "proxy.scan.priority_breakdown", "inactive", inactive, "active_stale", active, "dead_rescan", dead)
-
-		var jobs []contract.QueueJob
-		for _, p := range proxies {
-			jobs = append(jobs, handler.ScanProxyJob(p.ID))
-		}
-
-		confirmed, err := publishAll(q, logger, ctx, jobs)
-		if err != nil {
-			return err
-		}
-
-		logger.InfoContext(ctx, "proxy.scan.complete", "scannable", len(proxies), "published", confirmed)
-		return nil
+		scanWorker := worker.NewScanWorker(repo, svc, logger, time.Minute)
+		return scanWorker.RunScan(ctx, concurrency)
 	},
 }
 
 var proxyConsumeCmd = &cobra.Command{
-	Use:   "consume [event-type]",
-	Short: "Run a consumer worker for proxy event queues (long-running)",
-	Long: `Run a long-running proxy queue consumer worker.
-
-By default, consumes from both new-proxy and scan-proxy queues.
-Specify a single event type as a positional argument to consume only that queue.`,
-	Args: cobra.MaximumNArgs(1),
+	Use:   "consume",
+	Short: "Run a consumer worker for the new-proxy queue (long-running)",
+	Long: `Run a long-running proxy queue consumer worker for the new-proxy event.
+Scans are performed directly by the proxy scan worker, not via the queue.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
-
-		var eventTypes []string
-		if len(args) > 0 && args[0] != "" {
-			eventTypes = []string{args[0]}
-		} else {
-			eventTypes = []string{
-				handler.EventNewProxy,
-				handler.EventScanProxy,
-			}
-		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -255,7 +209,7 @@ Specify a single event type as a positional argument to consume only that queue.
 		}()
 
 		w := worker.New(q, container.Load.ProxyHandlers(), container.Load.Logger())
-		return w.RunEvents(ctx, eventTypes, concurrency)
+		return w.RunEvents(ctx, []string{handler.EventNewProxy}, concurrency)
 	},
 }
 
@@ -266,6 +220,7 @@ func init() {
 	proxyCmd.AddCommand(proxyScanCmd)
 	proxyCmd.AddCommand(proxyConsumeCmd)
 
-	proxyScanCmd.Flags().IntP("limit", "l", 0, "max proxies to queue for scanning (0 = no limit, scan all)")
+	proxyDiscoverCmd.Flags().IntP("limit", "l", 0, "max proxies to publish after deduplication (0 = no limit)")
+	proxyScanCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent scan routines (also used as SQL batch limit)")
 	proxyConsumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 }

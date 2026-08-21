@@ -492,7 +492,6 @@ func eventTypes() []string {
 		"character-census",
 		"achievement-census",
 		"new-proxy",
-		"scan-proxy",
 	}
 }
 

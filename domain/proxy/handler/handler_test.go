@@ -22,17 +22,6 @@ func TestNewProxy_Handle_BadPayload(t *testing.T) {
 	}
 }
 
-func TestScanProxy_Handle_BadPayload(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
-	svc := proxydomain.NewService(nil, repo, nil, nil, 48*time.Hour, 5)
-	h := handler.NewScanProxy(svc, nil)
-
-	_, err := h.Handle(context.Background(), []byte(`{invalid`))
-	if err == nil {
-		t.Fatal("expected error for bad payload")
-	}
-}
-
 func TestNewProxyJob_Serialization(t *testing.T) {
 	country := "US"
 	job := handler.NewProxyJob(handler.NewProxyPayload{
@@ -53,21 +42,5 @@ func TestNewProxyJob_Serialization(t *testing.T) {
 	}
 	if p.IP != "1.2.3.4" || p.Port != 8080 || p.Country == nil || *p.Country != "US" {
 		t.Fatalf("unexpected payload: %+v", p)
-	}
-}
-
-func TestScanProxyJob_Serialization(t *testing.T) {
-	job := handler.ScanProxyJob(42)
-
-	if job.Type != handler.EventScanProxy {
-		t.Fatalf("expected type %s, got %s", handler.EventScanProxy, job.Type)
-	}
-
-	var p handler.ScanProxyPayload
-	if err := json.Unmarshal(job.Payload, &p); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if p.ProxyID != 42 {
-		t.Fatalf("expected proxy_id 42, got %d", p.ProxyID)
 	}
 }

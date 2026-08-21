@@ -104,7 +104,7 @@ func (s *ServiceContainer) discoveryHTTPClientUnlocked() contract.HTTPClient {
 	checker := s.infrastructure.proxyChecker
 	if checker == nil {
 		testURL := "https://na.finalfantasyxiv.com/lodestone/"
-		timeout := 15 * time.Second
+		timeout := 5 * time.Second
 		if cfg := s.configUnlocked().Proxy; cfg != nil {
 			if cfg.TestURL != "" {
 				testURL = cfg.TestURL
@@ -334,7 +334,7 @@ func (s *ServiceContainer) ProxyRepository() contract.ProxyRepository {
 	return s.infrastructure.proxyRepository
 }
 
-func (s *ServiceContainer) ProxyChecker() *proxyinfra.Checker {
+func (s *ServiceContainer) ProxyChecker() contract.ProxyChecker {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.infrastructure.proxyChecker != nil {
@@ -342,7 +342,7 @@ func (s *ServiceContainer) ProxyChecker() *proxyinfra.Checker {
 	}
 	cfg := s.configUnlocked().Proxy
 	testURL := "https://na.finalfantasyxiv.com/lodestone/"
-	timeout := 15 * time.Second
+	timeout := 5 * time.Second
 	if cfg != nil {
 		if cfg.TestURL != "" {
 			testURL = cfg.TestURL

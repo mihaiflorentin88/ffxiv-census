@@ -10,7 +10,8 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 | `character-census` | Re-census a known character's profile + jobs | ✅ implemented |
 | `achievement-census` | Fetch achievements, filter milestones, track latest | ✅ implemented |
 | `new-proxy` | Register and test a newly discovered proxy | ✅ implemented |
-| `scan-proxy` | Re-test an existing proxy and update its status | ✅ implemented |
+
+Recurring proxy scans are performed directly by the `proxy scan` database worker, not via queue events. See `docs/proxy.md`.
 
 ## Payloads
 
@@ -20,9 +21,8 @@ Queue job payloads are JSON. Types are declared in `domain/census/handler/event.
 - **character-census**: `{"character_id": 123}` — a character to re-census.
 - **achievement-census**: `{"character_id": 123}` — a character to run an achievement census on.
 - **new-proxy**: `{"protocol": "http", "ip": "1.2.3.4", "port": 8080, "country": "US", "anonymity": "elite", "source": "proxyscrape", "uptime_percent": 95.5}` — a proxy to register and test.
-- **scan-proxy**: `{"proxy_id": 42}` — an existing proxy to re-scan.
 
-Proxy event types are declared in `domain/proxy/handler/handler.go`. Both are leaf events (no chaining).
+Proxy event types are declared in `domain/proxy/handler/handler.go`. The `new-proxy` event is a leaf event (no chaining).
 
 ## Chaining
 

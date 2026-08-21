@@ -11,8 +11,7 @@ census (exchange, direct)
   ├─ routing key "id-sweep"           → census.id-sweep           (queue)
   ├─ routing key "character-census"   → census.character-census   (queue)
   ├─ routing key "achievement-census" → census.achievement-census (queue)
-  ├─ routing key "new-proxy"          → census.new-proxy          (queue)
-  └─ routing key "scan-proxy"         → census.scan-proxy         (queue)
+  └─ routing key "new-proxy"          → census.new-proxy          (queue)
 
 census.<type>.failed (queue, per event type)
   └─ x-dead-letter-exchange = census
@@ -291,7 +290,9 @@ The queue carries events for census and proxy contexts. See `docs/events.md` for
 | Context | Events | Consumer Command |
 |---------|--------|-----------------|
 | Census | `id-sweep`, `character-census`, `achievement-census` | `ffxiv-census consume` |
-| Proxy | `new-proxy`, `scan-proxy` | `ffxiv-census proxy consume` |
+| Proxy | `new-proxy` | `ffxiv-census proxy consume` |
+
+Proxy scans are performed directly by the `proxy scan` database worker, not via RabbitMQ events. Application consumers fail fast when RabbitMQ closes their delivery channels; Kubernetes restarts them automatically.
 
 **Handler chaining:** When a handler succeeds, it returns downstream jobs. The worker publishes each downstream job individually:
 - `id-sweep` → `achievement-census` (per discovered character)

@@ -11,8 +11,7 @@ import (
 
 // Event types carried as queue job "type" strings.
 const (
-	EventNewProxy  = "new-proxy"
-	EventScanProxy = "scan-proxy"
+	EventNewProxy = "new-proxy"
 )
 
 // NewProxyPayload carries the data needed to register and test a new proxy.
@@ -26,21 +25,10 @@ type NewProxyPayload struct {
 	UptimePercent *float64 `json:"uptime_percent,omitempty"`
 }
 
-// ScanProxyPayload identifies an existing proxy to re-scan.
-type ScanProxyPayload struct {
-	ProxyID int64 `json:"proxy_id"`
-}
-
 // NewProxyJob builds a new-proxy queue job.
 func NewProxyJob(payload NewProxyPayload) contract.QueueJob {
 	b, _ := json.Marshal(payload)
 	return contract.QueueJob{Type: EventNewProxy, Payload: b}
-}
-
-// ScanProxyJob builds a scan-proxy queue job.
-func ScanProxyJob(proxyID int64) contract.QueueJob {
-	b, _ := json.Marshal(ScanProxyPayload{ProxyID: proxyID})
-	return contract.QueueJob{Type: EventScanProxy, Payload: b}
 }
 
 // Handler processes a single queue job's payload and returns the jobs to publish
