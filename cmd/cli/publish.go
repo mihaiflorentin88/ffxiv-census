@@ -79,14 +79,14 @@ func buildGapSweepJobs(gaps [][2]uint32, chunkSize uint32, source string) []cont
 	return jobs
 }
 
-func publishAll(q contract.Queue, logger contract.Logger, ctx context.Context, jobs []contract.QueueJob) error {
-	for _, job := range jobs {
+func publishAll(q contract.Queue, logger contract.Logger, ctx context.Context, jobs []contract.QueueJob) (int, error) {
+	for i, job := range jobs {
 		if err := q.Publish(ctx, job); err != nil {
-			return err
+			return i, fmt.Errorf("publish %q job %d of %d: %w", job.Type, i+1, len(jobs), err)
 		}
 	}
 	logger.InfoContext(ctx, "publish.enqueued", slog.Int("count", len(jobs)))
-	return nil
+	return len(jobs), nil
 }
 
 var publishIDSweepCmd = &cobra.Command{
@@ -124,6 +124,11 @@ var publishIDSweepCmd = &cobra.Command{
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
+		defer func() {
+			if err := q.Close(); err != nil {
+				container.Load.Logger().ErrorContext(cmd.Context(), "queue.close_error", slog.Any("error", err))
+			}
+		}()
 		logger := container.Load.Logger()
 
 		publishBatch := func() error {
@@ -165,7 +170,7 @@ var publishIDSweepCmd = &cobra.Command{
 				return nil
 			}
 
-			if err := publishAll(q, logger, cmd.Context(), jobs); err != nil {
+			if _, err := publishAll(q, logger, cmd.Context(), jobs); err != nil {
 				return err
 			}
 			logger.InfoContext(
@@ -242,7 +247,12 @@ var publishCharacterCensusCmd = &cobra.Command{
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
-		if err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
+		defer func() {
+			if err := q.Close(); err != nil {
+				container.Load.Logger().ErrorContext(cmd.Context(), "queue.close_error", slog.Any("error", err))
+			}
+		}()
+		if _, err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
 			return err
 		}
 		container.Load.Logger().InfoContext(
@@ -267,6 +277,11 @@ var publishAchievementCensusCmd = &cobra.Command{
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
+		defer func() {
+			if err := q.Close(); err != nil {
+				container.Load.Logger().ErrorContext(cmd.Context(), "queue.close_error", slog.Any("error", err))
+			}
+		}()
 
 		if charID > 0 {
 			job := handler.AchievementCensusJob(charID)
@@ -297,7 +312,7 @@ var publishAchievementCensusCmd = &cobra.Command{
 			jobs = append(jobs, handler.AchievementCensusJob(c.ID))
 		}
 
-		if err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
+		if _, err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
 			return err
 		}
 		container.Load.Logger().InfoContext(

@@ -27,14 +27,14 @@
 </div>
 
 <!-- Race Distribution & Expansion Completion -->
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
     <div class="panel" style="margin-bottom: 0;">
         <div class="panel-header">
             <h2 class="panel-title"><span>🧬</span><span>Race Distribution</span></h2>
         </div>
         <div class="panel-body">
             {{if .Data.RaceLabels}}
-            <div class="chart-container" style="height: 280px;"><canvas id="racePieChart"></canvas></div>
+            <div class="chart-container" style="height: 340px;"><canvas id="racePieChart"></canvas></div>
             {{else}}
             <p class="text-dim">No race data available yet.</p>
             {{end}}
@@ -131,13 +131,13 @@ document.addEventListener("DOMContentLoaded", function() {
             data: { labels: raceLabels, datasets: [{ data: raceData, backgroundColor: colors.slice(0, raceLabels.length), borderColor: "#0b0e14", borderWidth: 2 }] },
             options: {
                 responsive: true,
-                maintainAspectRatio: true,
-                cutout: "55%",
-                layout: { padding: { left: 20, right: 20 } },
+                maintainAspectRatio: false,
+                cutout: "65%",
                 plugins: {
                     legend: {
-                        position: "right",
-                        labels: { color: "#94a3b8", padding: 20, font: { size: 12 }, usePointStyle: true, pointStyleWidth: 10 }
+                        position: "bottom",
+                        align: "center",
+                        labels: { color: "#94a3b8", padding: 12, font: { size: 11 }, usePointStyle: true, pointStyleWidth: 10 }
                     },
                     tooltip: {
                         backgroundColor: "#141923", borderColor: "#263248", borderWidth: 1,

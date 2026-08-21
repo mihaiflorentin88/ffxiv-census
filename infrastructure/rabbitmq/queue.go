@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -23,46 +24,63 @@ const (
 
 // Queue is a RabbitMQ-backed work queue implementing contract.Queue.
 type Queue struct {
-	url    string
-	conn   *amqp.Connection
-	ch     *amqp.Channel
-	mu     sync.Mutex
-	logger contract.Logger
+	url     string
+	conn    *amqp.Connection
+	ch      *amqp.Channel
+	returns <-chan amqp.Return
+	mu      sync.Mutex
+	logger  contract.Logger
 }
 
-// New creates a new RabbitMQ Queue. It dials the broker, declares the full
-// topology (exchanges, queues, bindings), and returns a ready-to-use Queue.
-func New(url string, logger contract.Logger) (*Queue, error) {
-	conn, err := amqp.Dial(url)
+// openSession dials the broker, opens a channel, declares the full topology,
+// enables publisher confirms, and registers a return listener. On any setup
+// error the partially opened channel/connection are closed and the error is
+// returned without modifying the queue state.
+func (q *Queue) openSession() (*amqp.Connection, *amqp.Channel, <-chan amqp.Return, error) {
+	conn, err := amqp.Dial(q.url)
 	if err != nil {
-		return nil, fmt.Errorf("rabbitmq dial: %w", err)
+		return nil, nil, nil, fmt.Errorf("rabbitmq dial: %w", err)
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("rabbitmq channel: %w", err)
+		return nil, nil, nil, fmt.Errorf("rabbitmq channel: %w", err)
 	}
 
-	q := &Queue{url: url, conn: conn, ch: ch, logger: logger}
 	if err := q.declareTopology(ch); err != nil {
-		q.Close()
-		return nil, fmt.Errorf("rabbitmq topology: %w", err)
+		ch.Close()
+		conn.Close()
+		return nil, nil, nil, fmt.Errorf("rabbitmq topology: %w", err)
 	}
 
+	if err := ch.Confirm(false); err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, nil, nil, fmt.Errorf("rabbitmq confirm: %w", err)
+	}
+
+	rets := ch.NotifyReturn(make(chan amqp.Return, 1))
+
+	return conn, ch, rets, nil
+}
+
+// New creates a new RabbitMQ Queue. It dials the broker, declares the full
+// topology (exchanges, queues, bindings), enables publisher confirms, and
+// returns a ready-to-use Queue.
+func New(url string, logger contract.Logger) (*Queue, error) {
+	q := &Queue{url: url, logger: logger}
+	conn, ch, rets, err := q.openSession()
+	if err != nil {
+		return nil, err
+	}
+	q.conn = conn
+	q.ch = ch
+	q.returns = rets
 	return q, nil
 }
 
 // declareTopology idempotently declares all exchanges, queues, and bindings.
-//
-// Per event type (e.g. "id-sweep"):
-//
-//	census (exchange, direct)
-//	  └─ routing key "id-sweep" → census.id-sweep (queue)
-//
-//	census.id-sweep.failed (queue)
-//	  └─ dead-letters back to census exchange, routing key "id-sweep"
-//	  └─ retry messages have TTL (auto-retry), permanent failures have no TTL (stay forever)
 func (q *Queue) declareTopology(ch *amqp.Channel) error {
 	if err := ch.ExchangeDeclare(exchangeMain, "direct", true, false, false, false, nil); err != nil {
 		return fmt.Errorf("declare exchange %s: %w", exchangeMain, err)
@@ -72,7 +90,6 @@ func (q *Queue) declareTopology(ch *amqp.Channel) error {
 		mainQueue := "census." + et
 		failedQueue := mainQueue + ".failed"
 
-		// Main queue.
 		if _, err := ch.QueueDeclare(mainQueue, true, false, false, false, nil); err != nil {
 			return fmt.Errorf("declare queue %s: %w", mainQueue, err)
 		}
@@ -80,7 +97,6 @@ func (q *Queue) declareTopology(ch *amqp.Channel) error {
 			return fmt.Errorf("bind queue %s: %w", mainQueue, err)
 		}
 
-		// Failed queue — dead-letters back to main queue for retries.
 		failedArgs := amqp.Table{
 			"x-dead-letter-exchange":    exchangeMain,
 			"x-dead-letter-routing-key": et,
@@ -93,7 +109,9 @@ func (q *Queue) declareTopology(ch *amqp.Channel) error {
 	return nil
 }
 
-// Publish sends a single job to the main exchange with routing key = job.Type.
+// Publish sends a single job to the main exchange with routing key = job.Type
+// and waits for broker confirmation. A successful return means the durable
+// target queue accepted the message.
 func (q *Queue) Publish(ctx context.Context, job contract.QueueJob) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -104,40 +122,57 @@ func (q *Queue) Publish(ctx context.Context, job contract.QueueJob) error {
 		}
 	}
 
-	return q.ch.PublishWithContext(ctx, exchangeMain, job.Type, false, false, amqp.Publishing{
+	// Drain any stale return notification from the previous publish.
+	select {
+	case <-q.returns:
+	default:
+	}
+
+	dc, err := q.ch.PublishWithDeferredConfirmWithContext(ctx, exchangeMain, job.Type, true, false, amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		Body:         job.Payload,
 		Headers:      amqp.Table{headerAttempts: int32(0)},
 	})
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	if dc == nil {
+		return fmt.Errorf("publish: deferred confirmation is nil")
+	}
+
+	acked, err := dc.WaitContext(ctx)
+	if err != nil {
+		return fmt.Errorf("publish confirm: %w", err)
+	}
+	if !acked {
+		return fmt.Errorf("publish: broker nacked message for %q", job.Type)
+	}
+
+	// RabbitMQ notifies returns before confirming mandatory messages.
+	select {
+	case ret := <-q.returns:
+		return fmt.Errorf("rabbitmq unroutable: code=%d text=%q exchange=%q routing_key=%q", ret.ReplyCode, ret.ReplyText, ret.Exchange, ret.RoutingKey)
+	default:
+	}
+
+	return nil
 }
 
-// Consume starts concurrency consumers for the given event types. Each message
-// is dispatched to handler. On handler return:
-//   - nil → ack
-//   - error → retry with exponential backoff; after maxAttempts → dead-letter
-//
-// Consume blocks until ctx is cancelled. On cancellation, it stops accepting
-// new messages but allows in-flight handlers to finish before returning.
+// Consume starts concurrency consumers for the given event types.
 func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency int, handler func(ctx context.Context, job contract.QueueJob) error) error {
 	if concurrency <= 0 {
 		concurrency = 4
 	}
 
-	// stopClaiming is cancelled when the signal arrives, causing workers to
-	// stop accepting new messages. processCtx stays alive so in-flight
-	// handlers can finish their work.
 	stopClaiming, stopClaimingCancel := context.WithCancel(context.Background())
 	defer stopClaimingCancel()
 
-	// Watch for the signal context to cancel stopClaiming.
 	go func() {
 		<-ctx.Done()
 		stopClaimingCancel()
 	}()
 
-	// processCtx is used for in-flight handler calls — it is NOT cancelled
-	// by the signal, so handlers can complete gracefully.
 	processCtx, processCancel := context.WithCancel(context.Background())
 	defer processCancel()
 
@@ -170,15 +205,12 @@ func (q *Queue) Consume(ctx context.Context, eventTypes []string, concurrency in
 }
 
 // ConsumeFailed consumes from per-event-type failed queues and re-publishes
-// messages back to the main exchange. Each message's attempt count is incremented.
-// Messages that have exceeded maxFailedAttempts (100) are permanently discarded.
-// If eventTypes is empty, consumes from all failed queues.
+// messages back to the main exchange.
 func (q *Queue) ConsumeFailed(ctx context.Context, types []string, concurrency int) error {
 	if concurrency <= 0 {
 		concurrency = 4
 	}
 
-	// Build list of failed queue names.
 	var failedQueues []string
 	if len(types) == 0 {
 		for _, et := range eventTypes() {
@@ -264,7 +296,6 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 		eventType := msg.RoutingKey
 
 		if attempts >= maxFailedAttempts {
-			// Permanently discard — too many failures.
 			q.logger.WarnContext(
 				processCtx, "rabbitmq.failed.permanent_discard",
 				slog.String("event_type", eventType),
@@ -274,7 +305,6 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 			continue
 		}
 
-		// Re-publish to main exchange with incremented attempt count.
 		newHeaders := copyHeaders(msg.Headers, attempts)
 		pubErr := ch.PublishWithContext(processCtx, exchangeMain, eventType, false, false, amqp.Publishing{
 			ContentType:  "application/json",
@@ -305,8 +335,6 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 }
 
 // consumeWorker creates a dedicated channel and consumes from the specified queues.
-// stopClaiming controls when to stop accepting new messages.
-// processCtx is passed to handlers so they can finish during graceful shutdown.
 func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.Context, eventTypes []string, workerID int, handler func(ctx context.Context, job contract.QueueJob) error) error {
 	ch, err := q.conn.Channel()
 	if err != nil {
@@ -355,7 +383,6 @@ func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.C
 }
 
 // handleFailure publishes the failed message to the per-event-type failed queue.
-// With TTL for retry (auto-dead-letters back to main), without TTL for permanent failure.
 func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr error) {
 	attempts := getAttempts(msg.Headers) + 1
 	eventType := msg.RoutingKey
@@ -368,7 +395,6 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 			slog.Int("attempts", attempts),
 			slog.Any("error", handlerErr),
 		)
-		// No TTL — stays in failed queue permanently.
 		if err := q.publishToFailed(failedQueue, eventType, msg.Body, msg.Headers, attempts, 0); err != nil {
 			q.logger.ErrorContext(ctx, "rabbitmq.failed_publish_error", slog.Any("error", err))
 		}
@@ -384,7 +410,6 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 			slog.Int("backoff_sec", backoff),
 			slog.Any("error", handlerErr),
 		)
-		// With TTL — auto-dead-letters back to main queue after backoff.
 		if err := q.publishToFailed(failedQueue, eventType, msg.Body, msg.Headers, attempts, backoff); err != nil {
 			q.logger.ErrorContext(ctx, "rabbitmq.retry_publish_error", slog.Any("error", err))
 		}
@@ -394,8 +419,6 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 }
 
 // publishToFailed publishes to the per-event-type failed queue.
-// If backoffSec > 0, the message has a TTL and will auto-dead-letter back to main.
-// If backoffSec == 0, the message stays permanently.
 func (q *Queue) publishToFailed(failedQueue, eventType string, body []byte, headers amqp.Table, attempts, backoffSec int) error {
 	newHeaders := copyHeaders(headers, attempts)
 	pub := amqp.Publishing{
@@ -410,29 +433,29 @@ func (q *Queue) publishToFailed(failedQueue, eventType string, body []byte, head
 	return q.ch.PublishWithContext(context.Background(), "", failedQueue, false, false, pub)
 }
 
-// Close closes the AMQP connection.
+// Close closes the publishing channel and then the AMQP connection.
 func (q *Queue) Close() error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.conn != nil && !q.conn.IsClosed() {
-		return q.conn.Close()
+	var chErr, connErr error
+	if q.ch != nil {
+		chErr = q.ch.Close()
 	}
-	return nil
+	if q.conn != nil && !q.conn.IsClosed() {
+		connErr = q.conn.Close()
+	}
+	return errors.Join(chErr, connErr)
 }
 
-// reconnect re-establishes the AMQP connection and channel.
+// reconnect re-establishes the AMQP connection, channel, and confirm/return handling.
 func (q *Queue) reconnect() error {
-	conn, err := amqp.Dial(q.url)
+	conn, ch, rets, err := q.openSession()
 	if err != nil {
-		return fmt.Errorf("rabbitmq dial: %w", err)
-	}
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("rabbitmq channel: %w", err)
+		return err
 	}
 	q.conn = conn
 	q.ch = ch
+	q.returns = rets
 	return nil
 }
 

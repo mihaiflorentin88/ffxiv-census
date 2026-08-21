@@ -194,10 +194,9 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 					icon = cfg.Icon
 				}
 				cards = append(cards, ExpansionCard{
-					Icon:    icon,
-					Name:    ec.Expansion,
-					Count:   ec.Count,
-					Percent: formatPercent(ec.Count, total),
+					Icon:  icon,
+					Name:  ec.Expansion,
+					Count: ec.Count,
 				})
 			}
 			mu.Lock()

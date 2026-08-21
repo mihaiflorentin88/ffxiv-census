@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 func TestComputeIDSweepRange_AutoDiscovery(t *testing.T) {
@@ -160,6 +166,57 @@ func TestBuildGapSweepJobs(t *testing.T) {
 		if p.Source != "auto" {
 			t.Errorf("job[%d] source = %q, want auto", i, p.Source)
 		}
+	}
+}
+
+// errorQueue is a queue fake that fails on the Nth publish.
+type errorQueue struct {
+	failOn int // 1-based position to fail on
+	calls  int
+	jobs   []contract.QueueJob
+}
+
+func (q *errorQueue) Publish(_ context.Context, job contract.QueueJob) error {
+	q.calls++
+	if q.calls == q.failOn {
+		return fmt.Errorf("broker nack on job %d", q.calls)
+	}
+	q.jobs = append(q.jobs, job)
+	return nil
+}
+
+func (q *errorQueue) Consume(context.Context, []string, int, func(context.Context, contract.QueueJob) error) error {
+	return nil
+}
+func (q *errorQueue) ConsumeFailed(context.Context, []string, int) error { return nil }
+func (q *errorQueue) Close() error                                       { return nil }
+
+func TestPublishAllStopsOnFirstUnconfirmedJob(t *testing.T) {
+	q := &errorQueue{failOn: 3}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	jobs := []contract.QueueJob{
+		{Type: "id-sweep", Payload: []byte(`{"from":1,"to":100}`)},
+		{Type: "id-sweep", Payload: []byte(`{"from":101,"to":200}`)},
+		{Type: "id-sweep", Payload: []byte(`{"from":201,"to":300}`)},
+		{Type: "id-sweep", Payload: []byte(`{"from":301,"to":400}`)},
+	}
+
+	confirmed, err := publishAll(q, logger, context.Background(), jobs)
+	if err == nil {
+		t.Fatal("expected error from publishAll")
+	}
+	if confirmed != 2 {
+		t.Errorf("confirmed = %d, want 2", confirmed)
+	}
+	if !strings.Contains(err.Error(), "id-sweep") {
+		t.Errorf("error should contain event type: %v", err)
+	}
+	if !strings.Contains(err.Error(), "job 3 of 4") {
+		t.Errorf("error should contain job position: %v", err)
+	}
+	if len(q.jobs) != 2 {
+		t.Errorf("only %d jobs should have been published, got %d", 2, len(q.jobs))
 	}
 }
 

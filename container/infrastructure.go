@@ -489,9 +489,8 @@ func (s *ServiceContainer) ErcinDedeogluProvider() contract.ProxyProvider {
 	return s.infrastructure.ercindedeogluProvider
 }
 
-// ProxyHub creates a ProxyHub for the given owner (process name + goroutine ID).
-// The lock TTL is read from [proxy.consumer] config.
-func (s *ServiceContainer) ProxyHub(owner string) *proxydomain.ProxyHub {
+// ProxyHub creates a ProxyHub. The lock TTL is read from [proxy.consumer] config.
+func (s *ServiceContainer) ProxyHub() *proxydomain.ProxyHub {
 	repo := s.ProxyRepository()
 	if repo == nil {
 		return nil

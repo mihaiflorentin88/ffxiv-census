@@ -3,9 +3,11 @@ package ui
 import (
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 // ExpansionsViewData holds MSQ completion funnel metrics for /ui/expansions.
@@ -31,20 +33,37 @@ type ExpansionProgression struct {
 func (c *UIController) Expansions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var totalChars int64
+	var countMap map[string]int64
 
 	if c.svc != nil {
-		tot, _, _, err := c.svc.Summary(ctx)
-		if err == nil {
+		var wg sync.WaitGroup
+		var completions []contract.ExpansionCount
+		var summaryErr, compErr error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			tot, _, _, err := c.svc.Summary(ctx)
+			if err != nil {
+				summaryErr = err
+				return
+			}
 			totalChars = tot
-		}
-	}
+		}()
+		go func() {
+			defer wg.Done()
+			completions, compErr = c.svc.ExpansionCompletions(ctx)
+		}()
+		wg.Wait()
 
-	countMap := make(map[string]int64)
-	if c.svc != nil {
-		completions, err := c.svc.ExpansionCompletions(ctx)
-		if err != nil {
-			logging.Error("ui.expansions.completions", err.Error())
+		if summaryErr != nil {
+			// totalChars stays zero; partial page renders.
+			logging.Error("ui.expansions.summary", summaryErr.Error())
+		}
+		if compErr != nil {
+			logging.Error("ui.expansions.completions", compErr.Error())
 		} else {
+			countMap = make(map[string]int64, len(completions))
 			for _, ec := range completions {
 				countMap[ec.Expansion] = ec.Count
 			}

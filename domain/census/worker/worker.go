@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -74,10 +73,6 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 	w.logger.InfoContext(ctx, "worker.start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 
-	// Capture the outer context (signal-aware) for shutdown checks.
-	// The inner ctx from Consume is processCtx (not cancelled on shutdown).
-	shutdownCtx := ctx
-
 	processJob := func(processCtx context.Context, job contract.QueueJob) error {
 		h, ok := w.handlers.Get(job.Type)
 		if !ok {
@@ -86,9 +81,10 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 
 		// Wait for required providers to become available before processing.
-		// Use shutdownCtx so we can exit during graceful shutdown.
+		// Use processCtx so a claimed job is not aborted by SIGTERM during
+		// a rate-limit wait; cancellation only stops new claims.
 		if w.rateLimiter != nil {
-			if err := w.waitForProviders(shutdownCtx, job.Type); err != nil {
+			if err := w.waitForProviders(processCtx, job.Type); err != nil {
 				return err
 			}
 		}
@@ -121,7 +117,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 			)
 			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
 				select {
-				case <-shutdownCtx.Done():
+				case <-processCtx.Done():
 					return err
 				case <-time.After(200 * time.Millisecond):
 				}
@@ -208,20 +204,6 @@ func isProxyError(err error) bool {
 		strings.Contains(msg, "proxyconnect")
 }
 
-// goroutineID returns the current goroutine's ID for diagnostic logging.
-func goroutineID() int {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	id := 0
-	for i := len("goroutine "); i < n; i++ {
-		if buf[i] < '0' || buf[i] > '9' {
-			break
-		}
-		id = id*10 + int(buf[i]-'0')
-	}
-	return id
-}
-
 // RunEventsWithProxy runs the worker pool with per-goroutine proxy lifecycle.
 // Each goroutine acquires its own proxy from the ProxyHub, creates proxy-aware
 // clients, and uses them for all requests. If a proxy's ownership changes
@@ -231,6 +213,7 @@ func (w *Worker) RunEventsWithProxy(
 	ctx context.Context,
 	eventTypes []string,
 	concurrency int,
+	ownerPrefix string,
 	proxyHub *proxydomain.ProxyHub,
 	newHandlers func(lodestone contract.LodestoneClient, tomestone contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry,
 	newLodestoneClient func(proxyURL string) (contract.LodestoneClient, error),
@@ -261,7 +244,7 @@ func (w *Worker) RunEventsWithProxy(
 		wg.Add(1)
 		go func(wid int) {
 			defer wg.Done()
-			if err := w.proxyWorkerLoop(ctx, childCtx, eventTypes, wid, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter); err != nil && !errors.Is(err, context.Canceled) {
+			if err := w.proxyWorkerLoop(ctx, childCtx, eventTypes, wid, ownerPrefix, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter); err != nil && !errors.Is(err, context.Canceled) {
 				w.logger.ErrorContext(childCtx, "worker.proxy_loop_error", slog.Int("worker_id", wid), slog.Any("error", err))
 				errCh <- err
 			}
@@ -290,13 +273,14 @@ func (w *Worker) proxyWorkerLoop(
 	processCtx context.Context,
 	eventTypes []string,
 	workerID int,
+	ownerPrefix string,
 	proxyHub *proxydomain.ProxyHub,
 	newHandlers func(lodestone contract.LodestoneClient, tomestone contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry,
 	newLodestoneClient func(proxyURL string) (contract.LodestoneClient, error),
 	newTomestoneClient func(proxyURL string) (contract.TomestoneClient, error),
 	newRateLimiter func() contract.ProviderRateLimiter,
 ) error {
-	owner := fmt.Sprintf("census-consume-g%d-p%d", workerID, runtime.NumGoroutine())
+	owner := fmt.Sprintf("%s-w%d", ownerPrefix, workerID)
 
 	// Acquire initial proxy.
 	proxy, err := proxyHub.NewProxy(claimCtx, owner)

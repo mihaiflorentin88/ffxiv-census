@@ -388,17 +388,36 @@ type CharacterDetail struct {
 // Summary returns the total number of non-deleted characters and how many of
 // them are active (latest achievement within the activity window).
 func (s *Service) Summary(ctx context.Context) (total, active, maxLevelCount int64, err error) {
-	total, err = s.characters.Count(ctx, contract.CharacterFilter{})
-	if err != nil {
-		return 0, 0, 0, err
+	since := s.activitySince()
+	maxLvl := s.MaxLevel()
+
+	var wg sync.WaitGroup
+	var totalErr, activeErr, maxErr error
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		total, totalErr = s.characters.Count(ctx, contract.CharacterFilter{})
+	}()
+	go func() {
+		defer wg.Done()
+		active, activeErr = s.characters.CountActive(ctx, since)
+	}()
+	go func() {
+		defer wg.Done()
+		maxLevelCount, maxErr = s.characters.Count(ctx, contract.CharacterFilter{MinLevel: maxLvl})
+	}()
+	wg.Wait()
+
+	// Deterministic error precedence: total, active, max-level.
+	if totalErr != nil {
+		return 0, 0, 0, totalErr
 	}
-	active, err = s.characters.CountActive(ctx, s.activitySince())
-	if err != nil {
-		return 0, 0, 0, err
+	if activeErr != nil {
+		return 0, 0, 0, activeErr
 	}
-	maxLevelCount, err = s.characters.Count(ctx, contract.CharacterFilter{MinLevel: s.MaxLevel()})
-	if err != nil {
-		return 0, 0, 0, err
+	if maxErr != nil {
+		return 0, 0, 0, maxErr
 	}
 	return total, active, maxLevelCount, nil
 }
@@ -464,45 +483,74 @@ type WorldDetailStats struct {
 // WorldDetail returns full census stats for a specific world.
 func (s *Service) WorldDetail(ctx context.Context, worldName string) (*WorldDetailStats, error) {
 	filter := contract.CharacterFilter{World: worldName}
-	total, err := s.characters.Count(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-
 	since := s.ActivitySince()
 	filterActive := contract.CharacterFilter{World: worldName, Since: &since}
-	active, err := s.characters.Count(ctx, filterActive)
-	if err != nil {
-		return nil, err
-	}
-
 	now := time.Now().UTC()
 	since30d := now.Add(-30 * 24 * time.Hour)
-	new30d, err := s.achievements.CountChocoboMilestones(ctx, since30d, filter)
-	if err != nil {
-		return nil, err
-	}
 
-	races, err := s.characters.Breakdown(ctx, "race", s.activitySince(), filter)
-	if err != nil {
-		return nil, err
-	}
+	var total, active, new30d int64
+	var races []contract.GroupCount
+	var msq []contract.ExpansionCount
+	var timeline []contract.DailyCount
+	var chars []contract.CharacterRecord
+	var totalErr, activeErr, new30dErr, racesErr, msqErr, timelineErr, listErr error
 
-	msq, err := s.achievements.CountExpansionsFiltered(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
+	var wg sync.WaitGroup
+	wg.Add(7)
+	go func() {
+		defer wg.Done()
+		total, totalErr = s.characters.Count(ctx, filter)
+	}()
+	go func() {
+		defer wg.Done()
+		active, activeErr = s.characters.Count(ctx, filterActive)
+	}()
+	go func() {
+		defer wg.Done()
+		new30d, new30dErr = s.achievements.CountChocoboMilestones(ctx, since30d, filter)
+	}()
+	go func() {
+		defer wg.Done()
+		races, racesErr = s.characters.Breakdown(ctx, "race", since, filter)
+	}()
+	go func() {
+		defer wg.Done()
+		msq, msqErr = s.achievements.CountExpansionsFiltered(ctx, filter)
+	}()
+	go func() {
+		defer wg.Done()
+		timeline, timelineErr = s.achievements.NewCharactersPerDay(ctx, since30d, now, filter)
+	}()
+	go func() {
+		defer wg.Done()
+		chars, listErr = s.characters.List(ctx, filter, 1, 0)
+	}()
+	wg.Wait()
 
-	timeline, err := s.achievements.NewCharactersPerDay(ctx, since30d, now, filter)
-	if err != nil {
-		return nil, err
+	// Deterministic error precedence for the first six calls.
+	if totalErr != nil {
+		return nil, totalErr
+	}
+	if activeErr != nil {
+		return nil, activeErr
+	}
+	if new30dErr != nil {
+		return nil, new30dErr
+	}
+	if racesErr != nil {
+		return nil, racesErr
+	}
+	if msqErr != nil {
+		return nil, msqErr
+	}
+	if timelineErr != nil {
+		return nil, timelineErr
 	}
 
 	dc := ""
 	region := ""
-	// If we have characters, grab the DC from the first character in the list
-	chars, err := s.characters.List(ctx, filter, 1, 0)
-	if err == nil && len(chars) > 0 {
+	// Metadata lookup is non-fatal.
+	if listErr == nil && len(chars) > 0 {
 		dc = chars[0].Datacenter
 		region = chars[0].Region
 	}

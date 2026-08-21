@@ -96,6 +96,65 @@ func TestDashboardHandler(t *testing.T) {
 	}
 }
 
+func TestDashboardHandler_RaceChartLayout(t *testing.T) {
+	rig := newTestRig(t)
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour)
+
+	// Seed characters with distinct races so the chart renders.
+	races := []string{"Hyur", "Elezen", "Lalafell", "Miqo'te", "Roegadyn", "Au Ra", "Hrothgar", "Viera"}
+	for i, race := range races {
+		_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+			ID:                  uint32(5001 + i),
+			Name:                "Char " + race,
+			World:               "Balmung",
+			Datacenter:          "Crystal",
+			Region:              "NA",
+			Race:                race,
+			FirstSeenAt:         recent,
+			LatestAchievementAt: &recent,
+		}, nil)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil)
+	rec := httptest.NewRecorder()
+	rig.ctrl.Dashboard(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+
+	// Responsive grid replaces fixed 1fr 1fr.
+	if !strings.Contains(body, "repeat(auto-fit, minmax(360px, 1fr)") {
+		t.Error("expected responsive grid with repeat(auto-fit, minmax(360px, 1fr))")
+	}
+	// Race chart container must be 340px.
+	if !strings.Contains(body, "height: 340px") {
+		t.Error("expected race chart container height 340px")
+	}
+	// Chart.js options: maintainAspectRatio must be false.
+	if !strings.Contains(body, "maintainAspectRatio: false") {
+		t.Error("expected maintainAspectRatio: false in race chart options")
+	}
+	// Chart.js options: cutout must be 65%.
+	if !strings.Contains(body, `cutout: "65%"`) && !strings.Contains(body, `cutout:'65%'`) {
+		t.Error(`expected cutout: "65%" in race chart options`)
+	}
+	// Legend must be at bottom, not right.
+	if strings.Contains(body, `position: "right"`) || strings.Contains(body, `position:"right"`) {
+		t.Error("race chart legend should not be position right")
+	}
+	if !strings.Contains(body, `position: "bottom"`) && !strings.Contains(body, `position:"bottom"`) {
+		t.Error(`expected legend position: "bottom"`)
+	}
+	// Legend must be centered.
+	if !strings.Contains(body, `align: "center"`) && !strings.Contains(body, `align:"center"`) {
+		t.Error(`expected legend align: "center"`)
+	}
+}
+
 func TestWorldDrilldownHandler(t *testing.T) {
 	rig := newTestRig(t)
 	now := time.Now().UTC()

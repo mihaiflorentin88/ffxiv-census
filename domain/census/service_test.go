@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -735,6 +736,147 @@ func TestService_SetActivityWindow_Noop(t *testing.T) {
 	svc.SetActivityWindow(-time.Hour)
 	if !svc.IsActive(time.Now().UTC().Add(-15 * 24 * time.Hour)) {
 		t.Error("no-op SetActivityWindow should keep the default 30-day window")
+	}
+}
+
+// barrier is a synchronisation primitive for proving concurrent execution.
+// Each goroutine calls enter(), which blocks until the expected number of
+// goroutines have arrived. Then all are released.
+type barrier struct {
+	mu      sync.Mutex
+	entered int
+	expect  int
+	ready   chan struct{}
+	release chan struct{}
+}
+
+func newBarrier(expect int) *barrier {
+	return &barrier{
+		expect:  expect,
+		ready:   make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+// enter blocks until all expected goroutines have entered.
+func (b *barrier) enter() {
+	b.mu.Lock()
+	b.entered++
+	if b.entered >= b.expect {
+		close(b.ready)
+	}
+	b.mu.Unlock()
+	<-b.release
+}
+
+// release waits for all goroutines to enter, then unblocks them.
+func (b *barrier) releaseAll() {
+	<-b.ready
+	close(b.release)
+}
+
+// barrierCharRepo wraps CharacterRepository with barrier-gated methods.
+type barrierCharRepo struct {
+	*mockrepo.CharacterRepository
+	countBarrier       *barrier
+	countActiveBarrier *barrier
+}
+
+func (b *barrierCharRepo) Count(ctx context.Context, filter contract.CharacterFilter) (int64, error) {
+	b.countBarrier.enter()
+	return b.CharacterRepository.Count(ctx, filter)
+}
+
+func (b *barrierCharRepo) CountActive(ctx context.Context, since time.Time) (int64, error) {
+	b.countActiveBarrier.enter()
+	return b.CharacterRepository.CountActive(ctx, since)
+}
+
+// barrierAchRepo wraps AchievementRepository with barrier-gated methods.
+type barrierAchRepo struct {
+	*mockrepo.AchievementRepository
+	countExpBarrier *barrier
+}
+
+func (b *barrierAchRepo) CountExpansions(ctx context.Context) ([]contract.ExpansionCount, error) {
+	b.countExpBarrier.enter()
+	return b.AchievementRepository.CountExpansions(ctx)
+}
+
+func TestService_SummaryQueriesRunConcurrently(t *testing.T) {
+	chars := mockrepo.NewCharacterFake()
+	ach := mockrepo.NewAchievementFake()
+	runs := mockrepo.NewCensusRunFake()
+
+	// All 3 Summary queries must enter before any completes.
+	b := newBarrier(3)
+	wrapped := &barrierCharRepo{
+		CharacterRepository: chars,
+		countBarrier:        b,
+		countActiveBarrier:  b,
+	}
+	svc := NewService(wrapped, ach, runs)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = svc.Summary(context.Background())
+	}()
+
+	// Wait for all 3 to enter, then release them.
+	b.releaseAll()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Summary did not complete: queries are serial, not concurrent")
+	}
+}
+
+// worldDetailBarrierCharRepo gates Count calls behind a barrier to prove
+// WorldDetail's two Count calls run concurrently.
+type worldDetailBarrierCharRepo struct {
+	*mockrepo.CharacterRepository
+	countBarrier *barrier
+}
+
+func (w *worldDetailBarrierCharRepo) Count(ctx context.Context, filter contract.CharacterFilter) (int64, error) {
+	w.countBarrier.enter()
+	return w.CharacterRepository.Count(ctx, filter)
+}
+
+func TestService_WorldDetailQueriesRunConcurrently(t *testing.T) {
+	chars := mockrepo.NewCharacterFake()
+	ach := mockrepo.NewAchievementFake()
+	runs := mockrepo.NewCensusRunFake()
+
+	// WorldDetail calls Count twice (total and active). If serial, the second
+	// blocks on the first behind the barrier, and the test times out.
+	b := newBarrier(2)
+	wrapped := &worldDetailBarrierCharRepo{
+		CharacterRepository: chars,
+		countBarrier:        b,
+	}
+	svc := NewService(wrapped, ach, runs)
+
+	ctx := context.Background()
+	_ = chars.Upsert(ctx, contract.CharacterRecord{
+		ID: 1, Name: "Test", World: "Balmung", Datacenter: "Crystal", Region: "NA",
+		FirstSeenAt: time.Now().UTC(),
+	}, nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.WorldDetail(ctx, "Balmung")
+	}()
+
+	b.releaseAll()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("WorldDetail did not complete: Count calls are serial, not concurrent")
 	}
 }
 

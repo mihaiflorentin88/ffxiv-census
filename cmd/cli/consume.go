@@ -65,6 +65,11 @@ pause affected provider queues while letting others continue.`,
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
+		defer func() {
+			if err := q.Close(); err != nil {
+				container.Load.Logger().ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
+			}
+		}()
 
 		if proxyMode {
 			return runProxyConsumer(ctx, q, eventTypes, concurrency)
@@ -133,13 +138,15 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 	}
 
 	// Get ProxyHub for this process.
-	proxyHub := container.Load.ProxyHub("census-consume")
+	hostname, _ := os.Hostname()
+	ownerPrefix := fmt.Sprintf("census-consume-%s-p%d", hostname, os.Getpid())
+	proxyHub := container.Load.ProxyHub()
 	if proxyHub == nil {
 		return fmt.Errorf("proxy hub not initialised (database unavailable?)")
 	}
 
 	w := worker.New(q, container.Load.Handlers(), logger)
-	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
+	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, ownerPrefix, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
 }
 
 var consumeFailedCmd = &cobra.Command{
@@ -172,6 +179,11 @@ Use --events to filter which failed queues to consume from (e.g. --events "id-sw
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
+		defer func() {
+			if err := q.Close(); err != nil {
+				container.Load.Logger().ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
+			}
+		}()
 
 		container.Load.Logger().InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency), slog.Any("event_types", eventTypes))
 		return q.ConsumeFailed(ctx, eventTypes, concurrency)
