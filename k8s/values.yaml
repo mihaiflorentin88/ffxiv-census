@@ -181,7 +181,7 @@ workers:
         - --events
         - "id-sweep,character-census,achievement-census,id-sweep.failed,character-census.failed,achievement-census.failed"
         - -c
-        - "50"
+        - "30"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
     - name: proxy-id-sweep
       replicaCount: 1
@@ -191,7 +191,7 @@ workers:
         - id-sweep
         - --proxy
         - -c
-        - "50"
+        - "40"
     - name: proxy-character-census
       replicaCount: 1
       command:
@@ -200,7 +200,7 @@ workers:
         - character-census
         - --proxy
         - -c
-        - "50"
+        - "20"
     - name: proxy-achievement-census
       replicaCount: 1
       command:
@@ -209,7 +209,7 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "50"
+        - "20"
     # --- Proxy discovery/scanning ---
     - name: proxy-new
       replicaCount: 1
@@ -218,7 +218,7 @@ workers:
         - proxy
         - consume
         - -c
-        - "10"
+        - "50"
     - name: proxy-scan
       replicaCount: 1
       command:
@@ -238,7 +238,7 @@ workers:
         - --events
         - "id-sweep,character-census,achievement-census"
         - -c
-        - "10"
+        - "1"
 
 cronjobs:
   defaults:
@@ -270,7 +270,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "15000"
+        - "6000"
     - name: publish-id-sweep
       schedule: "0 * * * *"
       command:
@@ -279,19 +279,10 @@ cronjobs:
         - id-sweep
         - --auto
         - --batch-size
-        - "8000"
+        - "4000"
         - --chunk-size
         - "10"
-    # - name: publish-fc-census disabled for now. please do not remove or uncomment
-    #   schedule: "0 6 * * 0"
-    #   command:
-    #     - /app/ffxiv-census
-    #     - publish
-    #     - fc-census
-    #     - --older-than
-    #     - 720h
-    #     - --limit
-    #     - "500"
+        
     # - name: publish-fill-gaps commented for now, please do not remove or uncomment
     #   schedule: "0 3 1 * *"
     #   command:

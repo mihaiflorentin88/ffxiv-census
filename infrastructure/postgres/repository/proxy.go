@@ -171,7 +171,7 @@ func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contrac
 	rows, err := db.QueryContext(ctx,
 		`SELECT `+proxyColumns+` FROM proxies
 		WHERE
-			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '30 minutes')
+			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '20 minutes')
 			OR (status = 'active' AND last_scanned_at < NOW() - INTERVAL '10 minutes')
 			OR (status = 'dead' AND last_scanned_at < NOW() - INTERVAL '7 days')
 		ORDER BY
