@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -80,6 +81,10 @@ var proxyDiscoverCmd = &cobra.Command{
 				providerPublished++
 			}
 			logger.InfoContext(ctx, "proxy.discover.provider_published", "provider", p.Name(), "published", providerPublished)
+
+			// Release proxy data for this provider before fetching the next one.
+			proxies = nil
+			runtime.GC()
 		}
 
 		logger.InfoContext(ctx, "proxy.discover.complete", "discovered", totalDiscovered, "published", totalPublished, "errors", totalErrors)
