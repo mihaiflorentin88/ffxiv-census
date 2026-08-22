@@ -32,6 +32,7 @@ type scraper interface {
 	FetchCharacter(id uint32) (*godestone.Character, error)
 	FetchCharacterAchievements(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)
 	FetchFreeCompany(id string) (*godestone.FreeCompany, error)
+	SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool)
 }
 
 type httpGetter interface {
@@ -40,14 +41,15 @@ type httpGetter interface {
 
 // Client is a contract.LodestoneClient backed by godestone.
 type Client struct {
-	scraper     scraper
-	httpClient  httpGetter
-	limiter     *rate.Limiter
-	maxRetries  int
-	backoffBase time.Duration
-	logger      contract.Logger
-	rateLimiter contract.ProviderRateLimiter
-	proxyURL    string // empty for direct clients; set for proxy-aware clients
+	scraper           scraper
+	httpClient        httpGetter
+	limiter           *rate.Limiter
+	maxRetries        int
+	backoffBase       time.Duration
+	logger            contract.Logger
+	rateLimiter       contract.ProviderRateLimiter
+	proxyURL          string // empty for direct clients; set for proxy-aware clients
+	achievementStopFn func([]*godestone.AchievementInfo) bool
 }
 
 // per second). Lodestone is Cloudflare-fronted; 1 req/s is the established safe
@@ -127,7 +129,14 @@ func jittered(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * factor)
 }
 
-// fetchCharacter runs one scrape attempt. Attempts are counted from 0 to
+// SetAchievementStopFn sets a callback that the scraper will use to decide
+// whether to stop paginating achievements early. Pass nil to clear.
+func (c *Client) SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool) {
+	c.achievementStopFn = fn
+}
+
+// FetchCharacter runs one scrape attempt. Attempts are counted from 0 to
+// maxRetries (inclusive), giving maxRetries+1 total attempts.
 func (c *Client) FetchCharacter(ctx context.Context, id uint32) (*godestone.Character, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -190,6 +199,12 @@ func (c *Client) FetchCharacter(ctx context.Context, id uint32) (*godestone.Char
 
 // FetchAchievements mirrors FetchCharacter for a character's achievements.
 func (c *Client) FetchAchievements(ctx context.Context, id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+	// Propagate stop function to the underlying scraper for this call.
+	if c.achievementStopFn != nil {
+		c.scraper.SetAchievementStopFn(c.achievementStopFn)
+		defer c.scraper.SetAchievementStopFn(nil)
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {

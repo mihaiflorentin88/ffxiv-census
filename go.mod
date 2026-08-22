@@ -18,7 +18,7 @@ require (
 	modernc.org/sqlite v1.56.0
 )
 
-replace github.com/xivapi/godestone/v2 => github.com/mihaiflorentin88/godestone/v2 v2.10.2-proxy
+replace github.com/xivapi/godestone/v2 => github.com/mihaiflorentin88/godestone/v2 v2.10.3-proxy
 
 require (
 	github.com/KyleBanks/depth v1.2.1 // indirect

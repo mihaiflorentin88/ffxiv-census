@@ -23,4 +23,5 @@ type LodestoneClient interface {
 	FetchAchievements(ctx context.Context, id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)
 	FetchFreeCompany(ctx context.Context, id string) (*godestone.FreeCompany, error)
 	FetchFreeCompanyMembers(ctx context.Context, fcID string) ([]uint32, error)
+	SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool)
 }

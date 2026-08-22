@@ -108,3 +108,42 @@ func TestAchievementCensus_WaitsForRateLimitedLodestone(t *testing.T) {
 		t.Errorf("Handle returned too quickly (%v), expected wait ~100ms", elapsed)
 	}
 }
+
+func TestAchievementCensus_SetsStopFn(t *testing.T) {
+	h, ls, _, _ := newTestAchievementCensus(t)
+
+	// Capture the stop function that the handler sets on the mock.
+	// The handler calls SetAchievementStopFn before FetchAchievements,
+	// so we capture it inside the FetchAchievementsFunc callback.
+	var capturedStopFn func([]*godestone.AchievementInfo) bool
+	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+		capturedStopFn = ls.StopFn
+		return []*godestone.AchievementInfo{}, &godestone.AllAchievementInfo{Private: false}, nil
+	}
+
+	_, err := h.Handle(context.Background(), achievementPayload(1))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if capturedStopFn == nil {
+		t.Fatal("handler did not set stop function before FetchAchievements")
+	}
+
+	// The stop function should return false when no milestones are found.
+	if capturedStopFn([]*godestone.AchievementInfo{
+		{NamedEntity: &models.NamedEntity{ID: 100}},
+	}) {
+		t.Error("stopFn returned true for non-milestone achievements")
+	}
+
+	// The stop function should return true when all milestones are found.
+	// DefaultExpansions has 7 milestones; simulate finding them all.
+	milestoneIDs := []uint32{590, 1129, 1139, 1794, 2298, 2958, 3496}
+	page := make([]*godestone.AchievementInfo, len(milestoneIDs))
+	for i, id := range milestoneIDs {
+		page[i] = &godestone.AchievementInfo{NamedEntity: &models.NamedEntity{ID: id}}
+	}
+	if !capturedStopFn(page) {
+		t.Error("stopFn returned false when all milestones found")
+	}
+}

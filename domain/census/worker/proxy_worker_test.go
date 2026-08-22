@@ -94,6 +94,8 @@ func (c *fakeLodestoneClient) FetchFreeCompanyMembers(context.Context, string) (
 	return nil, nil
 }
 
+func (c *fakeLodestoneClient) SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool) {}
+
 // fakeTomestoneClient implements contract.TomestoneClient for tests.
 type fakeTomestoneClient struct{}
 

@@ -25,6 +25,7 @@ type Fake struct {
 	AchievementsCalls           []uint32
 	FreeCompanyCalls            []string
 	FreeCompanyMembersCalls     []string
+	StopFn                      func([]*godestone.AchievementInfo) bool // captured by SetAchievementStopFn
 }
 
 func NewFake() *Fake { return &Fake{} }
@@ -67,6 +68,19 @@ func (f *Fake) FetchFreeCompanyMembers(ctx context.Context, fcID string) ([]uint
 		return nil, nil
 	}
 	return f.FetchFreeCompanyMembersFunc(fcID)
+}
+
+func (f *Fake) SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.StopFn = fn
+}
+
+// GetStopFn returns the currently set stop function (thread-safe).
+func (f *Fake) GetStopFn() func([]*godestone.AchievementInfo) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.StopFn
 }
 
 var _ contract.LodestoneClient = (*Fake)(nil)

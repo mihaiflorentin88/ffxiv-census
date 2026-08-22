@@ -44,6 +44,23 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		}
 	}
 
+	// Build early-termination callback from milestone IDs so the scraper
+	// stops paginating once all milestones are found.
+	milestoneIDs, err := h.census.MilestoneIDs(ctx)
+	if err == nil && len(milestoneIDs) > 0 {
+		found := make(map[uint32]bool, len(milestoneIDs))
+		stopFn := func(page []*godestone.AchievementInfo) bool {
+			for _, a := range page {
+				if a != nil && milestoneIDs[a.ID] {
+					found[a.ID] = true
+				}
+			}
+			return len(found) >= len(milestoneIDs)
+		}
+		h.lodestone.SetAchievementStopFn(stopFn)
+		defer h.lodestone.SetAchievementStopFn(nil)
+	}
+
 	list, all, err := h.lodestone.FetchAchievements(ctx, p.CharacterID)
 	if err != nil {
 		h.logger.WarnContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))

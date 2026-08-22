@@ -29,6 +29,7 @@ type fakeScraper struct {
 	fetchChar func(id uint32) (*godestone.Character, error)
 	fetchAch  func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)
 	fetchFC   func(id string) (*godestone.FreeCompany, error)
+	setStopFn func(fn func([]*godestone.AchievementInfo) bool)
 }
 
 func (f *fakeScraper) FetchCharacter(id uint32) (*godestone.Character, error) {
@@ -44,6 +45,12 @@ func (f *fakeScraper) FetchCharacterAchievements(id uint32) ([]*godestone.Achiev
 func (f *fakeScraper) FetchFreeCompany(id string) (*godestone.FreeCompany, error) {
 	f.fcCalls++
 	return f.fetchFC(id)
+}
+
+func (f *fakeScraper) SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool) {
+	if f.setStopFn != nil {
+		f.setStopFn(fn)
+	}
 }
 
 // fastClient builds a client wired to sc with backoff disabled and a high rate
@@ -151,6 +158,32 @@ func TestFetchFreeCompanyAndAchievements(t *testing.T) {
 	}
 	if achSc.achCalls != 1 {
 		t.Errorf("achievements scraper calls = %d, want 1", achSc.achCalls)
+	}
+}
+
+func TestFetchAchievements_PropagatesStopFn(t *testing.T) {
+	var receivedFn func([]*godestone.AchievementInfo) bool
+	sc := &fakeScraper{
+		fetchAch: func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+			return nil, nil, nil
+		},
+		setStopFn: func(fn func([]*godestone.AchievementInfo) bool) {
+			if fn != nil { // capture first non-nil; defer clears with nil
+				receivedFn = fn
+			}
+		},
+	}
+	c := fastClient(sc, 0)
+
+	stopFn := func(ach []*godestone.AchievementInfo) bool { return true }
+	c.SetAchievementStopFn(stopFn)
+
+	_, _, err := c.FetchAchievements(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("FetchAchievements: %v", err)
+	}
+	if receivedFn == nil {
+		t.Fatal("scraper did not receive stop function")
 	}
 }
 

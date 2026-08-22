@@ -224,8 +224,8 @@ github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsRe
 github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
 github.com/mfridman/interpolate v0.0.2 h1:pnuTK7MQIxxFz1Gr+rjSIx9u7qVjf5VOoM/u6BbAxPY=
 github.com/mfridman/interpolate v0.0.2/go.mod h1:p+7uk6oE07mpE/Ik1b8EckO0O4ZXiGAfshKBWLUM9Xg=
-github.com/mihaiflorentin88/godestone/v2 v2.10.2-proxy h1:A/wPIA29HwSq1oVbnzGdalxGFhP5AsynkU6Ro370GWo=
-github.com/mihaiflorentin88/godestone/v2 v2.10.2-proxy/go.mod h1:GYaw0/TVgE4hAKMW0hWR4PSu9mpzEBLCFPieb59wNXE=
+github.com/mihaiflorentin88/godestone/v2 v2.10.3-proxy h1:vJ/C5TiykbggzEn8izcx6raX4K8ogsnZvvMK2y4B0KA=
+github.com/mihaiflorentin88/godestone/v2 v2.10.3-proxy/go.mod h1:GYaw0/TVgE4hAKMW0hWR4PSu9mpzEBLCFPieb59wNXE=
 github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
 github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
