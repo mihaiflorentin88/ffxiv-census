@@ -209,7 +209,14 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "30"
+        - "50"
+      resources:
+      requests:
+        memory: 100Mi
+        cpu: 50m
+      limits:
+        memory: 2Gi
+        cpu: 2
     # --- Proxy discovery/scanning ---
     - name: proxy-new
       replicaCount: 1
