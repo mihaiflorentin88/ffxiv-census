@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -260,5 +261,64 @@ func TestPublishIDSweep_AutoAndGapBatchGeneration(t *testing.T) {
 	gapJobs := buildGapSweepJobs(gaps, 100, "lodestone")
 	if len(gapJobs) != 3 {
 		t.Fatalf("expected 3 gap jobs, got %d", len(gapJobs))
+	}
+}
+
+func TestCharacterCensusCutoff(t *testing.T) {
+	now := time.Date(2025, 8, 17, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name      string
+		olderThan time.Duration
+		wantZero  bool
+	}{
+		{"positive duration", 720 * time.Hour, false},
+		{"zero duration", 0, true},
+		{"negative duration", -1 * time.Hour, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := characterCensusCutoff(now, tc.olderThan)
+			if tc.wantZero {
+				if !got.IsZero() {
+					t.Errorf("got %v, want zero time", got)
+				}
+			} else {
+				if got.IsZero() {
+					t.Fatal("got zero time, want non-zero")
+				}
+				want := now.UTC().Add(-tc.olderThan)
+				if !got.Equal(want) {
+					t.Errorf("got %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPublishCharacterCensusCmd_FlagsRegistered(t *testing.T) {
+	flags := publishCharacterCensusCmd.Flags()
+	for _, name := range []string{"older-than", "limit"} {
+		if flags.Lookup(name) == nil {
+			t.Errorf("flag --%s not registered on publish character-census", name)
+		}
+	}
+
+	// Verify --older-than defaults to 0 (disabled).
+	olderThan, err := flags.GetDuration("older-than")
+	if err != nil {
+		t.Fatalf("GetDuration older-than: %v", err)
+	}
+	if olderThan != 0 {
+		t.Errorf("older-than default = %v, want 0", olderThan)
+	}
+
+	// Verify --limit defaults to 1000.
+	limit, err := flags.GetInt("limit")
+	if err != nil {
+		t.Fatalf("GetInt limit: %v", err)
+	}
+	if limit != 1000 {
+		t.Errorf("limit default = %d, want 1000", limit)
 	}
 }

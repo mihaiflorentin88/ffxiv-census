@@ -218,15 +218,22 @@ var publishIDSweepCmd = &cobra.Command{
 	},
 }
 
+// characterCensusCutoff returns the cutoff time for a character-census publish.
+// A zero or negative duration disables the age predicate (returns zero Time);
+// a positive duration returns now minus the duration.
+func characterCensusCutoff(now time.Time, olderThan time.Duration) time.Time {
+	if olderThan <= 0 {
+		return time.Time{}
+	}
+	return now.UTC().Add(-olderThan)
+}
+
 var publishCharacterCensusCmd = &cobra.Command{
 	Use:   "character-census",
-	Short: "Publish character-census jobs for stale characters (recheck)",
+	Short: "Publish character-census jobs for stale characters (oldest-first or age-filtered)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		olderThan, _ := cmd.Flags().GetDuration("older-than")
 		limit, _ := cmd.Flags().GetInt("limit")
-		if olderThan <= 0 {
-			return fmt.Errorf("--older-than must be positive")
-		}
 		if limit <= 0 {
 			return fmt.Errorf("--limit must be positive")
 		}
@@ -234,7 +241,7 @@ var publishCharacterCensusCmd = &cobra.Command{
 		if repo == nil {
 			return fmt.Errorf("character repository not initialised")
 		}
-		cutoff := time.Now().UTC().Add(-olderThan)
+		cutoff := characterCensusCutoff(time.Now(), olderThan)
 		stale, err := repo.ListStale(cmd.Context(), cutoff, limit)
 		if err != nil {
 			return fmt.Errorf("list stale: %w", err)
@@ -340,7 +347,7 @@ func init() {
 	publishIDSweepCmd.Flags().Duration("daemon-interval", 30*time.Second, "tick interval for daemon checks")
 	publishIDSweepCmd.Flags().Int("max-gaps", 50, "max gap ranges to query per run in --fill-gaps mode")
 	publishCmd.AddCommand(publishCharacterCensusCmd)
-	publishCharacterCensusCmd.Flags().Duration("older-than", 720*time.Hour, "only re-census characters not seen within this duration")
+	publishCharacterCensusCmd.Flags().Duration("older-than", 0, "positive duration filters by age; zero or negative selects oldest entries without age cutoff")
 	publishCharacterCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")
 	publishCmd.AddCommand(publishAchievementCensusCmd)
 	publishAchievementCensusCmd.Flags().Uint32("character-id", 0, "specific character ID to census")

@@ -90,6 +90,9 @@ When `consume --proxy` is used, the event pipeline runs through proxy-aware clie
 # Manual ID sweep over explicit range.
 ./bin/ffxiv-census publish id-sweep --from 1 --to 50000000 --chunk-size 100 --source auto
 
+# Enqueue the 1000 oldest characters (no age filter, NULL first).
+./bin/ffxiv-census publish character-census --limit 1000
+
 # Re-census characters not seen in 30 days (recheck cron).
 ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```

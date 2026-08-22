@@ -269,11 +269,20 @@ func (r *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.driver.FetchMany(ctx,
-		fmt.Sprintf(`SELECT %s FROM characters
-		              WHERE last_census_at < $1 OR last_census_at IS NULL
-		              ORDER BY last_census_at ASC NULLS FIRST, id ASC
-		              LIMIT $2`, characterColumns), cutoff, limit)
+	var rows *sql.Rows
+	var err error
+	if cutoff.IsZero() {
+		rows, err = r.driver.FetchMany(ctx,
+			fmt.Sprintf(`SELECT %s FROM characters
+			              ORDER BY last_census_at ASC NULLS FIRST, id ASC
+			              LIMIT $1`, characterColumns), limit)
+	} else {
+		rows, err = r.driver.FetchMany(ctx,
+			fmt.Sprintf(`SELECT %s FROM characters
+			              WHERE last_census_at < $1 OR last_census_at IS NULL
+			              ORDER BY last_census_at ASC NULLS FIRST, id ASC
+			              LIMIT $2`, characterColumns), cutoff, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

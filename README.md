@@ -99,9 +99,12 @@ Probes character ID ranges across Lodestone or Tomestone. Designed for both sing
 ```
 
 #### `publish character-census`
-Enqueues known characters that have not been updated within a specified duration.
+Enqueues the oldest `last_census_at` characters (NULL first) for re-census. By default (`--older-than 0`), all characters are eligible and results are ordered oldest-first; pass a positive `--older-than` to filter by age.
 ```bash
-# Re-census characters older than 30 days
+# Enqueue the 1000 oldest characters (no age filter)
+./bin/ffxiv-census publish character-census --limit 1000
+
+# Re-census characters not seen in 30 days
 ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```
 

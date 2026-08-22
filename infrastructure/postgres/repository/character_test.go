@@ -196,3 +196,65 @@ func TestCharacterRepository_Count_MinLevelFilter(t *testing.T) {
 		t.Errorf("Count MinLevel=50 = %d, want 3", count)
 	}
 }
+
+func TestCharacterRepository_ListStale(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+
+	old := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	recent := time.Date(2025, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	// id=1: NULL last_census_at (stale in both modes)
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 1, Name: "NullCensus", World: "Balmung", FirstSeenAt: old,
+	}, nil)
+	// id=2: old last_census_at (stale in both modes)
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 2, Name: "OldCensus", World: "Balmung", FirstSeenAt: old, LastCensusAt: &old,
+	}, nil)
+	// id=3: recent last_census_at (stale only in zero-cutoff mode)
+	_ = repo.Upsert(ctx, contract.CharacterRecord{
+		ID: 3, Name: "RecentCensus", World: "Balmung", FirstSeenAt: old, LastCensusAt: &recent,
+	}, nil)
+
+	// Zero cutoff, limit 2: should return id=1 (NULL first) then id=2 (oldest).
+	got, err := repo.ListStale(ctx, time.Time{}, 2)
+	if err != nil {
+		t.Fatalf("ListStale zero cutoff: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d records, want 2", len(got))
+	}
+	if got[0].ID != 1 {
+		t.Errorf("got[0].ID = %d, want 1 (NULL first)", got[0].ID)
+	}
+	if got[1].ID != 2 {
+		t.Errorf("got[1].ID = %d, want 2 (oldest timestamp)", got[1].ID)
+	}
+
+	// Positive cutoff at recent: should exclude id=3 (recent.Before(recent) is false).
+	cutoff := recent
+	got, err = repo.ListStale(ctx, cutoff, 10)
+	if err != nil {
+		t.Fatalf("ListStale positive cutoff: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d records, want 2", len(got))
+	}
+	if got[0].ID != 1 || got[1].ID != 2 {
+		t.Errorf("got IDs [%d, %d], want [1, 2]", got[0].ID, got[1].ID)
+	}
+
+	// Zero cutoff, limit 10: all three eligible.
+	got, err = repo.ListStale(ctx, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("ListStale zero cutoff all: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d records, want 3", len(got))
+	}
+	if got[2].ID != 3 {
+		t.Errorf("got[2].ID = %d, want 3", got[2].ID)
+	}
+}

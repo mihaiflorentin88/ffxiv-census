@@ -46,8 +46,11 @@ type CharacterRepository interface {
 	// SetAchievementsPrivate marks a character's achievement visibility without
 	// touching milestones or the latest-achievement fields.
 	SetAchievementsPrivate(ctx context.Context, id uint32, private bool) error
-	// ListStale returns up to limit characters whose last_census_at is before
-	// cutoff (NULL last_census_at counts as stale), ordered oldest-first.
+	// ListStale returns up to limit characters ordered by last_census_at ASC
+	// NULLS FIRST, id ASC. When cutoff is the zero time.Time the age predicate
+	// is disabled and all non-deleted characters are eligible; a positive
+	// cutoff filters to rows whose last_census_at is before the cutoff (NULL
+	// last_census_at counts as stale in both modes).
 	ListStale(ctx context.Context, cutoff time.Time, limit int) ([]CharacterRecord, error)
 	// List returns up to limit non-deleted characters matching filter,
 	// ordered by id, starting at offset (pagination for the REST API).

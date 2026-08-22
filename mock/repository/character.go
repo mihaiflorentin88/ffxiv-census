@@ -207,7 +207,7 @@ func (f *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 		if rec.DeletedAt != nil {
 			continue
 		}
-		if rec.LastCensusAt == nil || rec.LastCensusAt.Before(cutoff) {
+		if cutoff.IsZero() || rec.LastCensusAt == nil || rec.LastCensusAt.Before(cutoff) {
 			stale = append(stale, cloneCharacter(rec))
 		}
 	}
