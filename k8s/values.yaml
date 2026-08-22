@@ -271,7 +271,7 @@ cronjobs:
         - --limit
         - "500"
         - --older-than
-        - -1
+        - 0
 
     - name: publish-id-sweep
       schedule: "*/1 * * * *"
