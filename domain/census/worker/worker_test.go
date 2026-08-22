@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -239,8 +238,39 @@ func (b *syncBuffer) Len() int {
 	return b.buf.Len()
 }
 
-// Suppress unused import warnings.
-var (
-	_ = fmt.Sprintf
-	_ = slog.Default
-)
+func TestWorker_SuccessfulJobQuietAtInfo(t *testing.T) {
+	q := mockqueue.NewFake()
+	if err := q.Publish(context.Background(), contract.QueueJob{Type: "id-sweep", Payload: []byte(`{"from":1,"to":1}`)}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	reg := handler.NewRegistry()
+	rh := &recordingHandler{}
+	reg.Register("id-sweep", rh)
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	w := New(q, reg, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, "id-sweep", 1) }()
+
+	waitForCalls(t, rh, 1)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("worker: %v", err)
+	}
+
+	logs := logBuf.String()
+	// At Info level, job_start should NOT appear.
+	if strings.Contains(logs, "worker.job_start") {
+		t.Errorf("Info logger should not emit worker.job_start:\n%s", logs)
+	}
+	// job_done should appear exactly once.
+	if !strings.Contains(logs, "worker.job_done") {
+		t.Errorf("expected worker.job_done in logs:\n%s", logs)
+	}
+}

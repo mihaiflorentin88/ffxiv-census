@@ -48,7 +48,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return nil, fmt.Errorf("character-census payload: %w", err)
 	}
-	h.logger.InfoContext(ctx, "handler.character_census", slog.Uint64("character_id", uint64(p.CharacterID)))
+	h.logger.DebugContext(ctx, "handler.character_census", slog.Uint64("character_id", uint64(p.CharacterID)))
 
 	lodestoneAvail := h.lodestone != nil && (h.rateLimiter == nil || h.rateLimiter.IsAvailable(contract.ProviderLodestone))
 	tomestoneAvail := h.tomestone != nil && h.tomestone.IsConfigured() && (h.rateLimiter == nil || h.rateLimiter.IsAvailable(contract.ProviderTomestone))
@@ -60,14 +60,14 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	if lodestoneAvail {
 		char, err := h.lodestone.FetchCharacter(ctx, p.CharacterID)
 		if err == nil {
-			h.logger.InfoContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.String("fc_id", char.FreeCompanyID), slog.String("source", "lodestone"))
+			h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.String("fc_id", char.FreeCompanyID), slog.String("source", "lodestone"))
 			if err := h.census.UpsertCharacter(ctx, char); err != nil {
 				h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.Any("error", err))
 				return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, err)
 			}
-			h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World))
+			h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World))
 			next := BuildDependentCharacterJobs(char.ID)
-			h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
+			h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 			return next, nil
 		}
 
@@ -75,14 +75,14 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 			if tomestoneAvail {
 				tChar, terr := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 				if terr == nil {
-					h.logger.InfoContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+					h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
 					if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
 						h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 						return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
 					}
-					h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
+					h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
 					next := BuildDependentCharacterJobs(tChar.ID)
-					h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
+					h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 					return next, nil
 				}
 				if errors.Is(terr, contract.ErrCharacterNotFound) {
@@ -90,7 +90,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 						h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", derr))
 						return nil, fmt.Errorf("character-census mark-deleted %d: %w", p.CharacterID, derr)
 					}
-					h.logger.InfoContext(ctx, "handler.character_census.deleted", slog.Uint64("character_id", uint64(p.CharacterID)))
+					h.logger.DebugContext(ctx, "handler.character_census.deleted", slog.Uint64("character_id", uint64(p.CharacterID)))
 					return nil, nil
 				}
 				h.logger.WarnContext(ctx, "handler.character_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("source", "tomestone"), slog.Any("error", terr))
@@ -102,7 +102,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 				h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", derr))
 				return nil, fmt.Errorf("character-census mark-deleted %d: %w", p.CharacterID, derr)
 			}
-			h.logger.InfoContext(ctx, "handler.character_census.deleted", slog.Uint64("character_id", uint64(p.CharacterID)))
+			h.logger.DebugContext(ctx, "handler.character_census.deleted", slog.Uint64("character_id", uint64(p.CharacterID)))
 			return nil, nil
 		}
 
@@ -110,14 +110,14 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 		if tomestoneAvail {
 			tChar, terr := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 			if terr == nil {
-				h.logger.InfoContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+				h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
 				if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
 					h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 					return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
 				}
-				h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
+				h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
 				next := BuildDependentCharacterJobs(tChar.ID)
-				h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
+				h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 				return next, nil
 			}
 			if errors.Is(terr, contract.ErrCharacterNotFound) {
@@ -135,14 +135,14 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	// Lodestone unavailable/paused, but Tomestone is available
 	tChar, err := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 	if err == nil {
-		h.logger.InfoContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+		h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
 		if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
 			h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 			return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
 		}
-		h.logger.InfoContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
+		h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
 		next := BuildDependentCharacterJobs(tChar.ID)
-		h.logger.InfoContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
+		h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
 		return next, nil
 	}
 

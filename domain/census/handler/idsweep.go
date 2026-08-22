@@ -64,7 +64,7 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 	if p.From > p.To {
 		return nil, fmt.Errorf("id-sweep range invalid: from %d > to %d", p.From, p.To)
 	}
-	h.logger.InfoContext(ctx, "handler.id_sweep.start", slog.Uint64("from", uint64(p.From)), slog.Uint64("to", uint64(p.To)), slog.Uint64("count", uint64(p.To-p.From+1)))
+	h.logger.DebugContext(ctx, "handler.id_sweep.start", slog.Uint64("from", uint64(p.From)), slog.Uint64("to", uint64(p.To)), slog.Uint64("count", uint64(p.To-p.From+1)))
 
 	if p.Source == "tomestone" && (h.tomestone == nil || !h.tomestone.IsConfigured()) {
 		return nil, errors.New("tomestone client unconfigured on this worker")
@@ -86,14 +86,18 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 					return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 				}
-				h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+				if h.logger.Enabled(ctx, slog.LevelDebug) {
+				h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+				}
 				jobs := BuildDependentCharacterJobs(tChar.ID)
 				next = append(next, jobs...)
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
 				return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, err)
 			} else {
-				h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
+				if h.logger.Enabled(ctx, slog.LevelDebug) {
+				h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
+				}
 			}
 		} else if p.Source == "lodestone" {
 			lChar, err := h.lodestone.FetchCharacter(ctx, id)
@@ -102,14 +106,18 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
 					return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 				}
-				h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+				if h.logger.Enabled(ctx, slog.LevelDebug) {
+				h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+				}
 				jobs := BuildDependentCharacterJobs(lChar.ID)
 				next = append(next, jobs...)
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", err))
 				return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, err)
 			} else {
-				h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
+				if h.logger.Enabled(ctx, slog.LevelDebug) {
+				h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
+				}
 			}
 		} else if h.proxyMode {
 			// Proxy mode: Lodestone primary, Tomestone fallback on error only
@@ -127,11 +135,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
 						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 					}
-					h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+					}
 					jobs := BuildDependentCharacterJobs(lChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
-					h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
+					}
 				} else {
 					// Lodestone error: fall back to Tomestone
 					if tomestoneAvail {
@@ -141,11 +153,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 								h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 								return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 							}
-							h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+							if h.logger.Enabled(ctx, slog.LevelDebug) {
+							h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+							}
 							jobs := BuildDependentCharacterJobs(tChar.ID)
 							next = append(next, jobs...)
 						} else if errors.Is(terr, contract.ErrCharacterNotFound) {
-							h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.String("status", "not_found"))
+							if h.logger.Enabled(ctx, slog.LevelDebug) {
+							h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.String("status", "not_found"))
+							}
 						} else {
 							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.Any("error", terr))
 							return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, terr)
@@ -163,11 +179,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 					}
-					h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+					}
 					jobs := BuildDependentCharacterJobs(tChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
-					h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
+					}
 				} else {
 					h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
 					return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, err)
@@ -189,7 +209,9 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
 						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 					}
-					h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
+					}
 					jobs := BuildDependentCharacterJobs(tChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
@@ -201,11 +223,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 								h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
 								return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 							}
-							h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+							if h.logger.Enabled(ctx, slog.LevelDebug) {
+							h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+							}
 							jobs := BuildDependentCharacterJobs(lChar.ID)
 							next = append(next, jobs...)
 						} else if errors.Is(lerr, contract.ErrCharacterNotFound) {
-							h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone+lodestone"), slog.String("status", "not_found"))
+							if h.logger.Enabled(ctx, slog.LevelDebug) {
+							h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone+lodestone"), slog.String("status", "not_found"))
+							}
 						} else {
 							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", lerr))
 							return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, lerr)
@@ -224,12 +250,16 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 								h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
 								return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 							}
-							h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+							if h.logger.Enabled(ctx, slog.LevelDebug) {
+							h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+							}
 							jobs := BuildDependentCharacterJobs(lChar.ID)
 							next = append(next, jobs...)
 						} else if errors.Is(lerr, contract.ErrCharacterNotFound) {
 							// Lodestone is authoritative for existence: if it says 404, character doesn't exist.
-							h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone+lodestone"), slog.String("status", "not_found"))
+							if h.logger.Enabled(ctx, slog.LevelDebug) {
+							h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone+lodestone"), slog.String("status", "not_found"))
+							}
 						} else {
 							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", lerr))
 							return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, lerr)
@@ -247,11 +277,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
 						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
 					}
-					h.logger.InfoContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
+					}
 					jobs := BuildDependentCharacterJobs(lChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
-					h.logger.InfoContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
+					if h.logger.Enabled(ctx, slog.LevelDebug) {
+					h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
+					}
 				} else {
 					h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", err))
 					return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, err)
@@ -263,6 +297,6 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 			break
 		}
 	}
-	h.logger.InfoContext(ctx, "handler.id_sweep.done", slog.Uint64("from", uint64(p.From)), slog.Uint64("to", uint64(p.To)), slog.Int("discovered", len(next)))
+	h.logger.DebugContext(ctx, "handler.id_sweep.done", slog.Uint64("from", uint64(p.From)), slog.Uint64("to", uint64(p.To)), slog.Int("discovered", len(next)))
 	return next, nil
 }

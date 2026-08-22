@@ -19,9 +19,9 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// newBufLogger returns a TextHandler logger writing to a buffer.
+// newBufLogger returns a TextHandler logger writing to a buffer at Debug level.
 func newBufLogger(buf *bytes.Buffer) *slog.Logger {
-	return slog.New(slog.NewTextHandler(buf, nil))
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 func TestCharacterCensus_LogsFetchAndStore(t *testing.T) {
@@ -126,6 +126,31 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestSuccessfulHandlersAreQuietAtInfo(t *testing.T) {
+	// At Info level, successful handler runs should emit no Debug logs.
+	ls := mocklodestone.NewFake()
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return &godestone.Character{ID: id, Name: "Quiet Hero", World: "Ultros", DC: "Primal"}, nil
+	}
+	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+
+	var buf bytes.Buffer
+	infoLogger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h := NewIDSweep(ls, nil, svc, infoLogger)
+
+	payload, _ := json.Marshal(IDSweepPayload{From: 1, To: 1})
+	if _, err := h.Handle(context.Background(), payload); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	logs := buf.String()
+	// At Info level, no Debug messages should appear.
+	for _, notWant := range []string{"handler.id_sweep.start", "handler.id_sweep.probe", "handler.id_sweep.discovered", "handler.id_sweep.done"} {
+		if strings.Contains(logs, notWant) {
+			t.Errorf("Info logger should not emit %q:\n%s", notWant, logs)
 		}
 	}
 }

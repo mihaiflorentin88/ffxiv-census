@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -513,5 +514,121 @@ func TestFetchCharacterProfile_EmptyNameOnlyReturnsNotFound(t *testing.T) {
 	}
 	if char.Server != "Balmung" {
 		t.Errorf("expected server 'Balmung', got %q", char.Server)
+	}
+}
+
+func TestFetchProfile_DirectResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 123, "name": "Test Char", "server": "Balmung", "datacenter": "Crystal"}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{BaseURL: server.URL, APIToken: "token", RateLimit: 50.0, Timeout: "5s"}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	char, err := client.FetchCharacterProfile(context.Background(), 123, false)
+	if err != nil {
+		t.Fatalf("FetchCharacterProfile: %v", err)
+	}
+	if char.ID != 123 || char.Name != "Test Char" {
+		t.Errorf("unexpected char: %+v", char)
+	}
+}
+
+func TestFetchProfile_NestedDataEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data": {"id": 456, "name": "Nested Char", "server": "Ragnarok", "datacenter": "Chaos"}}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{BaseURL: server.URL, APIToken: "token", RateLimit: 50.0, Timeout: "5s"}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	char, err := client.FetchCharacterProfile(context.Background(), 456, false)
+	if err != nil {
+		t.Fatalf("FetchCharacterProfile: %v", err)
+	}
+	if char.ID != 456 || char.Name != "Nested Char" {
+		t.Errorf("unexpected char: %+v", char)
+	}
+}
+
+func TestFetchProfile_MalformedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{invalid json`))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{BaseURL: server.URL, APIToken: "token", RateLimit: 50.0, Timeout: "5s"}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = client.FetchCharacterProfile(context.Background(), 123, false)
+	if err == nil {
+		t.Fatal("expected error for malformed JSON")
+	}
+}
+
+func TestFetchProfile_TooLargeResponse(t *testing.T) {
+	// Generate a response larger than 4 MiB.
+	bigJSON := `{"id": 1, "name": "` + strings.Repeat("x", 5<<20) + `", "server": "Balmung"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(bigJSON))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{BaseURL: server.URL, APIToken: "token", RateLimit: 50.0, Timeout: "5s"}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = client.FetchCharacterProfile(context.Background(), 123, false)
+	if err == nil {
+		t.Fatal("expected error for oversized response")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("expected 'exceeds' in error, got: %v", err)
+	}
+}
+
+func TestFetchProfile_LargeErrorBody(t *testing.T) {
+	// Generate a non-2xx body larger than 64 KiB.
+	bigError := strings.Repeat("e", 100<<10) // 100 KiB
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(bigError))
+	}))
+	defer server.Close()
+
+	cfg := &config.TomestoneConfig{BaseURL: server.URL, APIToken: "token", RateLimit: 50.0, Timeout: "5s"}
+	client, err := NewClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = client.FetchCharacterProfile(context.Background(), 123, false)
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+	// The error body should be truncated to maxTomestoneErrorBytes (64 KiB).
+	if strings.Contains(err.Error(), bigError) {
+		t.Error("expected error body to be truncated")
 	}
 }

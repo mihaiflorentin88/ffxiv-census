@@ -14,6 +14,7 @@ import (
 
 	censushandler "github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
 	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	"github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -342,5 +343,136 @@ func TestProxyWorkerLoop_CancellationWhileWaiting(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("worker took too long to exit: %v", elapsed)
+	}
+}
+
+// trackingLimiter wraps a ProviderRateLimiter and records its identity.
+type trackingLimiter struct {
+	contract.ProviderRateLimiter
+	id int
+}
+
+func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
+	// Set up two active proxies so two goroutines can each acquire one.
+	repo := repository.NewFakeProxyRepository()
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2"} {
+		repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+			Protocol: "http", IP: ip, Port: 8080, Source: "test",
+		})
+	}
+	proxies, _ := repo.ListForScan(context.Background(), 10)
+	for _, p := range proxies {
+		now := time.Now().UTC()
+		repo.UpdateStatus(context.Background(), p.ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	q := &fakeProxyQueue{}
+	proxyHub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil)
+
+	// Publish two jobs so each goroutine gets one.
+	for range 2 {
+		q.Publish(context.Background(), contract.QueueJob{
+			Type:    censushandler.EventIDSweep,
+			Payload: []byte(`{}`),
+		})
+	}
+
+	// Track limiter instances per goroutine.
+	var mu sync.Mutex
+	// goroutineKey → set of limiter IDs seen in factories.
+	limiterPerGoroutine := make(map[string]map[int]bool)
+	// All distinct limiter instances.
+	allLimiters := make(map[int]contract.ProviderRateLimiter)
+	limiterCounter := 0
+
+	newRateLimiter := func() contract.ProviderRateLimiter {
+		mu.Lock()
+		defer mu.Unlock()
+		limiterCounter++
+		tl := &trackingLimiter{ProviderRateLimiter: mock.NewProviderRateLimiter(), id: limiterCounter}
+		allLimiters[limiterCounter] = tl
+		return tl
+	}
+
+	// Use the proxy URL as a goroutine key (each goroutine gets a unique proxy).
+	newLodestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
+		mu.Lock()
+		if tl, ok := limiter.(*trackingLimiter); ok {
+			if limiterPerGoroutine[proxyURL] == nil {
+				limiterPerGoroutine[proxyURL] = make(map[int]bool)
+			}
+			limiterPerGoroutine[proxyURL][tl.id] = true
+		}
+		mu.Unlock()
+		return &fakeLodestoneClient{}, nil
+	}
+	newTomestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+		mu.Lock()
+		if tl, ok := limiter.(*trackingLimiter); ok {
+			if limiterPerGoroutine[proxyURL] == nil {
+				limiterPerGoroutine[proxyURL] = make(map[int]bool)
+			}
+			limiterPerGoroutine[proxyURL][tl.id] = true
+		}
+		mu.Unlock()
+		return &fakeTomestoneClient{}, nil
+	}
+
+	var jobsProcessed int32
+	newHandlers := func(_ contract.LodestoneClient, _ contract.TomestoneClient, limiter contract.ProviderRateLimiter) *censushandler.Registry {
+		mu.Lock()
+		if tl, ok := limiter.(*trackingLimiter); ok {
+			allLimiters[tl.id] = tl
+		}
+		mu.Unlock()
+		reg := censushandler.NewRegistry()
+		reg.Register(censushandler.EventIDSweep, &countingCensusHandler{count: &jobsProcessed})
+		return reg
+	}
+
+	w := newTestCensusWorker(q, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Cancel once both jobs are processed.
+	go func() {
+		for {
+			if atomic.LoadInt32(&jobsProcessed) >= 2 {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	err := w.RunEventsWithProxy(
+		ctx,
+		[]string{censushandler.EventIDSweep},
+		2,
+		"test",
+		proxyHub,
+		newHandlers,
+		newLodestoneClient,
+		newTomestoneClient,
+		newRateLimiter,
+	)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunEventsWithProxy: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Require exactly 2 distinct limiter instances (one per goroutine).
+	if len(allLimiters) != 2 {
+		t.Errorf("expected 2 distinct ProviderRateLimiter instances, got %d", len(allLimiters))
+	}
+
+	// Each goroutine must have used exactly one limiter consistently across all factories.
+	for proxyURL, ids := range limiterPerGoroutine {
+		if len(ids) != 1 {
+			t.Errorf("goroutine for proxy %s used %d distinct limiters, want 1", proxyURL, len(ids))
+		}
 	}
 }

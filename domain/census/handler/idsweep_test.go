@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -552,6 +554,30 @@ func TestIDSweep_ReturnsDownstreamJobsInNext(t *testing.T) {
 	for _, j := range next {
 		if j.Type != EventAchievementCensus {
 			t.Errorf("unexpected job type: %q", j.Type)
+		}
+	}
+}
+
+func BenchmarkIDSweepNotFoundInfo(b *testing.B) {
+	ls := mocklodestone.NewFake()
+	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+	chars := mockrepo.NewCharacterFake()
+	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h := NewIDSweep(ls, nil, svc, logger)
+	payload := idsweepPayload(1, 100)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		next, err := h.Handle(context.Background(), payload)
+		if err != nil {
+			b.Fatalf("Handle: %v", err)
+		}
+		if len(next) != 0 {
+			b.Fatalf("expected 0 next jobs, got %d", len(next))
 		}
 	}
 }

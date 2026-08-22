@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"io"
 	"log/slog"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -15,11 +14,21 @@ type Handler interface {
 	Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error)
 }
 
+// discardLogger is a no-op logger whose Enabled always returns false,
+// allowing callers to skip expensive attribute construction.
+type discardLogger struct{}
+
+func (discardLogger) DebugContext(context.Context, string, ...any) {}
+func (discardLogger) InfoContext(context.Context, string, ...any)  {}
+func (discardLogger) WarnContext(context.Context, string, ...any)  {}
+func (discardLogger) ErrorContext(context.Context, string, ...any) {}
+func (discardLogger) Enabled(context.Context, slog.Level) bool     { return false }
+
 // loggerOrDiscard returns l, or a discard logger when l is nil, so handlers
 // never require a non-nil logger.
 func loggerOrDiscard(l contract.Logger) contract.Logger {
 	if l == nil {
-		return slog.New(slog.NewTextHandler(io.Discard, nil))
+		return discardLogger{}
 	}
 	return l
 }

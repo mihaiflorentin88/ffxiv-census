@@ -72,7 +72,7 @@ Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other cl
 When `consume --proxy` is used, the event pipeline runs through proxy-aware clients:
 
 - **`id-sweep` in proxy mode**: Lodestone is the primary provider (not Tomestone). Proxies bypass Lodestone's per-IP rate limit, so the faster Tomestone-first strategy is unnecessary. Tomestone is used only as a fallback when Lodestone returns an error.
-- **`achievement-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting.
+- **`achievement-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting. Achievement-only proxy processes omit the unused Tomestone HTTP transport per goroutine.
 - **Proxy rotation on failure**: If a proxy fails during any request (connection refused, timeout, host unreachable), the worker immediately marks it as failed and acquires a fresh proxy from the pool. This ensures workers quickly rotate through bad proxies.
 - **Per-goroutine isolation**: Each goroutine has its own proxy, its own LodestoneClient, its own TomestoneClient, and its own rate limiter. No shared state between goroutines.
 

@@ -62,13 +62,15 @@ pause affected provider queues while letting others continue.`,
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
+		logger := container.Load.Logger()
+
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				container.Load.Logger().ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
+				logger.ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
 			}
 		}()
 
@@ -76,7 +78,7 @@ pause affected provider queues while letting others continue.`,
 			return runProxyConsumer(ctx, q, eventTypes, concurrency)
 		}
 
-		w := worker.New(q, container.Load.Handlers(), container.Load.Logger(), container.Load.ProviderRateLimiter())
+		w := worker.New(q, container.Load.Handlers(), logger, container.Load.ProviderRateLimiter())
 		return w.RunEvents(ctx, eventTypes, concurrency)
 	},
 }
@@ -96,30 +98,39 @@ func init() {
 func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string, concurrency int) error {
 	logger := container.Load.Logger()
 
-	// Read proxy consumer config overrides.
+	// Read all config once — immutable for the lifetime of this function.
+	cfg := container.Load.Config()
+	lodestoneCfg := cfg.Lodestone
+	tomestoneCfg := cfg.Tomestone
+
 	var proxyLodestoneRate float64
 	var proxyRequestTimeout string
-	if pcfg := container.Load.Config().Proxy; pcfg != nil {
+	if pcfg := cfg.Proxy; pcfg != nil {
 		proxyLodestoneRate = pcfg.Consumer.LodestoneRateLimit
 		proxyRequestTimeout = pcfg.Consumer.RequestTimeout
 	}
 
+	// Prewarm CensusService on the command goroutine so milestone sync and
+	// service construction happen once, before goroutines call ProxyCensusHandlers.
+	if svc := container.Load.CensusService(); svc == nil {
+		return fmt.Errorf("census service not initialised")
+	}
+
 	// Create proxy-aware client factories.
 	newLodestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
-		cfg := container.Load.Config().Lodestone
-		if cfg == nil {
+		if lodestoneCfg == nil {
 			return nil, fmt.Errorf("lodestone config missing")
 		}
 		// Override rate limit from proxy consumer config if set.
 		if proxyLodestoneRate > 0 {
-			override := *cfg
+			override := *lodestoneCfg
 			override.RateLimit = proxyLodestoneRate
 			return lodestone.NewClientWithProxy(&override, proxyURL, logger)
 		}
-		return lodestone.NewClientWithProxy(cfg, proxyURL, logger)
+		return lodestone.NewClientWithProxy(lodestoneCfg, proxyURL, logger)
 	}
+
 	// Create a shared rate limiter for all proxy Tomestone clients.
-	tomestoneCfg := container.Load.Config().Tomestone
 	var sharedTomestoneLimiter *rate.Limiter
 	if tomestoneCfg != nil {
 		r := tomestoneCfg.RateLimit
@@ -128,24 +139,33 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 		}
 		sharedTomestoneLimiter = rate.NewLimiter(rate.Limit(r), 1)
 	}
-	newTomestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-		if tomestoneCfg == nil {
-			return nil, fmt.Errorf("tomestone config missing")
+
+	// Achievement-only proxy processes can omit the unused Tomestone transport.
+	needTomestone := proxyEventsNeedTomestone(eventTypes)
+
+	var newTomestoneClient func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error)
+	if needTomestone && tomestoneCfg != nil {
+		newTomestoneClient = func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+			opts := []tomestone.ClientOption{
+				tomestone.WithProviderRateLimiter(limiter),
+			}
+			if sharedTomestoneLimiter != nil {
+				opts = append(opts, tomestone.WithSharedRateLimiter(sharedTomestoneLimiter))
+			}
+			// Override timeout from proxy consumer config if set.
+			if proxyRequestTimeout != "" {
+				override := *tomestoneCfg
+				override.Timeout = proxyRequestTimeout
+				return tomestone.NewClientWithProxy(&override, proxyURL, logger, opts...)
+			}
+			return tomestone.NewClientWithProxy(tomestoneCfg, proxyURL, logger, opts...)
 		}
-		opts := []tomestone.ClientOption{
-			tomestone.WithProviderRateLimiter(limiter),
+	} else {
+		newTomestoneClient = func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
+			return nil, nil
 		}
-		if sharedTomestoneLimiter != nil {
-			opts = append(opts, tomestone.WithSharedRateLimiter(sharedTomestoneLimiter))
-		}
-		// Override timeout from proxy consumer config if set.
-		if proxyRequestTimeout != "" {
-			override := *tomestoneCfg
-			override.Timeout = proxyRequestTimeout
-			return tomestone.NewClientWithProxy(&override, proxyURL, logger, opts...)
-		}
-		return tomestone.NewClientWithProxy(tomestoneCfg, proxyURL, logger, opts...)
 	}
+
 	newRateLimiter := func() contract.ProviderRateLimiter {
 		return provider.NewProxyRateLimiter()
 	}
@@ -161,8 +181,28 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 		return fmt.Errorf("proxy hub not initialised (database unavailable?)")
 	}
 
-	w := worker.New(q, container.Load.Handlers(), logger)
+	// Pass nil handlers — RunEventsWithProxy uses the per-goroutine registry
+	// returned by newHandlers, never reads w.handlers.
+	w := worker.New(q, nil, logger)
 	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, ownerPrefix, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
+}
+
+// proxyEventsNeedTomestone returns true if the selected event set requires a
+// Tomestone client. Achievement-census is Lodestone-only, so an achievement-only
+// proxy process can skip creating unused Tomestone transports.
+func proxyEventsNeedTomestone(eventTypes []string) bool {
+	if len(eventTypes) == 0 {
+		return true
+	}
+	for _, eventType := range eventTypes {
+		switch eventType {
+		case handler.EventAchievementCensus:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 var consumeFailedCmd = &cobra.Command{
@@ -191,17 +231,19 @@ Use --events to filter which failed queues to consume from (e.g. --events "id-sw
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
+		logger := container.Load.Logger()
+
 		q := container.Load.Queue()
 		if q == nil {
 			return fmt.Errorf("queue not initialised")
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				container.Load.Logger().ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
+				logger.ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
 			}
 		}()
 
-		container.Load.Logger().InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency), slog.Any("event_types", eventTypes))
+		logger.InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency), slog.Any("event_types", eventTypes))
 		return q.ConsumeFailed(ctx, eventTypes, concurrency)
 	},
 }

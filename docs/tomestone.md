@@ -91,4 +91,11 @@ Used by `consume --proxy` — each worker goroutine creates its own proxy-aware 
 - `401 Unauthorized` / `403 Forbidden` → maps to `contract.ErrTomestoneUnauthenticated`.
 - `404 Not Found` → maps to `contract.ErrCharacterNotFound`.
 - `429 Too Many Requests` → logs a warning and returns rate limit error.
-- Context cancellation and timeouts are strictly respected.
+## Response Memory Bounds
+
+Success responses are decoded via bounded streaming (`json.NewDecoder` with `io.LimitedReader`):
+- **Success body**: max 4 MiB. Responses exceeding this return `tomestone response exceeds 4194304 bytes`.
+- **Error body** (401/403/5xx): max 64 KiB retained for logging. 404 and 429 need no retained body.
+- **Multiple JSON values**: rejected with `tomestone response contains multiple JSON values`.
+
+Proxy-aware clients clone `http.DefaultTransport` to inherit standard idle-connection/TLS timeouts. Concrete Tomestone clients expose `CloseIdleConnections()` which the worker calls before discarding a client during proxy replacement or goroutine exit.

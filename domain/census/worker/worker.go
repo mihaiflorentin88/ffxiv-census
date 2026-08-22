@@ -41,6 +41,20 @@ func New(q contract.Queue, h *handler.Registry, logger contract.Logger, rateLimi
 	}
 }
 
+// idleConnectionCloser is an optional interface for HTTP clients that support
+// closing idle connections. This is a private structural interface so port
+// contracts and fake clients do not gain a lifecycle method.
+type idleConnectionCloser interface {
+	CloseIdleConnections()
+}
+
+// closeIdleConnections closes idle connections if the client supports it.
+func closeIdleConnections(client any) {
+	if closer, ok := client.(idleConnectionCloser); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 func (w *Worker) Run(ctx context.Context, eventType string, concurrency int) error {
 	return w.RunEvents(ctx, []string{eventType}, concurrency)
 }
@@ -90,10 +104,9 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 
 		start := time.Now()
-		w.logger.InfoContext(
+		w.logger.DebugContext(
 			processCtx, "worker.job_start",
 			slog.String("event_type", job.Type),
-			slog.String("handler", fmt.Sprintf("%p", h)),
 		)
 
 		var next []contract.QueueJob
@@ -125,13 +138,6 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 			return err
 		}
 
-		w.logger.InfoContext(
-			processCtx, "worker.job_done",
-			slog.String("event_type", job.Type),
-			slog.Duration("duration", time.Since(start)),
-			slog.Int("chained", len(next)),
-		)
-
 		// Publish downstream jobs individually.
 		for _, nextJob := range next {
 			if pubErr := w.queue.Publish(processCtx, nextJob); pubErr != nil {
@@ -143,6 +149,13 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 				return pubErr
 			}
 		}
+
+		w.logger.InfoContext(
+			processCtx, "worker.job_done",
+			slog.String("event_type", job.Type),
+			slog.Duration("duration", time.Since(start)),
+			slog.Int("chained", len(next)),
+		)
 
 		return nil
 	}
@@ -412,9 +425,8 @@ func (w *Worker) proxyWorkerLoop(
 	}
 	handlers := newHandlers(lodestoneClient, tomestoneClient, proxyLimiter)
 
-	// Use queue.Consume with a handler that uses proxy-aware clients.
-	// Release proxy on exit (graceful shutdown or error).
 	defer func() {
+		closeIdleConnections(tomestoneClient)
 		if proxy != nil {
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer releaseCancel()
@@ -482,6 +494,7 @@ func (w *Worker) proxyWorkerLoop(
 			}
 			proxy = newProxy
 			lodestoneClient = newLodestone
+			closeIdleConnections(tomestoneClient)
 			tomestoneClient = newTomestone
 			proxyLimiter = newLimiter
 			handlers = newReg
@@ -499,7 +512,7 @@ func (w *Worker) proxyWorkerLoop(
 		}
 
 		start := time.Now()
-		w.logger.InfoContext(
+		w.logger.DebugContext(
 			ctx, "worker.job_start",
 			slog.String("event_type", job.Type),
 			slog.Int("worker_id", workerID),
@@ -548,6 +561,7 @@ func (w *Worker) proxyWorkerLoop(
 				}
 				proxy = newProxy
 				lodestoneClient = newLodestone
+				closeIdleConnections(tomestoneClient)
 				tomestoneClient = newTomestone
 				proxyLimiter = newLimiter
 				handlers = newReg
@@ -604,12 +618,6 @@ func (w *Worker) proxyWorkerLoop(
 					return retryErr
 				}
 
-				w.logger.InfoContext(
-					ctx, "worker.job_done",
-					slog.String("event_type", job.Type),
-					slog.Duration("duration", time.Since(retryStart)),
-					slog.Int("chained", len(retryNext)),
-				)
 				for _, nextJob := range retryNext {
 					if pubErr := w.queue.Publish(ctx, nextJob); pubErr != nil {
 						w.logger.ErrorContext(
@@ -620,18 +628,17 @@ func (w *Worker) proxyWorkerLoop(
 						return pubErr
 					}
 				}
+				w.logger.InfoContext(
+					ctx, "worker.job_done",
+					slog.String("event_type", job.Type),
+					slog.Duration("duration", time.Since(retryStart)),
+					slog.Int("chained", len(retryNext)),
+				)
 				return nil
 			}
 
 			return jobErr
 		}
-
-		w.logger.InfoContext(
-			ctx, "worker.job_done",
-			slog.String("event_type", job.Type),
-			slog.Duration("duration", time.Since(start)),
-			slog.Int("chained", len(next)),
-		)
 
 		// Publish downstream jobs individually.
 		for _, nextJob := range next {
@@ -644,6 +651,13 @@ func (w *Worker) proxyWorkerLoop(
 				return pubErr
 			}
 		}
+
+		w.logger.InfoContext(
+			ctx, "worker.job_done",
+			slog.String("event_type", job.Type),
+			slog.Duration("duration", time.Since(start)),
+			slog.Int("chained", len(next)),
+		)
 
 		return nil
 	}

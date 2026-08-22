@@ -25,6 +25,37 @@ import (
 // maxSafeRate is the rate limit ceiling for tomestone.gg requests (calls/sec).
 const maxSafeRate = 20.0
 
+const (
+	maxTomestoneResponseBytes = int64(4 << 20)  // 4 MiB
+	maxTomestoneErrorBytes    = int64(64 << 10) // 64 KiB
+)
+
+// decodeTomestoneResponse performs bounded streaming JSON decode into dst,
+// rejecting responses that exceed maxTomestoneResponseBytes or contain
+// multiple JSON values.
+func decodeTomestoneResponse(body io.Reader, dst *jsonResponse) error {
+	limited := &io.LimitedReader{R: body, N: maxTomestoneResponseBytes + 1}
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(dst); err != nil {
+		if limited.N == 0 {
+			return errors.New("tomestone response exceeds 4194304 bytes")
+		}
+		return err
+	}
+	// Ensure no trailing JSON values.
+	err := decoder.Decode(&struct{}{})
+	if limited.N == 0 {
+		return errors.New("tomestone response exceeds 4194304 bytes")
+	}
+	if err == nil {
+		return errors.New("tomestone response contains multiple JSON values")
+	}
+	if !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
 // ClientOption is a typed functional option for NewClient / NewClientWithProxy.
 type ClientOption func(*clientOptions)
 
@@ -142,16 +173,25 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		}
 	}
 
-	// Build proxy-aware HTTP transport.
+	// Build proxy-aware HTTP transport by cloning DefaultTransport to inherit
+	// bounded standard idle-connection/TLS timeouts.
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse proxy URL: %w", err)
 	}
 
+	cloneTransport := func() *http.Transport {
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			return dt.Clone()
+		}
+		return &http.Transport{}
+	}
+
 	var transport *http.Transport
 	switch u.Scheme {
 	case "http", "https":
-		transport = &http.Transport{Proxy: http.ProxyURL(u)}
+		transport = cloneTransport()
+		transport.Proxy = http.ProxyURL(u)
 	case "socks5":
 		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
 		if derr != nil {
@@ -161,7 +201,8 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		if !ok {
 			return nil, fmt.Errorf("socks dialer does not support context")
 		}
-		transport = &http.Transport{DialContext: ctxDialer.DialContext}
+		transport = cloneTransport()
+		transport.DialContext = ctxDialer.DialContext
 	case "socks4":
 		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
 		if derr != nil {
@@ -170,13 +211,13 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		ctxDialer, ok := dialer.(xproxy.ContextDialer)
 		if !ok {
 			// go-socks4 dialer doesn't implement ContextDialer; wrap plain Dialer.
-			transport = &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				},
+			transport = cloneTransport()
+			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
 			}
 		} else {
-			transport = &http.Transport{DialContext: ctxDialer.DialContext}
+			transport = cloneTransport()
+			transport.DialContext = ctxDialer.DialContext
 		}
 	default:
 		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
@@ -207,6 +248,8 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 func (c *Client) IsConfigured() bool {
 	return c.apiToken != ""
 }
+
+// FetchCharacterProfile fetches a character's profile by their Lodestone ID.
 
 // FetchCharacterProfile fetches a character's profile by their Lodestone ID.
 func (c *Client) FetchCharacterProfile(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
@@ -311,16 +354,12 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read tomestone response body: %w", err)
-	}
-
 	switch resp.StatusCode {
 	case http.StatusOK:
 		c.requestRate.RecordSuccess(c.logger, ctx)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		c.logger.ErrorContext(ctx, "tomestone.unauthenticated", slog.Int("status", resp.StatusCode), slog.String("body", string(bodyBytes)))
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxTomestoneErrorBytes))
+		c.logger.ErrorContext(ctx, "tomestone.unauthenticated", slog.Int("status", resp.StatusCode), slog.String("body", string(errBody)))
 		return nil, contract.ErrTomestoneUnauthenticated
 	case http.StatusNotFound:
 		c.logger.DebugContext(ctx, "tomestone.not_found", slog.String("url", rawURL))
@@ -364,13 +403,14 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		}
 		return nil, errors.New("tomestone api rate limit exceeded (HTTP 429)")
 	default:
-		c.logger.ErrorContext(ctx, "tomestone.error", slog.Int("status", resp.StatusCode), slog.String("body", string(bodyBytes)))
-		return nil, fmt.Errorf("tomestone api error: HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxTomestoneErrorBytes))
+		c.logger.ErrorContext(ctx, "tomestone.error", slog.Int("status", resp.StatusCode), slog.String("body", string(errBody)))
+		return nil, fmt.Errorf("tomestone api error: HTTP %d: %s", resp.StatusCode, string(errBody))
 	}
 
 	var res jsonResponse
-	if err := json.Unmarshal(bodyBytes, &res); err != nil {
-		return nil, fmt.Errorf("unmarshal tomestone response: %w", err)
+	if err := decodeTomestoneResponse(resp.Body, &res); err != nil {
+		return nil, fmt.Errorf("decode tomestone response: %w", err)
 	}
 
 	charData := &res.jsonCharacter

@@ -165,7 +165,8 @@ The `consume` command supports a `--proxy` flag for per-goroutine proxy isolatio
 1. Each worker goroutine calls `ProxyHub.NewProxy(ctx, owner)` to acquire an available proxy from the database. The `owner` is constructed as `census-consume-<hostname>-p<pid>-w<workerID>` (e.g. `census-consume-worker-pod-abc-p43-w2`)
 2. The proxy is locked to that goroutine by owner name
 3. Proxy-aware Lodestone and Tomestone clients are created for that goroutine
-4. ALL requests route through the proxy — no direct requests
+4. The `CensusService` is prewarmed on the command goroutine before launching workers, ensuring milestone sync and service construction happen once
+5. ALL requests route through the proxy — no direct requests
 5. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy
 6. If `CanUse()` returns false (ownership changed by lock expiry), the goroutine acquires a new proxy
 
