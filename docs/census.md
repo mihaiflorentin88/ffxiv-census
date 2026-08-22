@@ -69,7 +69,7 @@ Default entries:
 Three contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
 
 - **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `UpsertGear`, `GetGear`, `FindIDGaps`, `MarkDeleted`, `UpdateAchievementSummary`, `SetAchievementsPrivate`, `ListStale`, `List`, `Count`, `CountActive`, `Breakdown`, `NewPerDay`, `MaxID`. The complete persistence and query contract for character data.
-- **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones`, `ListCharacterMilestones`, `CountExpansions`, `CountExpansionsFiltered`, `NewCharactersPerDay`, `CountChocoboMilestones`.
+- **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones` (batch multi-row INSERT, single round-trip), `ListCharacterMilestones`, `CountExpansions`, `CountExpansionsFiltered`, `NewCharactersPerDay`, `CountChocoboMilestones`.
 - **`CensusRunRepository`** — `Start`, `Finish`.
 
 Repositories are resolved via the service locator (`container.Load.CharacterRepository()`, etc.), which builds them from the shared `DatabaseDriver`.
@@ -92,13 +92,14 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 
 ## CensusService
 
-`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the three repositories; the ingest handlers call it.
+`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the three repositories; the ingest handlers call it. The service caches the milestone registry in memory (5-minute TTL) to avoid re-querying the DB on every `ProcessAchievements` call; `SyncMilestones` invalidates the cache.
 
-- `SyncMilestones(ctx)` — seeds configured expansion milestones and chocobo achievement into the DB (idempotent).
+- `SyncMilestones(ctx)` — seeds configured expansion milestones and chocobo achievement into the DB (idempotent). Invalidates the in-memory milestone cache so the next `ProcessAchievements` picks up the fresh registry.
 - `UpsertCharacter(ctx, *godestone.Character)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
 - `UpsertTomestoneCharacter(ctx, *contract.TomestoneCharacter)` — converts a Tomestone character + jobs into records and persists them atomically.
-- `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones).
+- `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones). Uses the in-memory milestone cache (5-minute TTL) to avoid re-querying the DB on every call.
 - `MaxCharacterID(ctx)` — returns the highest known character ID in the repository (excluding deleted characters), used for auto-discovery sweeps.
+- `MilestoneIDs(ctx)` — returns the set of tracked milestone achievement IDs from the cached registry. Useful for handler-level pre-filtering.
 - `IsActive(latestAt)` — true when the latest achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`).
 - `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
 - `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the latest achievement is within the activity window and max-level means having at least one job at or above `max_level`. Fans out three database queries concurrently (`Count`, `CountActive`, `Count` with `MinLevel`) and joins results with deterministic error precedence (total → active → max-level).
