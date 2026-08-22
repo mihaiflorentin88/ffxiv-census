@@ -476,3 +476,111 @@ func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitForProxy_ExponentialBackoff(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := newTestCensusWorker(nil, logger)
+	proxyHub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+
+	// Insert a proxy after a short delay to measure how long waitForProxy waited.
+	go func() {
+		time.Sleep(1 * time.Second)
+		repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+			Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
+		})
+		proxies, _ := repo.ListForScan(context.Background(), 10)
+		if len(proxies) > 0 {
+			now := time.Now().UTC()
+			repo.UpdateStatus(context.Background(), proxies[0].ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+		}
+	}()
+
+	p, err := w.waitForProxy(ctx, "test-owner", proxyHub)
+	if err != nil {
+		t.Fatalf("waitForProxy: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected proxy, got nil")
+	}
+
+	elapsed := time.Since(start)
+	// With exponential backoff starting at 5s, the first retry is at 5s.
+	// A proxy inserted at 1s won't be seen until the next backoff fires.
+	if elapsed < 4*time.Second {
+		t.Errorf("waitForProxy returned too quickly (%v), expected at least 4s due to backoff", elapsed)
+	}
+	if elapsed > 8*time.Second {
+		t.Errorf("waitForProxy took too long (%v), expected < 8s", elapsed)
+	}
+}
+
+func TestWaitForProxy_NotificationChannel(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	w := newTestCensusWorker(nil, logger)
+	proxyHub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Insert and activate a proxy before starting waitForProxy.
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
+	})
+	proxies, _ := repo.ListForScan(context.Background(), 10)
+	if len(proxies) == 0 {
+		t.Fatal("expected at least one proxy")
+	}
+	now := time.Now().UTC()
+	repo.UpdateStatus(context.Background(), proxies[0].ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+
+	// Lock all proxies so waitForProxy blocks.
+	_, err := repo.ClaimProxy(context.Background(), "other-owner", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("claim proxy: %v", err)
+	}
+
+	start := time.Now()
+
+	type result struct {
+		proxy *proxydomain.Proxy
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		p, err := w.waitForProxy(ctx, "test-owner", proxyHub)
+		ch <- result{p, err}
+	}()
+
+	// Give waitForProxy time to enter the select.
+	time.Sleep(100 * time.Millisecond)
+
+	// Release the proxy and notify.
+	err = repo.ReleaseProxy(context.Background(), proxies[0].ID, "other-owner")
+	if err != nil {
+		t.Fatalf("release proxy: %v", err)
+	}
+	proxyHub.NotifyAvailable()
+
+	select {
+	case r := <-ch:
+		elapsed := time.Since(start)
+		if r.err != nil {
+			t.Fatalf("waitForProxy: %v", r.err)
+		}
+		if r.proxy == nil {
+			t.Fatal("expected proxy, got nil")
+		}
+		if elapsed > 2*time.Second {
+			t.Errorf("waitForProxy took %v after notification, expected < 2s", elapsed)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for proxy")
+	}
+}

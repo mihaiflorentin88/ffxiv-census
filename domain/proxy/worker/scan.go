@@ -26,6 +26,7 @@ type ScanWorker struct {
 	scanner   Scanner
 	logger    contract.Logger
 	idleDelay time.Duration
+	notifier  func() // called after a proxy becomes active (best-effort)
 }
 
 // NewScanWorker creates a ScanWorker. The idleDelay controls how long the worker
@@ -38,6 +39,12 @@ func NewScanWorker(repo contract.ProxyRepository, scanner Scanner, logger contra
 		logger:    logger,
 		idleDelay: idleDelay,
 	}
+}
+
+// SetNotifier registers a callback invoked after a proxy is successfully scanned
+// and marked active. Used to wake waiting workers via ProxyHub.NotifyAvailable.
+func (w *ScanWorker) SetNotifier(fn func()) {
+	w.notifier = fn
 }
 
 // SplitScanConcurrency divides total concurrency into regular and dead pools.
@@ -154,6 +161,8 @@ func (w *ScanWorker) runScanPool(ctx context.Context, pool string, concurrency i
 						"proxy_id", rec.ID,
 						"error", err)
 					hadError.Store(true)
+				} else if w.notifier != nil {
+					w.notifier()
 				}
 			}(&batch[i])
 		}

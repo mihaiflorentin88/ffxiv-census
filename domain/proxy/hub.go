@@ -14,40 +14,68 @@ type ProxyHub struct {
 	repo    contract.ProxyRepository
 	lockTTL time.Duration
 	checker contract.ProxyChecker
+	notify  chan struct{} // buffered(1); signals waiting workers when a proxy becomes available
 }
 
 // NewProxyHub creates a ProxyHub with the given repository, lock TTL, and optional checker.
 func NewProxyHub(repo contract.ProxyRepository, lockTTL time.Duration, checker contract.ProxyChecker) *ProxyHub {
-	return &ProxyHub{repo: repo, lockTTL: lockTTL, checker: checker}
+	return &ProxyHub{repo: repo, lockTTL: lockTTL, checker: checker, notify: make(chan struct{}, 1)}
 }
 
 // NewProxy atomically claims an available proxy for the given owner and tests it.
-// Returns nil (no error) if no proxy is available or all claimed proxies fail the check.
-// Up to 3 attempts are made to find a working proxy.
+// Returns nil (no error) if no proxy is available or the claimed proxy fails the check.
+// The scan worker already validates proxies before marking them active, so a single
+// acquisition attempt is sufficient — the caller (waitForProxy) handles retries with
+// exponential backoff.
 func (h *ProxyHub) NewProxy(ctx context.Context, owner string) (*Proxy, error) {
-	for range 3 {
-		rec, err := h.repo.ClaimProxy(ctx, owner, h.lockTTL)
-		if err != nil {
-			return nil, err
-		}
-		if rec == nil {
-			return nil, nil
-		}
-
-		p := New(rec, h.repo)
-		if h.checker == nil {
-			return p, nil
-		}
-
-		_, err = h.checker.Check(ctx, rec.Protocol, rec.IP, rec.Port)
-		if err == nil {
-			return p, nil
-		}
-
-		// Proxy failed check — mark it failed and try another.
-		_ = p.MarkFailed(ctx, owner)
+	rec, err := h.repo.ClaimProxy(ctx, owner, h.lockTTL)
+	if err != nil {
+		return nil, err
 	}
+	if rec == nil {
+		return nil, nil
+	}
+
+	p := New(rec, h.repo)
+	if h.checker == nil {
+		return p, nil
+	}
+
+	_, err = h.checker.Check(ctx, rec.Protocol, rec.IP, rec.Port)
+	if err == nil {
+		return p, nil
+	}
+
+	// Proxy failed check — mark it failed so it re-enters the scan cycle.
+	_ = p.MarkFailed(ctx, owner)
 	return nil, nil
+}
+
+// NotifyAvailable signals one waiting worker that a proxy may be available.
+// Non-blocking: if no worker is waiting, the signal is dropped (next backoff
+// timer will catch it). Safe to call from any goroutine.
+func (h *ProxyHub) NotifyAvailable() {
+	select {
+	case h.notify <- struct{}{}:
+	default:
+	}
+}
+
+// WaitAvailable blocks until a proxy-available signal arrives or ctx is done.
+// Returns ctx.Err() if the context is cancelled before a signal arrives.
+func (h *ProxyHub) WaitAvailable(ctx context.Context) error {
+	select {
+	case <-h.notify:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// NotifyCh returns the notification channel. Workers select on this alongside
+// their backoff timer to wake immediately when a proxy becomes available.
+func (h *ProxyHub) NotifyCh() <-chan struct{} {
+	return h.notify
 }
 
 // LockTTL returns the lock TTL configured for this hub.

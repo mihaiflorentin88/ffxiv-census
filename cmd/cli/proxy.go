@@ -185,6 +185,9 @@ empty batches or per-record errors before querying again.`,
 		}
 
 		scanWorker := worker.NewScanWorker(repo, svc, logger, time.Minute)
+		if hub := container.Load.ProxyHub(); hub != nil {
+			scanWorker.SetNotifier(hub.NotifyAvailable)
+		}
 		return scanWorker.RunScan(ctx, concurrency, deadScanPercentage)
 	},
 }

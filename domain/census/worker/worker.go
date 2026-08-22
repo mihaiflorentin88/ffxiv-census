@@ -228,25 +228,50 @@ func isRateLimitError(err error) bool {
 	return strings.Contains(msg, "429") || strings.Contains(msg, "rate limit")
 }
 
-// waitForProxy blocks until a proxy is available or the context is cancelled.
-// It retries on nil results and transient acquisition errors with a 5-second
-// backoff, logging each attempt. This prevents fatal startup errors when fewer
+// It retries on nil results and transient acquisition errors with exponential
+// backoff (5s → 10s → 20s → 40s → 60s cap), logging only on the first attempt
+// and when backoff reaches the cap. This prevents CPU and DB burn when fewer
 // active proxies exist than configured goroutines.
 func (w *Worker) waitForProxy(ctx context.Context, owner string, proxyHub *proxydomain.ProxyHub) (*proxydomain.Proxy, error) {
+	backoff := 5 * time.Second
+	const maxBackoff = 60 * time.Second
+	firstAttempt := true
+	capLogged := false
+
 	for {
 		p, err := proxyHub.NewProxy(ctx, owner)
 		if err == nil && p != nil {
 			return p, nil
 		}
-		if err != nil {
-			w.logger.WarnContext(ctx, "worker.proxy_waiting", slog.String("owner", owner), slog.Any("error", err))
-		} else {
-			w.logger.InfoContext(ctx, "worker.proxy_waiting", slog.String("owner", owner), slog.String("reason", "no proxy available"))
+
+		if firstAttempt {
+			if err != nil {
+				w.logger.WarnContext(ctx, "worker.proxy_waiting", slog.String("owner", owner), slog.Any("error", err))
+			} else {
+				w.logger.InfoContext(ctx, "worker.proxy_waiting", slog.String("owner", owner), slog.String("reason", "no proxy available"))
+			}
+			firstAttempt = false
+		} else if !capLogged && backoff >= maxBackoff {
+			w.logger.InfoContext(ctx, "worker.proxy_waiting_backoff", slog.String("owner", owner), slog.Duration("backoff", backoff))
+			capLogged = true
 		}
+
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil, ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-timer.C:
+		case <-proxyHub.NotifyCh():
+			timer.Stop()
+			// Proxy became available — reset backoff and retry immediately.
+			backoff = 5 * time.Second
+			continue
+		}
+
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }
@@ -285,6 +310,8 @@ func (w *Worker) replaceProxy(
 			}
 		}
 		cancel()
+		// Wake one waiting worker now that a proxy slot is free.
+		proxyHub.NotifyAvailable()
 	}
 
 	// Acquire replacement — now the previous slot is free.
@@ -434,6 +461,7 @@ func (w *Worker) proxyWorkerLoop(
 				w.logger.WarnContext(releaseCtx, "worker.proxy_release_error", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.Any("error", err))
 			} else {
 				w.logger.InfoContext(releaseCtx, "worker.proxy_released", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
+				proxyHub.NotifyAvailable()
 			}
 		}
 	}()
