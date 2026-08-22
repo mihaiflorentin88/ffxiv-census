@@ -209,7 +209,7 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "10"
+        - "30"
     # --- Proxy discovery/scanning ---
     - name: proxy-new
       replicaCount: 1
