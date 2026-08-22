@@ -234,6 +234,8 @@ workers:
         - scan
         - -c
         - "300"
+        - --dead-scan-percentage
+        - "20"
     # --- Census failed queue retry consumer ---
     - name: census-retry
       replicaCount: 1

@@ -115,6 +115,18 @@ func (f *FakeProxyRepository) UpdateScanTime(_ context.Context, id int64) error 
 	return nil
 }
 
+// SetLastScannedAt directly sets last_scanned_at for test seeding. Not part of contract.ProxyRepository.
+func (f *FakeProxyRepository) SetLastScannedAt(id int64, t time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.proxies[id]
+	if !ok {
+		return
+	}
+	p.LastScannedAt = &t
+	f.proxies[id] = p
+}
+
 func (f *FakeProxyRepository) ListForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -128,17 +140,39 @@ func (f *FakeProxyRepository) ListForScan(_ context.Context, limit int) ([]contr
 			if p.LastScannedAt == nil || p.LastScannedAt.Before(now.Add(-10*time.Minute)) {
 				result = append(result, p)
 			}
-		case contract.ProxyStatusDead:
-			if p.LastScannedAt == nil || p.LastScannedAt.Before(now.Add(-3*24*time.Hour)) {
-				result = append(result, p)
-			}
 		}
 	}
-	// Sort: inactive first, then active, then dead. Within each group, oldest scan first.
+	// Sort: inactive first, then active. Within each group, oldest scan first.
 	for i := 0; i < len(result); i++ {
 		for j := i + 1; j < len(result); j++ {
 			if priority(result[j]) < priority(result[i]) ||
 				(priority(result[j]) == priority(result[i]) && scannedBefore(result[j], result[i])) {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (f *FakeProxyRepository) ListDeadForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := time.Now().UTC()
+	var result []contract.ProxyRecord
+	for _, p := range f.proxies {
+		if p.Status == contract.ProxyStatusDead {
+			if p.LastScannedAt == nil || p.LastScannedAt.Before(now.Add(-7*24*time.Hour)) {
+				result = append(result, p)
+			}
+		}
+	}
+	// Sort: oldest scan first.
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if scannedBefore(result[j], result[i]) {
 				result[i], result[j] = result[j], result[i]
 			}
 		}

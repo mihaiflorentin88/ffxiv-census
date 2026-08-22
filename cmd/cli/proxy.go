@@ -164,12 +164,15 @@ both the goroutine limit per batch and the SQL LIMIT. Waits one minute after
 empty batches or per-record errors before querying again.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
+		deadScanPercentage, _ := cmd.Flags().GetInt("dead-scan-percentage")
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
 		logger := container.Load.Logger()
-		logger.InfoContext(ctx, "proxy.scan.start", "concurrency", concurrency)
+		logger.InfoContext(ctx, "proxy.scan.start",
+			"concurrency", concurrency,
+			"dead_scan_percentage", deadScanPercentage)
 
 		repo := container.Load.ProxyRepository()
 		if repo == nil {
@@ -182,7 +185,7 @@ empty batches or per-record errors before querying again.`,
 		}
 
 		scanWorker := worker.NewScanWorker(repo, svc, logger, time.Minute)
-		return scanWorker.RunScan(ctx, concurrency)
+		return scanWorker.RunScan(ctx, concurrency, deadScanPercentage)
 	},
 }
 
@@ -222,5 +225,6 @@ func init() {
 
 	proxyDiscoverCmd.Flags().IntP("limit", "l", 0, "max proxies to publish after deduplication (0 = no limit)")
 	proxyScanCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent scan routines (also used as SQL batch limit)")
+	proxyScanCmd.Flags().Int("dead-scan-percentage", 0, "percentage of scan concurrency reserved for dead proxies (0-90; values above 90 are capped)")
 	proxyConsumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 }

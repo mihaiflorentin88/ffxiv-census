@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -14,6 +15,9 @@ import (
 type Scanner interface {
 	ProcessScanProxy(ctx context.Context, p *contract.ProxyRecord) error
 }
+
+// scanListFunc is the function signature for fetching proxy batches.
+type scanListFunc func(context.Context, int) ([]contract.ProxyRecord, error)
 
 // ScanWorker reads priority-ordered database batches and scans proxies directly,
 // without going through RabbitMQ.
@@ -36,18 +40,75 @@ func NewScanWorker(repo contract.ProxyRepository, scanner Scanner, logger contra
 	}
 }
 
-// RunScan runs the scan loop until the context is cancelled.
-// Concurrency controls both the goroutine limit per batch and the SQL LIMIT.
-// Non-positive concurrency defaults to 4.
-func (w *ScanWorker) RunScan(ctx context.Context, concurrency int) error {
+// SplitScanConcurrency divides total concurrency into regular and dead pools.
+// Non-positive concurrency defaults to 4. Negative percentages clamp to 0;
+// values above 90 cap to 90. Integer-floor division is used for the dead pool.
+func SplitScanConcurrency(concurrency, deadScanPercentage int) (regular, dead int) {
 	if concurrency <= 0 {
 		concurrency = 4
 	}
+	if deadScanPercentage < 0 {
+		deadScanPercentage = 0
+	}
+	if deadScanPercentage > 90 {
+		deadScanPercentage = 90
+	}
+	dead = concurrency * deadScanPercentage / 100
+	regular = concurrency - dead
+	return regular, dead
+}
 
+// RunScan runs the scan loop until the context is cancelled.
+// Concurrency controls both the goroutine limit per batch and the SQL LIMIT.
+// Non-positive concurrency defaults to 4.
+// deadScanPercentage (0-90) reserves a portion of concurrency for dead proxy scanning.
+// Values below 0 are treated as 0; values above 90 are capped to 90.
+func (w *ScanWorker) RunScan(ctx context.Context, concurrency, deadScanPercentage int) error {
+	regular, dead := SplitScanConcurrency(concurrency, deadScanPercentage)
+
+	w.logger.InfoContext(ctx, "scan_worker.pool_allocation",
+		"regular_workers", regular,
+		"dead_workers", dead)
+
+	poolCtx, poolCancel := context.WithCancel(ctx)
+	defer poolCancel()
+
+	// Count launched pools for the result channel.
+	poolCount := 1 // regular pool always launches
+	if dead > 0 {
+		poolCount++
+	}
+	results := make(chan error, poolCount)
+
+	// Regular pool — always launches.
+	go func() {
+		results <- w.runScanPool(poolCtx, "regular", regular, w.repo.ListForScan)
+	}()
+
+	// Dead pool — only when dead > 0.
+	if dead > 0 {
+		go func() {
+			results <- w.runScanPool(poolCtx, "dead", dead, w.repo.ListDeadForScan)
+		}()
+	}
+
+	// Collect results; cancel sibling on first error.
+	var firstErr error
+	for range poolCount {
+		if err := <-results; err != nil && firstErr == nil {
+			firstErr = err
+			poolCancel()
+		}
+	}
+	return firstErr
+}
+
+// runScanPool runs a single scan pool loop until the context is cancelled.
+func (w *ScanWorker) runScanPool(ctx context.Context, pool string, concurrency int, list scanListFunc) error {
 	for {
-		batch, err := w.repo.ListForScan(ctx, concurrency)
+		batch, err := list(ctx, concurrency)
 		if err != nil {
-			return fmt.Errorf("list proxies for scan: %w", err)
+			return fmt.Errorf("list proxies for scan [%s]: %w", pool, err)
 		}
 
 		if len(batch) == 0 {
@@ -63,7 +124,7 @@ func (w *ScanWorker) RunScan(ctx context.Context, concurrency int) error {
 		// Scan the batch with bounded concurrency.
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, concurrency)
-		var hadError bool
+		var hadError atomic.Bool
 
 		for i := range batch {
 			select {
@@ -80,6 +141,7 @@ func (w *ScanWorker) RunScan(ctx context.Context, concurrency int) error {
 				defer func() {
 					if r := recover(); r != nil {
 						w.logger.ErrorContext(ctx, "scan_worker.panic",
+							"pool", pool,
 							"proxy_id", rec.ID,
 							"error", fmt.Sprintf("%v", r),
 							"stack", string(debug.Stack()))
@@ -88,9 +150,10 @@ func (w *ScanWorker) RunScan(ctx context.Context, concurrency int) error {
 
 				if err := w.scanner.ProcessScanProxy(ctx, rec); err != nil {
 					w.logger.WarnContext(ctx, "scan_worker.scan_error",
+						"pool", pool,
 						"proxy_id", rec.ID,
 						"error", err)
-					hadError = true
+					hadError.Store(true)
 				}
 			}(&batch[i])
 		}
@@ -98,7 +161,7 @@ func (w *ScanWorker) RunScan(ctx context.Context, concurrency int) error {
 		wg.Wait()
 
 		// If any record had an error, wait before the next batch.
-		if hadError {
+		if hadError.Load() {
 			select {
 			case <-ctx.Done():
 				return nil

@@ -236,34 +236,70 @@ func TestFakeProvider_FetchProxies_Error(t *testing.T) {
 	}
 }
 
-func TestFakeRepo_ListForScan_PriorityOrder(t *testing.T) {
+func TestFakeRepo_ListForScan_ExcludesDead(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 
-	// Insert 3 proxies with different statuses
+	// Insert 3 proxies: 1 inactive, 1 active (old enough), 1 dead (old enough).
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "2.2.2.2", Port: 80, Source: "test"})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "3.3.3.3", Port: 80, Source: "test"})
 
 	proxies, _ := repo.ListForScan(context.Background(), 10)
-	// All should be inactive (new)
-	if len(proxies) != 3 {
-		t.Fatalf("expected 3 scannable, got %d", len(proxies))
+
+	// Mark as active (old scan) and dead (old scan).
+	oldScan := time.Now().UTC().Add(-1 * time.Hour)
+	repo.UpdateStatus(context.Background(), proxies[1].ID, contract.ProxyStatusActive, intPtr(100), 0, &oldScan)
+	repo.UpdateStatus(context.Background(), proxies[2].ID, contract.ProxyStatusDead, nil, 5, nil)
+	deadScan := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	repo.SetLastScannedAt(proxies[2].ID, deadScan)
+
+	// ListForScan should exclude dead proxies.
+	scanList, _ := repo.ListForScan(context.Background(), 100)
+	for _, p := range scanList {
+		if p.Status == contract.ProxyStatusDead {
+			t.Errorf("ListForScan returned dead proxy ID=%d — dead must be excluded", p.ID)
+		}
 	}
 
-	// Mark first as active (recently scanned → should drop from scan list)
-	now := time.Now().UTC()
-	repo.UpdateStatus(context.Background(), proxies[0].ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
-	// Mark second as dead, recently scanned
-	repo.UpdateStatus(context.Background(), proxies[1].ID, contract.ProxyStatusDead, nil, 5, nil)
-
-	scanList, _ := repo.ListForScan(context.Background(), 10)
-	// Should have: inactive (1), dead with old scan (1) — active recently scanned should be excluded
-	// But dead was just scanned, so also excluded (within 3 day window)
-	if len(scanList) != 1 {
-		t.Fatalf("expected 1 scannable (inactive only), got %d", len(scanList))
+	// ListDeadForScan should return only dead proxies.
+	deadList, _ := repo.ListDeadForScan(context.Background(), 100)
+	for _, p := range deadList {
+		if p.Status != contract.ProxyStatusDead {
+			t.Errorf("ListDeadForScan returned non-dead proxy ID=%d status=%s", p.ID, p.Status)
+		}
 	}
-	if scanList[0].Status != contract.ProxyStatusInactive {
-		t.Fatalf("expected inactive first, got %s", scanList[0].Status)
+}
+
+func TestFakeRepo_ListDeadForScan_PriorityOrder(t *testing.T) {
+	repo := repository.NewFakeProxyRepository()
+
+	// Insert 3 proxies: 1 inactive, 1 active, 1 dead (all eligible).
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "2.2.2.2", Port: 80, Source: "test"})
+	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "3.3.3.3", Port: 80, Source: "test"})
+
+	proxies, _ := repo.ListForScan(context.Background(), 10)
+
+	// Mark as active (old scan) and dead (old scan).
+	oldScan := time.Now().UTC().Add(-1 * time.Hour)
+	repo.UpdateStatus(context.Background(), proxies[1].ID, contract.ProxyStatusActive, intPtr(100), 0, &oldScan)
+	repo.UpdateStatus(context.Background(), proxies[2].ID, contract.ProxyStatusDead, nil, 5, nil)
+	deadScan := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	repo.SetLastScannedAt(proxies[2].ID, deadScan)
+
+	// ListDeadForScan should return only the dead one.
+	deadList, _ := repo.ListDeadForScan(context.Background(), 100)
+	if len(deadList) != 1 {
+		t.Fatalf("expected 1 dead, got %d", len(deadList))
+	}
+	if deadList[0].Status != contract.ProxyStatusDead {
+		t.Errorf("expected dead, got %s", deadList[0].Status)
+	}
+
+	// limit=1 should return exactly 1.
+	one, _ := repo.ListDeadForScan(context.Background(), 1)
+	if len(one) != 1 {
+		t.Fatalf("limit=1: expected 1, got %d", len(one))
 	}
 }
 

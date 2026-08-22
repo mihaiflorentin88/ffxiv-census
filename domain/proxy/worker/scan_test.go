@@ -39,18 +39,27 @@ func (f *fakeScanner) CallCount() int {
 }
 
 // fakeScanRepo implements contract.ProxyRepository for scan worker tests.
-// Only ListForScan is used; other methods panic if called.
+// Only ListForScan and ListDeadForScan are used; other methods panic if called.
 type fakeScanRepo struct {
-	mu        sync.Mutex
-	batches   [][]contract.ProxyRecord
-	batchIdx  int
-	listCalls int32
-	listErr   error
-	limitSeen int
+	mu            sync.Mutex
+	batches       [][]contract.ProxyRecord
+	batchIdx      int
+	deadBatches   [][]contract.ProxyRecord
+	deadBatchIdx  int
+	listCalls     int32
+	deadListCalls int32
+	listErr       error
+	deadListErr   error
+	limitSeen     int
+	deadLimitSeen int
 }
 
 func newFakeScanRepo(batches ...[]contract.ProxyRecord) *fakeScanRepo {
-	return &fakeScanRepo{batches: batches}
+	return &fakeScanRepo{batches: batches, deadBatches: [][]contract.ProxyRecord{nil}}
+}
+
+func newFakeScanRepoWithDead(regularBatches, deadBatches [][]contract.ProxyRecord) *fakeScanRepo {
+	return &fakeScanRepo{batches: regularBatches, deadBatches: deadBatches}
 }
 
 func (f *fakeScanRepo) ListForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
@@ -73,6 +82,28 @@ func (f *fakeScanRepo) ListForScan(_ context.Context, limit int) ([]contract.Pro
 
 func (f *fakeScanRepo) ListCallCount() int32 {
 	return atomic.LoadInt32(&f.listCalls)
+}
+
+func (f *fakeScanRepo) ListDeadForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
+	atomic.AddInt32(&f.deadListCalls, 1)
+	f.mu.Lock()
+	f.deadLimitSeen = limit
+	if f.deadListErr != nil {
+		f.mu.Unlock()
+		return nil, f.deadListErr
+	}
+	if f.deadBatchIdx >= len(f.deadBatches) {
+		f.mu.Unlock()
+		return nil, nil
+	}
+	batch := f.deadBatches[f.deadBatchIdx]
+	f.deadBatchIdx++
+	f.mu.Unlock()
+	return batch, nil
+}
+
+func (f *fakeScanRepo) DeadListCallCount() int32 {
+	return atomic.LoadInt32(&f.deadListCalls)
 }
 
 // Stub implementations for contract.ProxyRepository.
@@ -136,7 +167,7 @@ func TestRunScan_PassesConcurrencyToListForScan(t *testing.T) {
 	w := worker.NewScanWorker(repo, scanner, logger, 10*time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	w.RunScan(ctx, 7)
+	w.RunScan(ctx, 7, 0)
 
 	if repo.limitSeen != 7 {
 		t.Errorf("ListForScan limit = %d, want 7", repo.limitSeen)
@@ -151,7 +182,7 @@ func TestRunScan_NormalizesNonPositiveConcurrency(t *testing.T) {
 	w := worker.NewScanWorker(repo, scanner, logger, 10*time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	w.RunScan(ctx, 0)
+	w.RunScan(ctx, 0, 0)
 
 	if repo.limitSeen != 4 {
 		t.Errorf("ListForScan limit = %d, want 4 (default)", repo.limitSeen)
@@ -175,7 +206,7 @@ func TestRunScan_BatchBarrierBeforeNextFetch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	w.RunScan(ctx, 2)
+	w.RunScan(ctx, 2, 0)
 
 	// All 3 records should be scanned.
 	if got := scanner.CallCount(); got != 3 {
@@ -198,7 +229,7 @@ func TestRunScan_EmptyBatchDoesNotHotPoll(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		w.RunScan(ctx, 2)
+		w.RunScan(ctx, 2, 0)
 		close(done)
 	}()
 
@@ -226,7 +257,7 @@ func TestRunScan_ListErrorIsReturned(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	w := worker.NewScanWorker(repo, scanner, logger, 10*time.Millisecond)
-	err := w.RunScan(context.Background(), 2)
+	err := w.RunScan(context.Background(), 2, 0)
 
 	if err == nil {
 		t.Fatal("expected error from ListForScan")
@@ -262,7 +293,7 @@ func TestRunScan_PerRecordFailureIsolated(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	w.RunScan(ctx, 3)
+	w.RunScan(ctx, 3, 0)
 
 	// All 3 should have been attempted despite the error on ID 2.
 	if got := atomic.LoadInt32(&scanCount); got != 3 {
@@ -277,4 +308,136 @@ type fakeScannerFunc struct {
 
 func (f *fakeScannerFunc) ProcessScanProxy(ctx context.Context, p *contract.ProxyRecord) error {
 	return f.fn(ctx, p)
+}
+
+func TestSplitScanConcurrency(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		percentage  int
+		wantRegular int
+		wantDead    int
+	}{
+		{"20pct of 10", 10, 20, 8, 2},
+		{"0pct", 10, 0, 10, 0},
+		{"90pct of 10", 10, 90, 1, 9},
+		{"91pct capped to 90", 10, 91, 1, 9},
+		{"200pct capped to 90", 10, 200, 1, 9},
+		{"negative pct", 10, -5, 10, 0},
+		{"zero concurrency normalized to 4", 0, 20, 4, 0},
+		{"negative concurrency normalized to 4", -1, 20, 4, 0},
+		{"300 concurrency 20pct", 300, 20, 240, 60},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotRegular, gotDead := worker.SplitScanConcurrency(tt.concurrency, tt.percentage)
+			if gotRegular != tt.wantRegular {
+				t.Errorf("regular = %d, want %d", gotRegular, tt.wantRegular)
+			}
+			if gotDead != tt.wantDead {
+				t.Errorf("dead = %d, want %d", gotDead, tt.wantDead)
+			}
+		})
+	}
+}
+
+func TestRunScan_DeadPercentage_SplitsConcurrency(t *testing.T) {
+	// 10 concurrency, 20% dead → regular=8, dead=2
+	regularBatch := []contract.ProxyRecord{
+		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
+	}
+	deadBatch := []contract.ProxyRecord{
+		{ID: 100, Protocol: "http", IP: "9.9.9.9", Port: 80, Status: contract.ProxyStatusDead},
+	}
+	repo := newFakeScanRepoWithDead(
+		[][]contract.ProxyRecord{regularBatch, nil},
+		[][]contract.ProxyRecord{deadBatch, nil},
+	)
+	scanner := &fakeScanner{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	w := worker.NewScanWorker(repo, scanner, logger, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	w.RunScan(ctx, 10, 20)
+
+	if repo.limitSeen != 8 {
+		t.Errorf("regular limit = %d, want 8", repo.limitSeen)
+	}
+	if repo.deadLimitSeen != 2 {
+		t.Errorf("dead limit = %d, want 2", repo.deadLimitSeen)
+	}
+}
+
+func TestRunScan_ZeroPercentage_NoDeadCalls(t *testing.T) {
+	batch := []contract.ProxyRecord{
+		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
+	}
+	repo := newFakeScanRepo(batch, nil)
+	repo.deadBatches = nil // no dead batches
+	scanner := &fakeScanner{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	w := worker.NewScanWorker(repo, scanner, logger, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	w.RunScan(ctx, 10, 0)
+
+	if repo.DeadListCallCount() != 0 {
+		t.Errorf("dead list calls = %d, want 0 (no dead pool)", repo.DeadListCallCount())
+	}
+}
+
+func TestRunScan_EmptyDeadPoolDoesNotStopRegular(t *testing.T) {
+	regularBatch := []contract.ProxyRecord{
+		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
+	}
+	// Dead pool returns empty then nil to stop.
+	repo := newFakeScanRepoWithDead(
+		[][]contract.ProxyRecord{regularBatch, nil},
+		[][]contract.ProxyRecord{nil},
+	)
+	scanner := &fakeScanner{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	w := worker.NewScanWorker(repo, scanner, logger, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	w.RunScan(ctx, 10, 20)
+
+	// Regular pool should have scanned the record.
+	if got := scanner.CallCount(); got < 1 {
+		t.Errorf("scanned = %d, want >= 1 (regular pool should progress)", got)
+	}
+}
+
+func TestRunScan_ContextCancellation_StopsBothPools(t *testing.T) {
+	repo := newFakeScanRepoWithDead(
+		[][]contract.ProxyRecord{nil},
+		[][]contract.ProxyRecord{nil},
+	)
+	scanner := &fakeScanner{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	w := worker.NewScanWorker(repo, scanner, logger, 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		w.RunScan(ctx, 10, 20)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// OK
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunScan did not exit after context cancellation")
+	}
 }

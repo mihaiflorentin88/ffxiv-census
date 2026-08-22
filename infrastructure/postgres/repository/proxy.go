@@ -167,12 +167,10 @@ func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contrac
 		WHERE
 			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '20 minutes')
 			OR (status = 'active' AND last_scanned_at < NOW() - INTERVAL '10 minutes')
-			OR (status = 'dead' AND last_scanned_at < NOW() - INTERVAL '7 days')
 		ORDER BY
 			CASE
 				WHEN status = 'inactive' THEN 0
 				WHEN status = 'active' THEN 1
-				WHEN status = 'dead' THEN 2
 			END,
 			last_scanned_at ASC NULLS FIRST`
 
@@ -192,6 +190,38 @@ func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contrac
 		p, err := scanProxy(rows)
 		if err != nil {
 			return nil, fmt.Errorf("proxy scan row: %w", err)
+		}
+		proxies = append(proxies, *p)
+	}
+	return proxies, rows.Err()
+}
+
+func (r *ProxyRepository) ListDeadForScan(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
+	db, err := r.driver.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `SELECT ` + proxyColumns + ` FROM proxies
+		WHERE status = 'dead' AND last_scanned_at < NOW() - INTERVAL '7 days'
+		ORDER BY last_scanned_at ASC NULLS FIRST`
+
+	var rows *sql.Rows
+	if limit > 0 {
+		rows, err = db.QueryContext(ctx, query+` LIMIT $1`, limit)
+	} else {
+		rows, err = db.QueryContext(ctx, query)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("proxy list dead for scan: %w", err)
+	}
+	defer rows.Close()
+
+	var proxies []contract.ProxyRecord
+	for rows.Next() {
+		p, err := scanProxy(rows)
+		if err != nil {
+			return nil, fmt.Errorf("proxy scan dead row: %w", err)
 		}
 		proxies = append(proxies, *p)
 	}

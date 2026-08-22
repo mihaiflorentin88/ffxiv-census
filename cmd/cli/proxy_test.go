@@ -364,3 +364,16 @@ func TestPublishDiscoveredProxies_LimitCrossProviderFallback(t *testing.T) {
 		t.Errorf("p2 emittedRecords = %d, want 1 (stopped after first emission filled limit)", p2.emittedRecords)
 	}
 }
+
+func TestProxyScanCmd_DeadScanPercentageFlag(t *testing.T) {
+	flag := proxyScanCmd.Flags().Lookup("dead-scan-percentage")
+	if flag == nil {
+		t.Fatal("expected --dead-scan-percentage flag to be registered")
+	}
+	if flag.Value.Type() != "int" {
+		t.Errorf("flag type = %q, want %q", flag.Value.Type(), "int")
+	}
+	if flag.DefValue != "0" {
+		t.Errorf("flag default = %q, want %q", flag.DefValue, "0")
+	}
+}
