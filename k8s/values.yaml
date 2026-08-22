@@ -184,7 +184,7 @@ workers:
         - "30"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
     - name: proxy-id-sweep
-      replicaCount: 2
+      replicaCount: 1
       command:
         - /app/ffxiv-census
         - consume
@@ -209,14 +209,8 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "50"
-      resources:
-      requests:
-        memory: 100Mi
-        cpu: 50m
-      limits:
-        memory: 2Gi
-        cpu: 2
+        - "30"
+
     # --- Proxy discovery/scanning ---
     - name: proxy-new
       replicaCount: 1
@@ -225,7 +219,7 @@ workers:
         - proxy
         - consume
         - -c
-        - "50"
+        - "30"
     - name: proxy-scan
       replicaCount: 1
       command:
