@@ -270,6 +270,8 @@ cronjobs:
         - character-census
         - --limit
         - "500"
+        - --older-than
+        - -1
 
     - name: publish-id-sweep
       schedule: "*/1 * * * *"
