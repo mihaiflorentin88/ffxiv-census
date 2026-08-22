@@ -24,6 +24,11 @@ type Service struct {
 	activityWindow time.Duration
 	maxLevel       uint32
 	expansions     []ExpansionConfig
+	// milestoneCache holds the last-fetched milestone registry to avoid
+	// re-querying the DB on every ProcessAchievements call.
+	milestoneCache    []contract.MilestoneAchievement
+	milestoneCacheAt  time.Time
+	milestoneCacheTTL time.Duration
 }
 
 func NewService(
@@ -32,12 +37,13 @@ func NewService(
 	censusRuns contract.CensusRunRepository,
 ) *Service {
 	return &Service{
-		characters:     characters,
-		achievements:   achievements,
-		censusRuns:     censusRuns,
-		activityWindow: defaultActivityWindow,
-		maxLevel:       100,
-		expansions:     DefaultExpansions,
+		characters:        characters,
+		achievements:      achievements,
+		censusRuns:        censusRuns,
+		activityWindow:    defaultActivityWindow,
+		maxLevel:          100,
+		expansions:        DefaultExpansions,
+		milestoneCacheTTL: 5 * time.Minute,
 	}
 }
 
@@ -77,7 +83,55 @@ func (s *Service) Milestones() []contract.MilestoneAchievement {
 
 // SyncMilestones seeds the milestone registry into the DB (idempotent).
 func (s *Service) SyncMilestones(ctx context.Context) error {
-	return s.achievements.SyncMilestones(ctx, s.Milestones())
+	if err := s.achievements.SyncMilestones(ctx, s.Milestones()); err != nil {
+		return err
+	}
+	// Invalidate the cache so the next ProcessAchievements picks up the fresh registry.
+	s.mu.Lock()
+	s.milestoneCache = nil
+	s.milestoneCacheAt = time.Time{}
+	s.mu.Unlock()
+	return nil
+}
+
+// cachedMilestones returns the milestone registry, using a short-lived cache
+// to avoid querying the DB on every ProcessAchievements call.
+func (s *Service) cachedMilestones(ctx context.Context) ([]contract.MilestoneAchievement, error) {
+	s.mu.RLock()
+	cached := s.milestoneCache
+	cachedAt := s.milestoneCacheAt
+	ttl := s.milestoneCacheTTL
+	s.mu.RUnlock()
+
+	if cached != nil && time.Since(cachedAt) < ttl {
+		return cached, nil
+	}
+
+	fresh, err := s.achievements.ListMilestones(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.milestoneCache = fresh
+	s.milestoneCacheAt = time.Now()
+	s.mu.Unlock()
+
+	return fresh, nil
+}
+
+// MilestoneIDs returns the set of tracked milestone achievement IDs from the
+// cached registry. Used by handlers to pre-filter achievements before processing.
+func (s *Service) MilestoneIDs(ctx context.Context) (map[uint32]bool, error) {
+	registry, err := s.cachedMilestones(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[uint32]bool, len(registry))
+	for _, m := range registry {
+		ids[m.AchievementID] = true
+	}
+	return ids, nil
 }
 
 // UpsertCharacter converts a Lodestone character into a CharacterRecord and
@@ -285,7 +339,7 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 		return nil, nil
 	}
 
-	registry, err := s.achievements.ListMilestones(ctx)
+	registry, err := s.cachedMilestones(ctx)
 	if err != nil {
 		return nil, err
 	}

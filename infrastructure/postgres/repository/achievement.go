@@ -68,28 +68,35 @@ func (r *AchievementRepository) ListMilestones(ctx context.Context) ([]contract.
 	return out, rows.Err()
 }
 
+// UpsertCharacterMilestones replaces a character's earned milestones in a
+// single batch INSERT. The ON CONFLICT clause makes it idempotent.
 func (r *AchievementRepository) UpsertCharacterMilestones(ctx context.Context, characterID uint32, milestones []contract.CharacterMilestone) error {
+	if len(milestones) == 0 {
+		return nil
+	}
+
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("milestones upsert begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
-	for _, m := range milestones {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO character_milestones (character_id, achievement_id, achieved_at)
-			 VALUES ($1, $2, $3)
-			 ON CONFLICT (character_id, achievement_id) DO UPDATE SET
-				achieved_at = excluded.achieved_at`,
-			m.CharacterID, m.AchievementID, m.AchievedAt); err != nil {
-			return fmt.Errorf("milestone upsert: %w", err)
+	// Build a single multi-row INSERT with parameterized values.
+	var buf strings.Builder
+	buf.WriteString(`INSERT INTO character_milestones (character_id, achievement_id, achieved_at) VALUES `)
+	args := make([]any, 0, len(milestones)*3)
+	for i, m := range milestones {
+		if i > 0 {
+			buf.WriteByte(',')
 		}
+		fmt.Fprintf(&buf, "($%d,$%d,$%d)", i*3+1, i*3+2, i*3+3)
+		args = append(args, m.CharacterID, m.AchievementID, m.AchievedAt)
 	}
-	return tx.Commit()
+	buf.WriteString(` ON CONFLICT (character_id, achievement_id) DO UPDATE SET achieved_at = excluded.achieved_at`)
+
+	if _, err := db.ExecContext(ctx, buf.String(), args...); err != nil {
+		return fmt.Errorf("milestones batch upsert: %w", err)
+	}
+	return nil
 }
 
 func (r *AchievementRepository) ListCharacterMilestones(ctx context.Context, characterID uint32) ([]contract.CharacterMilestone, error) {

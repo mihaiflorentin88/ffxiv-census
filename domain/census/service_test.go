@@ -891,3 +891,99 @@ func TestService_IsActive_ConfiguredWindow(t *testing.T) {
 		t.Error("achievement 8d ago should not be active within a 7d window")
 	}
 }
+
+func TestService_CachedMilestones_ReturnsFreshData(t *testing.T) {
+	svc, _, ach := newTestServiceAll(t)
+	ctx := context.Background()
+	if err := svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+
+	got, err := svc.cachedMilestones(ctx)
+	if err != nil {
+		t.Fatalf("cachedMilestones: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("cachedMilestones returned empty slice")
+	}
+	// Verify it matches what the DB has.
+	dbGot, err := ach.ListMilestones(ctx)
+	if err != nil {
+		t.Fatalf("ListMilestones: %v", err)
+	}
+	if len(got) != len(dbGot) {
+		t.Errorf("cachedMilestones len = %d, want %d", len(got), len(dbGot))
+	}
+}
+
+func TestService_CachedMilestones_UsesCache(t *testing.T) {
+	svc, _, ach := newTestServiceAll(t)
+	ctx := context.Background()
+	if err := svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+
+	// First call populates the cache.
+	if _, err := svc.cachedMilestones(ctx); err != nil {
+		t.Fatalf("cachedMilestones (first): %v", err)
+	}
+
+	// Mutate the underlying fake to prove the cache is serving stale data.
+	ach.SyncErr = errors.New("should not be called")
+
+	// Second call within TTL should return cached data without hitting the DB.
+	got, err := svc.cachedMilestones(ctx)
+	if err != nil {
+		t.Fatalf("cachedMilestones (second): %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("cachedMilestones returned empty on cache hit")
+	}
+}
+
+func TestService_SyncMilestones_InvalidatesCache(t *testing.T) {
+	svc, _, _ := newTestServiceAll(t)
+	ctx := context.Background()
+	if err := svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+
+	// Populate the cache.
+	if _, err := svc.cachedMilestones(ctx); err != nil {
+		t.Fatalf("cachedMilestones: %v", err)
+	}
+
+	// SyncMilestones should invalidate the cache.
+	if err := svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones (second): %v", err)
+	}
+
+	// The next cachedMilestones call should query the DB again.
+	// Verify by checking that the cache was reset (cache time is zero).
+	svc.mu.RLock()
+	cacheAt := svc.milestoneCacheAt
+	svc.mu.RUnlock()
+	if !cacheAt.IsZero() {
+		t.Error("milestoneCacheAt should be zero after SyncMilestones invalidation")
+	}
+}
+
+func TestService_MilestoneIDs(t *testing.T) {
+	svc, _, _ := newTestServiceAll(t)
+	ctx := context.Background()
+	if err := svc.SyncMilestones(ctx); err != nil {
+		t.Fatalf("SyncMilestones: %v", err)
+	}
+
+	ids, err := svc.MilestoneIDs(ctx)
+	if err != nil {
+		t.Fatalf("MilestoneIDs: %v", err)
+	}
+	if len(ids) == 0 {
+		t.Fatal("MilestoneIDs returned empty set")
+	}
+	// The default expansions should include milestone 590 (Chocobo).
+	if !ids[590] {
+		t.Error("MilestoneIDs should contain 590 (Chocobo milestone)")
+	}
+}

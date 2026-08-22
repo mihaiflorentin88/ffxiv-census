@@ -184,7 +184,7 @@ workers:
         - "30"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
     - name: proxy-id-sweep
-      replicaCount: 1
+      replicaCount: 2
       command:
         - /app/ffxiv-census
         - consume
@@ -209,7 +209,7 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "30"
+        - "25"
 
     # --- Proxy discovery/scanning ---
     - name: proxy-new
