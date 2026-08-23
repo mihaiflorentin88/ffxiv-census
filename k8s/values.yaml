@@ -277,7 +277,7 @@ cronjobs:
         - "0"
 
     - name: publish-id-sweep
-      schedule: "*/1 * * * *"
+      schedule: "*/3 * * * *"
       command:
         - /app/ffxiv-census
         - publish
