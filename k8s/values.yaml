@@ -227,7 +227,7 @@ workers:
         - proxy
         - scan
         - -c
-        - "100"
+        - "200"
         - --dead-scan-percentage
         - "20"
     # --- Census failed queue retry consumer ---
