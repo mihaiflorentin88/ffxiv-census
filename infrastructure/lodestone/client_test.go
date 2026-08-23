@@ -115,6 +115,31 @@ func TestParseCharacterProfile_RealLodestoneHTML(t *testing.T) {
 	}
 }
 
+// TestParseCharacterProfile_AuRa tests the two-word "Au Ra" race name parsing.
+func TestParseCharacterProfile_AuRa(t *testing.T) {
+	html := `
+	<p class="frame__chara__name"><a href="/lodestone/character/203">Test Au Ra</a></p>
+	<p class="frame__chara__world"><i class="xiv-lds"></i>Tonberry [Elemental]</p>
+	<p class="character-block__name">Au Ra<br />Xaela / ♀</p>
+	<p class="character-block__name">Nald'thal, the Traders</p>
+	<p class="character-block__name">Gridania</p>
+	<p class="character-block__name">Maelstrom / Second Storm Lieutenant</p>
+	`
+	profile, err := parseCharacterProfile(html, 203)
+	if err != nil {
+		t.Fatalf("parseCharacterProfile: %v", err)
+	}
+	if profile.Race != "Au Ra" {
+		t.Errorf("Race = %q, want %q", profile.Race, "Au Ra")
+	}
+	if profile.Tribe != "Xaela" {
+		t.Errorf("Tribe = %q, want %q", profile.Tribe, "Xaela")
+	}
+	if profile.Gender != 2 {
+		t.Errorf("Gender = %d, want %d", profile.Gender, 2)
+	}
+}
+
 // TestParseCharacterProfile_MaleGender tests male gender parsing from Lodestone HTML.
 func TestParseCharacterProfile_MaleGender(t *testing.T) {
 	html := `

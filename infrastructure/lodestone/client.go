@@ -495,8 +495,11 @@ func parseCharacterProfile(html string, id uint32) (*contract.CharacterProfile, 
 			combined = parts[0]
 		}
 		combined = strings.TrimSpace(combined)
-		// Split race from tribe on first space
-		if idx := strings.Index(combined, " "); idx > 0 {
+		// Split race from tribe. "Au Ra" is the only two-word race name.
+		if strings.HasPrefix(combined, "Au Ra ") {
+			profile.Race = "Au Ra"
+			profile.Tribe = strings.TrimSpace(combined[6:])
+		} else if idx := strings.Index(combined, " "); idx > 0 {
 			profile.Race = combined[:idx]
 			profile.Tribe = strings.TrimSpace(combined[idx+1:])
 		} else {
