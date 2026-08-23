@@ -507,22 +507,37 @@ func parseCharacterProfile(html string, id uint32) (*contract.CharacterProfile, 
 		profile.Tribe = strings.TrimSpace(raceTribe[1])
 	}
 
-	// Grand Company: .character__freecompany__name
-	gcText := extractTextBetween(html, `class="character__freecompany__name"`, "</p>")
-	profile.GrandCompany = strings.TrimSpace(gcText)
+	// Grand Company: 4th character-block__name entry (index 3)
+	// Format: "Maelstrom / Second Storm Lieutenant" — take only the company name
+	if len(raceTribe) >= 4 {
+		gcText := strings.TrimSpace(raceTribe[3])
+		if parts := strings.SplitN(gcText, " / ", 2); len(parts) >= 1 {
+			profile.GrandCompany = strings.TrimSpace(parts[0])
+		}
+	}
 
-	// FC ID: .character__freecompany__crest a href
-	fcLink := extractHref(html, `class="character__freecompany__crest"`)
+	// FC Name: extract from <a> inside character__freecompany__name
+	// HTML: <p>Free Company</p><h4><a href="/lodestone/freecompany/123/">FC Name</a></h4>
+	// extractTextBetween with "</a>" returns "Free Company...FC Name" — use extractHref approach instead
+	fcNameText := extractTextBetween(html, `class="character__freecompany__name"`, "</a>")
+	// Strip the "Free Company" prefix that appears in the <p> tag before the <a>
+	fcNameText = strings.TrimPrefix(fcNameText, "Free Company")
+	fcNameText = strings.TrimSpace(fcNameText)
+	if fcNameText == "" {
+		fcNameText = extractTextBetween(html, `class="character__freecompany__name"`, "</h4>")
+		fcNameText = strings.TrimPrefix(fcNameText, "Free Company")
+		fcNameText = strings.TrimSpace(fcNameText)
+	}
+	profile.FreeCompanyName = fcNameText
+
+	// FC ID: extract from href inside character__freecompany__name
+	fcLink := extractHref(html, `class="character__freecompany__name"`)
+	if fcLink == "" {
+		fcLink = extractHref(html, `class="character__freecompany__crest"`)
+	}
 	if m := fcIDRe.FindStringSubmatch(fcLink); len(m) >= 2 {
 		profile.FreeCompanyID = m[1]
 	}
-
-	// FC Name (from the freecompany section)
-	fcNameText := extractTextBetween(html, `class="character__freecompany__name"`, "</a>")
-	if fcNameText == "" {
-		fcNameText = extractTextBetween(html, `class="character__freecompany__name"`, "</p>")
-	}
-	profile.FreeCompanyName = strings.TrimSpace(fcNameText)
 
 	// Active Job: .character__class_icon img alt
 	profile.ActiveJob = extractAlt(html, `class="character__class_icon"`)

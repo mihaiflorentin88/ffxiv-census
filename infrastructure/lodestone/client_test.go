@@ -62,7 +62,9 @@ func TestParseCharacterProfile_RealLodestoneHTML(t *testing.T) {
 	<div class="character__profile__state"><p>Adventurer</p></div>
 	<p class="character-block__name">Miqo&#39;te<br />Keeper of the Moon / ♀</p>
 	<p class="character-block__name">Nophica, the Matron</p>
-	<p class="character__freecompany__name"><a href="/lodestone/freecompany/1234567890/">My Free Company</a></p>
+	<p class="character-block__name">Gridania</p>
+	<p class="character-block__name">Immortal Flames / Flame Captain</p>
+	<div class="character__freecompany__name"><p>Free Company</p><h4><a href="/lodestone/freecompany/1234567890/">My Free Company</a></h4></div>
 	`
 	profile, err := parseCharacterProfile(html, 12345)
 	if err != nil {
@@ -97,9 +99,19 @@ func TestParseCharacterProfile_RealLodestoneHTML(t *testing.T) {
 		t.Errorf("Gender = %d, want %d", profile.Gender, 2)
 	}
 
-	// FC Name should NOT contain <a> tags
+	// Grand Company should be just the company name, not rank
+	if profile.GrandCompany != "Immortal Flames" {
+		t.Errorf("GrandCompany = %q, want %q", profile.GrandCompany, "Immortal Flames")
+	}
+
+	// FC Name should NOT contain "Free Company" prefix or HTML tags
 	if profile.FreeCompanyName != "My Free Company" {
 		t.Errorf("FreeCompanyName = %q, want %q", profile.FreeCompanyName, "My Free Company")
+	}
+
+	// FC ID should be extracted from href
+	if profile.FreeCompanyID != "1234567890" {
+		t.Errorf("FreeCompanyID = %q, want %q", profile.FreeCompanyID, "1234567890")
 	}
 }
 
