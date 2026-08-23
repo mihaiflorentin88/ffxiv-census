@@ -200,7 +200,7 @@ workers:
         - character-census
         - --proxy
         - -c
-        - "5"
+        - "15"
     - name: proxy-achievement-census
       replicaCount: 1
       command:
