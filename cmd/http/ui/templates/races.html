@@ -105,6 +105,49 @@
     </div>
 </div>
 
+<!-- Tribe, Gender & Race×Gender Distribution -->
+<div
+    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; margin-top: 2rem;">
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title"><span>🧝</span><span>Tribe Distribution</span></h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.TribeLabels}}
+            <div class="chart-container" style="height: 340px;"><canvas id="tribePieChart"></canvas></div>
+            {{else}}
+            <p class="text-dim">No tribe data available yet.</p>
+            {{end}}
+        </div>
+    </div>
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title"><span>⚧</span><span>Gender Distribution</span></h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.GenderLabels}}
+            <div class="chart-container" style="height: 340px;"><canvas id="genderPieChart"></canvas></div>
+            {{else}}
+            <p class="text-dim">No gender data available yet.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
+<div style="margin-bottom: 2rem;">
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title"><span>👥</span><span>Race × Gender Distribution</span></h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.RaceGenderLabels}}
+            <div class="chart-container" style="height: 400px;"><canvas id="raceGenderPieChart"></canvas></div>
+            {{else}}
+            <p class="text-dim">No race/gender data available yet.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
+
 <!-- Detailed Race Table Panel -->
 <div class="panel">
     <div class="panel-header">
@@ -154,49 +197,6 @@
         {{else}}
         <p class="text-dim">No race census data available for this selection.</p>
         {{end}}
-    </div>
-</div>
-
-<!-- Tribe, Gender & Race×Gender Distribution -->
-<div
-    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; margin-top: 2rem;">
-    <div class="panel" style="margin-bottom: 0;">
-        <div class="panel-header">
-            <h2 class="panel-title"><span>🧝</span><span>Tribe Distribution</span></h2>
-        </div>
-        <div class="panel-body">
-            {{if .Data.TribeLabels}}
-            <div class="chart-container" style="height: 340px;"><canvas id="tribePieChart"></canvas></div>
-            {{else}}
-            <p class="text-dim">No tribe data available yet.</p>
-            {{end}}
-        </div>
-    </div>
-    <div class="panel" style="margin-bottom: 0;">
-        <div class="panel-header">
-            <h2 class="panel-title"><span>⚧</span><span>Gender Distribution</span></h2>
-        </div>
-        <div class="panel-body">
-            {{if .Data.GenderLabels}}
-            <div class="chart-container" style="height: 340px;"><canvas id="genderPieChart"></canvas></div>
-            {{else}}
-            <p class="text-dim">No gender data available yet.</p>
-            {{end}}
-        </div>
-    </div>
-</div>
-<div style="margin-bottom: 2rem;">
-    <div class="panel" style="margin-bottom: 0;">
-        <div class="panel-header">
-            <h2 class="panel-title"><span>👥</span><span>Race × Gender Distribution</span></h2>
-        </div>
-        <div class="panel-body">
-            {{if .Data.RaceGenderLabels}}
-            <div class="chart-container" style="height: 400px;"><canvas id="raceGenderPieChart"></canvas></div>
-            {{else}}
-            <p class="text-dim">No race/gender data available yet.</p>
-            {{end}}
-        </div>
     </div>
 </div>
 
