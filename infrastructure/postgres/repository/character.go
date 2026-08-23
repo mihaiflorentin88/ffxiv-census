@@ -465,9 +465,9 @@ func (r *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 	                             COUNT(*) AS total,
 	                             COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active
 	                        FROM characters
-	                       WHERE deleted_at IS NULL %s
+	                       WHERE deleted_at IS NULL AND %s != '' %s
 	                       GROUP BY %s
-	                       ORDER BY total DESC`, column, filterWhere, column)
+	                       ORDER BY total DESC`, column, column, filterWhere, column)
 
 	rows, err := r.driver.FetchMany(ctx, query, args...)
 	if err != nil {
