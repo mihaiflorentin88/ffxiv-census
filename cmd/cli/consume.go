@@ -125,9 +125,9 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 		if proxyLodestoneRate > 0 {
 			override := *lodestoneCfg
 			override.RateLimit = proxyLodestoneRate
-			return lodestone.NewClientWithProxy(&override, proxyURL, logger)
+			return lodestone.NewCustomClient(&override, logger, limiter, lodestone.WithProxy(proxyURL))
 		}
-		return lodestone.NewClientWithProxy(lodestoneCfg, proxyURL, logger)
+		return lodestone.NewCustomClient(lodestoneCfg, logger, limiter, lodestone.WithProxy(proxyURL))
 	}
 
 	// Create a shared rate limiter for all proxy Tomestone clients.

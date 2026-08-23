@@ -245,7 +245,7 @@ func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
 		logging.Warn("container.lodestone", "lodestone config missing")
 		return nil
 	}
-	client, err := lodestone.NewClient(cfg, s.Logger(), s.providerRateLimiterUnlocked())
+	client, err := lodestone.NewCustomClient(cfg, s.Logger(), s.providerRateLimiterUnlocked())
 	if err != nil {
 		logging.Error("container.lodestone", fmt.Sprintf("failed to create lodestone client: %v", err))
 		return nil

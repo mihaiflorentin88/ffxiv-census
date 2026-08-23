@@ -9,10 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-	"github.com/xivapi/godestone/v2/data/gender"
-	"github.com/xivapi/godestone/v2/provider/models"
-
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -37,22 +33,20 @@ func newTestServiceAll(t *testing.T) (*Service, *mockrepo.CharacterRepository, *
 func TestService_UpsertCharacter(t *testing.T) {
 	svc, chars := newTestService(t)
 
-	char := &godestone.Character{
-		ID:     123,
-		Name:   "Tataru Taru",
-		World:  "Ultros",
-		DC:     "Primal",
-		Gender: gender.Female,
-		Race:   &models.GenderedEntity{Name: "Lalafell"},
-		Tribe:  &models.GenderedEntity{Name: "Dunesfolk"},
-		GrandCompanyInfo: &godestone.GrandCompanyInfo{
-			GrandCompany: &models.NamedEntity{Name: "Maelstrom"},
-		},
+	char := &contract.CharacterProfile{
+		ID:              123,
+		Name:            "Tataru Taru",
+		World:           "Ultros",
+		Datacenter:      "Primal",
+		Gender:          2,
+		Race:            "Lalafell",
+		Tribe:           "Dunesfolk",
+		GrandCompany:    "Maelstrom",
 		FreeCompanyID:   "9234567890123456789",
 		FreeCompanyName: "The Scions",
-		ClassJobs: []*godestone.ClassJob{
-			{JobID: 19, Name: "Paladin", Level: 90, ExpLevel: 12345},
-			{JobID: 25, Name: "White Mage", Level: 90, ExpLevel: 0},
+		ClassJobs: []contract.ClassJobRecord{
+			{ClassJobID: 19, Name: "Paladin", Level: 90, ExpLevel: 12345},
+			{ClassJobID: 25, Name: "White Mage", Level: 90, ExpLevel: 0},
 		},
 	}
 
@@ -102,7 +96,7 @@ func TestService_StreamCharacters(t *testing.T) {
 func TestService_UpsertCharacter_NilSafe(t *testing.T) {
 	svc, _ := newTestService(t)
 	// Minimal character with nil race/tribe/grand company must not panic.
-	char := &godestone.Character{ID: 1, Name: "X", World: "W", DC: "Primal", Gender: gender.None}
+	char := &contract.CharacterProfile{ID: 1, Name: "X", World: "W", Datacenter: "Primal", Gender: 0}
 	if err := svc.UpsertCharacter(context.Background(), char); err != nil {
 		t.Fatalf("UpsertCharacter: %v", err)
 	}
@@ -241,18 +235,15 @@ func TestService_UpsertCharacter_Profile(t *testing.T) {
 	svc, chars := newTestService(t)
 	ctx := context.Background()
 
-	char := &godestone.Character{
-		ID:       555,
-		Name:     "Y'shtola Rhul",
-		World:    "Louisoix",
-		DC:       "Chaos",
-		Avatar:   "https://lodestone.com/avatar.jpg",
-		Portrait: "https://lodestone.com/portrait.jpg",
-		Bio:      "Sorceress of the Night's Blessed",
-		ActiveClassJob: &godestone.ClassJob{
-			JobID: 25,
-			Name:  "Black Mage",
-		},
+	char := &contract.CharacterProfile{
+		ID:          555,
+		Name:        "Y'shtola Rhul",
+		World:       "Louisoix",
+		Datacenter:  "Chaos",
+		AvatarURL:   "https://lodestone.com/avatar.jpg",
+		PortraitURL: "https://lodestone.com/portrait.jpg",
+		Bio:         "Sorceress of the Night's Blessed",
+		ActiveJob:   "Black Mage",
 	}
 
 	if err := svc.UpsertCharacter(ctx, char); err != nil {
@@ -263,7 +254,7 @@ func TestService_UpsertCharacter_Profile(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get: %v / %+v", err, got)
 	}
-	if got.AvatarURL != char.Avatar || got.PortraitURL != char.Portrait || got.Bio != char.Bio || got.ActiveJob != "Black Mage" {
+	if got.AvatarURL != char.AvatarURL || got.PortraitURL != char.PortraitURL || got.Bio != char.Bio || got.ActiveJob != "Black Mage" {
 		t.Errorf("profile fields mismatch: %+v", got)
 	}
 }
@@ -320,13 +311,19 @@ func TestService_ProcessAchievements(t *testing.T) {
 	// The character must exist before the summary update.
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 123, Name: "X", FirstSeenAt: time.Now()}, nil)
 
-	earned := []*godestone.AchievementInfo{
-		{NamedEntity: &models.NamedEntity{ID: 590, Name: "My Little Chocobo"}, Date: time.Now().Add(-48 * time.Hour)},
-		{NamedEntity: &models.NamedEntity{ID: 999, Name: "Some Other Achievement"}, Date: time.Now().Add(-1 * time.Hour)},
+	latest := contract.AchievementResult{AchievementID: 999, Name: "Some Other Achievement", Earned: true, EarnedAt: time.Now().Add(-1 * time.Hour)}
+	summary := &contract.AchievementSummary{
+		Private:           false,
+		TotalAchievements: 2,
+		TotalPoints:       25,
+		Milestones: []contract.AchievementResult{
+			{AchievementID: 590, Name: "My Little Chocobo", Earned: true, EarnedAt: time.Now().Add(-48 * time.Hour)},
+			{AchievementID: 999, Name: "Some Other Achievement", Earned: true, EarnedAt: latest.EarnedAt},
+		},
+		LatestAchievement: &latest,
 	}
-	all := &godestone.AllAchievementInfo{Private: false, TotalAchievements: 2, TotalAchievementPoints: 25}
 
-	ms, err := svc.ProcessAchievements(context.Background(), 123, earned, all)
+	ms, err := svc.ProcessMilestoneResults(context.Background(), 123, summary)
 	if err != nil {
 		t.Fatalf("ProcessAchievements: %v", err)
 	}
@@ -348,8 +345,8 @@ func TestService_ProcessAchievements_Private(t *testing.T) {
 	svc, chars := newTestService(t)
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 5, Name: "X", FirstSeenAt: time.Now()}, nil)
 
-	all := &godestone.AllAchievementInfo{Private: true}
-	if _, err := svc.ProcessAchievements(context.Background(), 5, nil, all); err != nil {
+	summary := &contract.AchievementSummary{Private: true}
+	if _, err := svc.ProcessMilestoneResults(context.Background(), 5, summary); err != nil {
 		t.Fatalf("ProcessAchievements: %v", err)
 	}
 	got, _ := chars.Get(context.Background(), 5)
@@ -384,16 +381,20 @@ func TestService_ProcessAchievements_PreservesMilestonesOnPrivate(t *testing.T) 
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 7, Name: "X", FirstSeenAt: time.Now()}, nil)
 
 	// First, process public achievements so a milestone + latest are recorded.
-	earned := []*godestone.AchievementInfo{
-		{NamedEntity: &models.NamedEntity{ID: 590, Name: "My Little Chocobo"}, Date: time.Now()},
+	now590 := time.Now()
+	publicSummary := &contract.AchievementSummary{
+		Milestones: []contract.AchievementResult{
+			{AchievementID: 590, Name: "My Little Chocobo", Earned: true, EarnedAt: now590},
+		},
+		LatestAchievement: &contract.AchievementResult{AchievementID: 590, Name: "My Little Chocobo", Earned: true, EarnedAt: now590},
 	}
-	if _, err := svc.ProcessAchievements(context.Background(), 7, earned, &godestone.AllAchievementInfo{}); err != nil {
-		t.Fatalf("ProcessAchievements (public): %v", err)
+	if _, err := svc.ProcessMilestoneResults(context.Background(), 7, publicSummary); err != nil {
+		t.Fatalf("ProcessMilestoneResults (public): %v", err)
 	}
 
 	// Now the profile goes private: milestones and latest must be preserved.
-	if _, err := svc.ProcessAchievements(context.Background(), 7, nil, &godestone.AllAchievementInfo{Private: true}); err != nil {
-		t.Fatalf("ProcessAchievements (private): %v", err)
+	if _, err := svc.ProcessMilestoneResults(context.Background(), 7, &contract.AchievementSummary{Private: true}); err != nil {
+		t.Fatalf("ProcessMilestoneResults (private): %v", err)
 	}
 	got, _ := chars.Get(context.Background(), 7)
 	if !got.AchievementsPrivate {
@@ -416,7 +417,7 @@ func TestService_ProcessAchievements_EmptyRegistry(t *testing.T) {
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 9, Name: "X", FirstSeenAt: time.Now()}, nil)
 
 	// No SyncMilestones: registry is empty, processing must error rather than wipe.
-	if _, err := svc.ProcessAchievements(context.Background(), 9, nil, &godestone.AllAchievementInfo{}); err == nil {
+	if _, err := svc.ProcessMilestoneResults(context.Background(), 9, &contract.AchievementSummary{}); err == nil {
 		t.Fatal("expected error for empty milestone registry")
 	}
 }

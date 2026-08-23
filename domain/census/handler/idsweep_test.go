@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
@@ -61,11 +59,11 @@ func idsweepPayloadWithSource(from, to uint32, source string) []byte {
 
 func TestIDSweep_DiscoversAndChains(t *testing.T) {
 	h, ls, chars := newTestIDSweep(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		if id == 2 {
 			return nil, contract.ErrCharacterNotFound
 		}
-		return &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal"}, nil
+		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal"}, nil
 	}
 
 	next, err := h.Handle(context.Background(), idsweepPayload(1, 3))
@@ -101,7 +99,7 @@ func TestIDSweep_DiscoversAndChains(t *testing.T) {
 
 func TestIDSweep_TransientErrorReturnsError(t *testing.T) {
 	h, ls, _ := newTestIDSweep(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, errors.New("transient network error")
 	}
 	if _, err := h.Handle(context.Background(), idsweepPayload(1, 1)); err == nil {
@@ -111,7 +109,7 @@ func TestIDSweep_TransientErrorReturnsError(t *testing.T) {
 
 func TestIDSweep_MaxUint32DoesNotOverflow(t *testing.T) {
 	h, ls, _ := newTestIDSweep(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 	// A single ID at MaxUint32 must terminate, not wrap into an infinite loop.
@@ -129,11 +127,11 @@ func TestIDSweep_InvalidRange(t *testing.T) {
 
 func TestIDSweep_NotFoundSkipsCharacterWithoutFailingChunk(t *testing.T) {
 	h, ls, chars := newTestIDSweep(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		if id == 75 {
 			return nil, contract.ErrCharacterNotFound
 		}
-		return &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal"}, nil
+		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal"}, nil
 	}
 
 	next, err := h.Handle(context.Background(), idsweepPayload(74, 76))
@@ -157,7 +155,7 @@ func TestIDSweep_NotFoundSkipsCharacterWithoutFailingChunk(t *testing.T) {
 func TestIDSweep_TomestonePrimary_Success(t *testing.T) {
 	h, ls, ts, chars := newTestDualIDSweep(t)
 
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		t.Fatalf("Lodestone should NOT be called when Tomestone succeeds for id %d", id)
 		return nil, nil
 	}
@@ -191,7 +189,7 @@ func TestIDSweep_TomestoneHit_NoLodestoneCall(t *testing.T) {
 	h, ls, ts, chars := newTestDualIDSweep(t)
 
 	lodestoneCalled := false
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		lodestoneCalled = true
 		return nil, errors.New("lodestone should not be called")
 	}
@@ -226,12 +224,12 @@ func TestIDSweep_TomestoneError_FallbackToLodestone_Success(t *testing.T) {
 	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
 		return nil, errors.New("tomestone 500 server error")
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
-			ID:    201,
-			Name:  "Lodestone Fallback Hero",
-			World: "Ragnarok",
-			DC:    "Chaos",
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
+			ID:         201,
+			Name:       "Lodestone Fallback Hero",
+			World:      "Ragnarok",
+			Datacenter: "Chaos",
 		}, nil
 	}
 
@@ -261,12 +259,12 @@ func TestIDSweep_TomestonePaused_UsesLodestoneDirectly(t *testing.T) {
 		tsCalled = true
 		return nil, errors.New("tomestone should not be called when paused")
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
-			ID:    205,
-			Name:  "Direct Lodestone Hero",
-			World: "Moogle",
-			DC:    "Chaos",
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
+			ID:         205,
+			Name:       "Direct Lodestone Hero",
+			World:      "Moogle",
+			Datacenter: "Chaos",
 		}, nil
 	}
 
@@ -292,12 +290,12 @@ func TestIDSweep_Tomestone404_FallbackToLodestoneHit(t *testing.T) {
 	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
-			ID:    210,
-			Name:  "Found on Lodestone",
-			World: "Cerberus",
-			DC:    "Chaos",
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
+			ID:         210,
+			Name:       "Found on Lodestone",
+			World:      "Cerberus",
+			Datacenter: "Chaos",
 		}, nil
 	}
 
@@ -334,7 +332,7 @@ func TestIDSweep_TomestoneError_Lodestone404_ConfirmedNotFound(t *testing.T) {
 	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
 		return nil, errors.New("tomestone 503 server error")
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 
@@ -357,7 +355,7 @@ func TestIDSweep_DualSource_Double404(t *testing.T) {
 	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 
@@ -384,7 +382,7 @@ func TestIDSweep_ExplicitTomestoneSource(t *testing.T) {
 		Server:     "Tonberry",
 		Datacenter: "Elemental",
 	})
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		t.Fatalf("Lodestone should NEVER be called when source is 'tomestone'")
 		return nil, nil
 	}
@@ -411,12 +409,12 @@ func TestIDSweep_ExplicitLodestoneSource(t *testing.T) {
 		t.Fatalf("Tomestone should NEVER be called when source is 'lodestone'")
 		return nil, nil
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
-			ID:    501,
-			Name:  "Lodestone Only",
-			World: "Shinryu",
-			DC:    "Mana",
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
+			ID:         501,
+			Name:       "Lodestone Only",
+			World:      "Shinryu",
+			Datacenter: "Mana",
 		}, nil
 	}
 
@@ -449,12 +447,12 @@ func TestIDSweep_TomestoneTransientError_FallbackToLodestone(t *testing.T) {
 	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
 		return nil, errors.New("tomestone server error 500")
 	}
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
-			ID:    601,
-			Name:  "Lodestone After Tomestone Error",
-			World: "Tonberry",
-			DC:    "Elemental",
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
+			ID:         601,
+			Name:       "Lodestone After Tomestone Error",
+			World:      "Tonberry",
+			Datacenter: "Elemental",
 		}, nil
 	}
 
@@ -532,12 +530,12 @@ func TestIDSweep_ReturnsDownstreamJobsInNext(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
 			ID:            id,
 			Name:          "Immediate Hero",
 			World:         "Ultros",
-			DC:            "Primal",
+			Datacenter:    "Primal",
 			FreeCompanyID: fmt.Sprintf("fc-%d", id),
 		}, nil
 	}
@@ -560,7 +558,7 @@ func TestIDSweep_ReturnsDownstreamJobsInNext(t *testing.T) {
 
 func BenchmarkIDSweepNotFoundInfo(b *testing.B) {
 	ls := mocklodestone.NewFake()
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 	chars := mockrepo.NewCharacterFake()

@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -17,14 +15,14 @@ import (
 // persisted records and computes milestone/activity facts. It depends only on
 // contracts, never on SQL or HTTP.
 type Service struct {
-	characters     contract.CharacterRepository
-	achievements   contract.AchievementRepository
-	censusRuns     contract.CensusRunRepository
-	mu             sync.RWMutex
-	activityWindow time.Duration
-	maxLevel       uint32
+	characters               contract.CharacterRepository
+	achievements             contract.AchievementRepository
+	censusRuns               contract.CensusRunRepository
+	mu                       sync.RWMutex
+	activityWindow           time.Duration
+	maxLevel                 uint32
 	achievementStalenessDays int
-	expansions     []ExpansionConfig
+	expansions               []ExpansionConfig
 	// milestoneCache holds the last-fetched milestone registry to avoid
 	// re-querying the DB on every ProcessAchievements call.
 	milestoneCache    []contract.MilestoneAchievement
@@ -38,14 +36,14 @@ func NewService(
 	censusRuns contract.CensusRunRepository,
 ) *Service {
 	return &Service{
-		characters:        characters,
-		achievements:      achievements,
-		censusRuns:        censusRuns,
-		activityWindow:    defaultActivityWindow,
-		maxLevel:          100,
+		characters:               characters,
+		achievements:             achievements,
+		censusRuns:               censusRuns,
+		activityWindow:           defaultActivityWindow,
+		maxLevel:                 100,
 		achievementStalenessDays: 7,
-		expansions:        DefaultExpansions,
-		milestoneCacheTTL: 5 * time.Minute,
+		expansions:               DefaultExpansions,
+		milestoneCacheTTL:        5 * time.Minute,
 	}
 }
 
@@ -162,15 +160,15 @@ func (s *Service) GetCharacter(ctx context.Context, charID uint32) (*contract.Ch
 // UpsertCharacter converts a Lodestone character into a CharacterRecord and
 // persists it (profile + jobs) atomically. Region is derived from the
 // datacenter. nil race/tribe/grand-company are tolerated (stored empty).
-func (s *Service) UpsertCharacter(ctx context.Context, char *godestone.Character) error {
+func (s *Service) UpsertCharacter(ctx context.Context, char *contract.CharacterProfile) error {
 	if char == nil {
 		return errors.New("cannot upsert nil character")
 	}
 	if strings.TrimSpace(char.Name) == "" {
 		return fmt.Errorf("cannot upsert character %d: name is empty", char.ID)
 	}
-	rec := toCharacterRecord(char)
-	jobs := toJobRecords(char)
+	rec := profileToRecord(char)
+	jobs := profileToJobs(char)
 	return s.characters.Upsert(ctx, rec, jobs)
 }
 
@@ -284,29 +282,24 @@ func toTomestoneJobRecords(char *contract.TomestoneCharacter) []contract.ClassJo
 	return jobs
 }
 
-func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
+func profileToRecord(char *contract.CharacterProfile) contract.CharacterRecord {
 	now := time.Now().UTC()
 	rec := contract.CharacterRecord{
 		ID:           char.ID,
 		Name:         char.Name,
 		World:        char.World,
-		Datacenter:   char.DC,
-		Region:       RegionForDatacenter(char.DC),
-		Gender:       uint8(char.Gender),
-		AvatarURL:    char.Avatar,
-		PortraitURL:  char.Portrait,
+		Datacenter:   char.Datacenter,
+		Region:       RegionForDatacenter(char.Datacenter),
+		Gender:       char.Gender,
+		Race:         char.Race,
+		Tribe:        char.Tribe,
+		GrandCompany: char.GrandCompany,
+		AvatarURL:    char.AvatarURL,
+		PortraitURL:  char.PortraitURL,
 		Bio:          char.Bio,
+		ActiveJob:    char.ActiveJob,
 		FirstSeenAt:  now,
 		LastCensusAt: &now,
-	}
-	if char.Race != nil {
-		rec.Race = char.Race.Name
-	}
-	if char.Tribe != nil {
-		rec.Tribe = char.Tribe.Name
-	}
-	if char.GrandCompanyInfo != nil && char.GrandCompanyInfo.GrandCompany != nil {
-		rec.GrandCompany = char.GrandCompanyInfo.GrandCompany.Name
 	}
 	if char.FreeCompanyID != "" {
 		rec.FreeCompanyID = &char.FreeCompanyID
@@ -314,21 +307,15 @@ func toCharacterRecord(char *godestone.Character) contract.CharacterRecord {
 	if char.FreeCompanyName != "" {
 		rec.FreeCompanyName = &char.FreeCompanyName
 	}
-	if char.ActiveClassJob != nil {
-		rec.ActiveJob = char.ActiveClassJob.Name
-	}
 	return rec
 }
 
-func toJobRecords(char *godestone.Character) []contract.ClassJobRecord {
+func profileToJobs(char *contract.CharacterProfile) []contract.ClassJobRecord {
 	jobs := make([]contract.ClassJobRecord, 0, len(char.ClassJobs))
 	for _, j := range char.ClassJobs {
-		if j == nil {
-			continue
-		}
 		jobs = append(jobs, contract.ClassJobRecord{
 			CharacterID: char.ID,
-			ClassJobID:  classJobKey(j),
+			ClassJobID:  j.ClassJobID,
 			Name:        j.Name,
 			Level:       j.Level,
 			ExpLevel:    j.ExpLevel,
@@ -337,27 +324,23 @@ func toJobRecords(char *godestone.Character) []contract.ClassJobRecord {
 	return jobs
 }
 
-// classJobKey returns a stable per-entry key for a class/job entry. godestone
-// reports the corresponding job's ID in JobID for both classes and jobs, so
-// JobID is the primary key; ClassID (the base class) is the fallback when
-// JobID is absent.
-func classJobKey(j *godestone.ClassJob) uint8 {
-	if j.JobID != 0 {
-		return j.JobID
-	}
-	return j.ClassID
-}
-
 const defaultActivityWindow = 30 * 24 * time.Hour
 
 // ProcessAchievements filters earned achievements against the registry, persists
 // only the matching milestones, and updates the character's achievement summary
 // (private flag + latest achievement, which may be any achievement). Returns the
 // milestones that matched the registry.
-func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned []*godestone.AchievementInfo, all *godestone.AllAchievementInfo) ([]contract.CharacterMilestone, error) {
+// ProcessMilestoneResults persists milestone achievements from the custom client's
+// summary and updates the character's achievement summary (private flag + latest
+// achievement). Returns the milestones that were persisted.
+func (s *Service) ProcessMilestoneResults(ctx context.Context, charID uint32, summary *contract.AchievementSummary) ([]contract.CharacterMilestone, error) {
+	if summary == nil {
+		return nil, errors.New("nil achievement summary")
+	}
+
 	// A private profile hides its achievements: preserve any prior milestones and
 	// latest achievement, only mark the profile private.
-	if all != nil && all.Private {
+	if summary.Private {
 		if err := s.characters.SetAchievementsPrivate(ctx, charID, true); err != nil {
 			return nil, err
 		}
@@ -377,20 +360,16 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 	}
 
 	var milestones []contract.CharacterMilestone
-	var latest *godestone.AchievementInfo
-	for _, a := range earned {
-		if a == nil || a.NamedEntity == nil {
+	for _, r := range summary.Milestones {
+		if !r.Earned {
 			continue
 		}
-		if _, ok := byID[a.ID]; ok {
+		if _, ok := byID[r.AchievementID]; ok {
 			milestones = append(milestones, contract.CharacterMilestone{
 				CharacterID:   charID,
-				AchievementID: a.ID,
-				AchievedAt:    a.Date,
+				AchievementID: r.AchievementID,
+				AchievedAt:    r.EarnedAt,
 			})
-		}
-		if latest == nil || a.Date.After(latest.Date) {
-			latest = a
 		}
 	}
 
@@ -400,9 +379,9 @@ func (s *Service) ProcessAchievements(ctx context.Context, charID uint32, earned
 
 	var latestID *uint32
 	var latestAt *time.Time
-	if latest != nil {
-		id := latest.ID
-		at := latest.Date
+	if summary.LatestAchievement != nil {
+		id := summary.LatestAchievement.AchievementID
+		at := summary.LatestAchievement.EarnedAt
 		latestID = &id
 		latestAt = &at
 	}

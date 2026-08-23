@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-
 	censushandler "github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
 	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
@@ -78,23 +76,13 @@ func (h *countingCensusHandler) Handle(_ context.Context, _ []byte) ([]contract.
 // fakeLodestoneClient implements contract.LodestoneClient for tests.
 type fakeLodestoneClient struct{}
 
-func (c *fakeLodestoneClient) FetchCharacter(context.Context, uint32) (*godestone.Character, error) {
+func (c *fakeLodestoneClient) FetchCharacter(context.Context, uint32) (*contract.CharacterProfile, error) {
 	return nil, nil
 }
 
-func (c *fakeLodestoneClient) FetchAchievements(context.Context, uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
-	return nil, nil, nil
-}
-
-func (c *fakeLodestoneClient) FetchFreeCompany(context.Context, string) (*godestone.FreeCompany, error) {
+func (c *fakeLodestoneClient) FetchAchievements(context.Context, uint32, []uint32) (*contract.AchievementSummary, error) {
 	return nil, nil
 }
-
-func (c *fakeLodestoneClient) FetchFreeCompanyMembers(context.Context, string) ([]uint32, error) {
-	return nil, nil
-}
-
-func (c *fakeLodestoneClient) SetAchievementStopFn(fn func([]*godestone.AchievementInfo) bool) {}
 
 // fakeTomestoneClient implements contract.TomestoneClient for tests.
 type fakeTomestoneClient struct{}

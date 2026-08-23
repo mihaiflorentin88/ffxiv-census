@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
@@ -42,8 +40,8 @@ func characterPayload(id uint32) []byte {
 
 func TestCharacterCensus_UpsertAndChain(t *testing.T) {
 	h, ls, chars := newTestCharacterCensus(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal", FreeCompanyID: "9234567890123456789"}, nil
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal", FreeCompanyID: "9234567890123456789"}, nil
 	}
 	next, err := h.Handle(context.Background(), characterPayload(42))
 	if err != nil {
@@ -62,8 +60,8 @@ func TestCharacterCensus_UpsertAndChain(t *testing.T) {
 
 func TestCharacterCensus_NoFCChainsOnlyAchievement(t *testing.T) {
 	h, ls, _ := newTestCharacterCensus(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal"}, nil
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal"}, nil
 	}
 	next, err := h.Handle(context.Background(), characterPayload(42))
 	if err != nil {
@@ -77,7 +75,7 @@ func TestCharacterCensus_NoFCChainsOnlyAchievement(t *testing.T) {
 func TestCharacterCensus_NotFoundMarksDeleted(t *testing.T) {
 	h, ls, chars := newTestCharacterCensus(t)
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 42, Name: "X", FirstSeenAt: time.Now()}, nil)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 	next, err := h.Handle(context.Background(), characterPayload(42))
@@ -98,12 +96,12 @@ func TestCharacterCensus_ReturnsDownstreamJobsInNext(t *testing.T) {
 	chars := mockrepo.NewCharacterFake()
 	svc := census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
 			ID:            id,
 			Name:          "Immediate Character",
 			World:         "Ultros",
-			DC:            "Primal",
+			Datacenter:    "Primal",
 			FreeCompanyID: "9234567890123456789",
 		}, nil
 	}
@@ -124,7 +122,7 @@ func TestCharacterCensus_ReturnsDownstreamJobsInNext(t *testing.T) {
 
 func TestCharacterCensus_FetchError(t *testing.T) {
 	h, ls, _ := newTestCharacterCensus(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, errors.New("boom")
 	}
 	if _, err := h.Handle(context.Background(), characterPayload(1)); err == nil {
@@ -134,12 +132,12 @@ func TestCharacterCensus_FetchError(t *testing.T) {
 
 func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievement(t *testing.T) {
 	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{
 			ID:            id,
 			Name:          "Primary Warrior",
 			World:         "Balmung",
-			DC:            "Crystal",
+			Datacenter:    "Crystal",
 			FreeCompanyID: "fc-123456",
 		}, nil
 	}
@@ -165,7 +163,7 @@ func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievement(t *testing.T
 
 func TestCharacterCensus_LodestoneError_FallbackToTomestone_Success(t *testing.T) {
 	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, errors.New("lodestone 429 rate limited or cloudflare error")
 	}
 	fcID := "fc-tome-789"
@@ -197,7 +195,7 @@ func TestCharacterCensus_LodestonePaused_UsesTomestoneDirectly(t *testing.T) {
 	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "429 rate limited")
 
 	lsCalled := false
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		lsCalled = true
 		return nil, errors.New("should not be called when paused")
 	}
@@ -226,7 +224,7 @@ func TestCharacterCensus_LodestonePaused_UsesTomestoneDirectly(t *testing.T) {
 
 func TestCharacterCensus_Lodestone404_TomestoneHit(t *testing.T) {
 	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 	ts.SetCharacter(&contract.TomestoneCharacter{
@@ -254,7 +252,7 @@ func TestCharacterCensus_Lodestone404_TomestoneHit(t *testing.T) {
 func TestCharacterCensus_Lodestone404_Tomestone404_MarksDeleted(t *testing.T) {
 	h, ls, _, _, chars := newTestDualCharacterCensus(t)
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 500, Name: "Old Name", FirstSeenAt: time.Now()}, nil)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, contract.ErrCharacterNotFound
 	}
 	// ts has no character 500 (returns ErrCharacterNotFound)
@@ -275,7 +273,7 @@ func TestCharacterCensus_Lodestone404_Tomestone404_MarksDeleted(t *testing.T) {
 func TestCharacterCensus_LodestoneError_Tomestone404_ReturnsErrorForLodestoneRetry(t *testing.T) {
 	h, ls, _, _, chars := newTestDualCharacterCensus(t)
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 550, Name: "Existing Character", FirstSeenAt: time.Now()}, nil)
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, errors.New("lodestone 503 or 429 rate limit")
 	}
 	// ts has no character 550 (returns ErrCharacterNotFound)

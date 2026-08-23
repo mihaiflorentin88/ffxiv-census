@@ -10,9 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-	"github.com/xivapi/godestone/v2/provider/models"
-
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
@@ -26,8 +23,8 @@ func newBufLogger(buf *bytes.Buffer) *slog.Logger {
 
 func TestCharacterCensus_LogsFetchAndStore(t *testing.T) {
 	ls := mocklodestone.NewFake()
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{ID: id, Name: "Tataru Taru", World: "Ultros", DC: "Primal"}, nil
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{ID: id, Name: "Tataru Taru", World: "Ultros", Datacenter: "Primal"}, nil
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	var buf bytes.Buffer
@@ -46,7 +43,7 @@ func TestCharacterCensus_LogsFetchAndStore(t *testing.T) {
 
 func TestCharacterCensus_LogsFetchError(t *testing.T) {
 	ls := mocklodestone.NewFake()
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		return nil, errors.New("boom")
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
@@ -67,11 +64,14 @@ func TestCharacterCensus_LogsFetchError(t *testing.T) {
 func TestAchievementCensus_LogsFetchedLatest(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	now := time.Now()
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
-		return []*godestone.AchievementInfo{
-			{NamedEntity: &models.NamedEntity{ID: 590, Name: "My Little Chocobo"}, Date: now.Add(-time.Hour)},
-			{NamedEntity: &models.NamedEntity{ID: 999, Name: "Other"}, Date: now},
-		}, &godestone.AllAchievementInfo{Private: false}, nil
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
+		return &contract.AchievementSummary{
+			Milestones: []contract.AchievementResult{
+				{AchievementID: 590, Name: "My Little Chocobo", Earned: true, EarnedAt: now.Add(-time.Hour)},
+				{AchievementID: 999, Name: "Other", Earned: true, EarnedAt: now},
+			},
+			LatestAchievement: &contract.AchievementResult{AchievementID: 999, Name: "Other", Earned: true, EarnedAt: now},
+		}, nil
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	if err := svc.SyncMilestones(context.Background()); err != nil {
@@ -84,7 +84,7 @@ func TestAchievementCensus_LogsFetchedLatest(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 	logs := buf.String()
-	for _, want := range []string{"handler.achievement_census.fetched", "earned=2", "latest_id=999", "latest_name=Other"} {
+	for _, want := range []string{"handler.achievement_census.complete", "milestones=1"} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}
@@ -93,9 +93,9 @@ func TestAchievementCensus_LogsFetchedLatest(t *testing.T) {
 
 func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	ls := mocklodestone.NewFake()
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		if id == 10 {
-			return &godestone.Character{ID: 10, Name: "Alisaie Leveilleur", World: "Louisoix"}, nil
+			return &contract.CharacterProfile{ID: 10, Name: "Alisaie Leveilleur", World: "Louisoix"}, nil
 		}
 		return nil, contract.ErrCharacterNotFound
 	}
@@ -133,8 +133,8 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 func TestSuccessfulHandlersAreQuietAtInfo(t *testing.T) {
 	// At Info level, successful handler runs should emit no Debug logs.
 	ls := mocklodestone.NewFake()
-	ls.FetchCharacterFunc = func(id uint32) (*godestone.Character, error) {
-		return &godestone.Character{ID: id, Name: "Quiet Hero", World: "Ultros", DC: "Primal"}, nil
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return &contract.CharacterProfile{ID: id, Name: "Quiet Hero", World: "Ultros", Datacenter: "Primal"}, nil
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 

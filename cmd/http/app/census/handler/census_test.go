@@ -9,10 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-	"github.com/xivapi/godestone/v2/data/gender"
-	"github.com/xivapi/godestone/v2/provider/models"
-
 	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -40,7 +36,7 @@ func newRig(t *testing.T) *testRig {
 	}
 }
 
-func (r *testRig) seed(t *testing.T, char *godestone.Character) {
+func (r *testRig) seed(t *testing.T, char *contract.CharacterProfile) {
 	t.Helper()
 	if err := r.svc.UpsertCharacter(context.Background(), char); err != nil {
 		t.Fatalf("UpsertCharacter(%d): %v", char.ID, err)
@@ -81,16 +77,16 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, w
 
 func TestCensusController_Latest(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &godestone.Character{
-		ID: 1, Name: "Tataru", World: "Ultros", DC: "Primal", Gender: gender.Female,
-		ClassJobs: []*godestone.ClassJob{
-			{JobID: 1, Name: "Gladiator", Level: 100},
+	rig.seed(t, &contract.CharacterProfile{
+		ID: 1, Name: "Tataru", World: "Ultros", Datacenter: "Primal", Gender: 2,
+		ClassJobs: []contract.ClassJobRecord{
+			{ClassJobID: 1, Name: "Gladiator", Level: 100},
 		},
 	})
-	rig.seed(t, &godestone.Character{
-		ID: 2, Name: "Moen", World: "Ultros", DC: "Primal",
-		ClassJobs: []*godestone.ClassJob{
-			{JobID: 1, Name: "Gladiator", Level: 90},
+	rig.seed(t, &contract.CharacterProfile{
+		ID: 2, Name: "Moen", World: "Ultros", Datacenter: "Primal",
+		ClassJobs: []contract.ClassJobRecord{
+			{ClassJobID: 1, Name: "Gladiator", Level: 90},
 		},
 	})
 
@@ -118,7 +114,7 @@ func TestCensusController_Latest_NilService(t *testing.T) {
 func TestCensusController_List(t *testing.T) {
 	rig := newRig(t)
 	for _, id := range []uint32{1, 2, 3} {
-		rig.seed(t, &godestone.Character{ID: id, Name: "Char", World: "Ultros", DC: "Primal"})
+		rig.seed(t, &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal"})
 	}
 
 	tests := []struct {
@@ -177,10 +173,10 @@ func TestCensusController_List(t *testing.T) {
 
 func TestCensusController_List_Filters(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &godestone.Character{ID: 1, Name: "Feed How", World: "Louisoix", DC: "Chaos", Race: &models.GenderedEntity{Name: "Au Ra"}})
-	rig.seed(t, &godestone.Character{ID: 2, Name: "Ninto Thegen", World: "Louisoix", DC: "Chaos", Race: &models.GenderedEntity{Name: "Miqo'te"}})
-	rig.seed(t, &godestone.Character{ID: 3, Name: "Ahribella White", World: "Zodiark", DC: "Light", Race: &models.GenderedEntity{Name: "Miqo'te"}})
-	rig.seed(t, &godestone.Character{ID: 4, Name: "Alpha Test", World: "Ultros", DC: "Primal", Race: &models.GenderedEntity{Name: "Hyur"}})
+	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "Feed How", World: "Louisoix", Datacenter: "Chaos", Race: "Au Ra"})
+	rig.seed(t, &contract.CharacterProfile{ID: 2, Name: "Ninto Thegen", World: "Louisoix", Datacenter: "Chaos", Race: "Miqo'te"})
+	rig.seed(t, &contract.CharacterProfile{ID: 3, Name: "Ahribella White", World: "Zodiark", Datacenter: "Light", Race: "Miqo'te"})
+	rig.seed(t, &contract.CharacterProfile{ID: 4, Name: "Alpha Test", World: "Ultros", Datacenter: "Primal", Race: "Hyur"})
 
 	tests := []struct {
 		name      string
@@ -223,17 +219,17 @@ func TestCensusController_List_Filters(t *testing.T) {
 func TestCensusController_Get(t *testing.T) {
 	rig := newRig(t)
 	now := time.Now().UTC()
-	rig.seed(t, &godestone.Character{
+	rig.seed(t, &contract.CharacterProfile{
 		ID:              1,
 		Name:            "Tataru Taru",
 		World:           "Ultros",
-		DC:              "Primal",
-		Gender:          gender.Female,
-		Race:            &models.GenderedEntity{Name: "Lalafell"},
+		Datacenter:      "Primal",
+		Gender:          2,
+		Race:            "Lalafell",
 		FreeCompanyID:   "9234567890123456789",
 		FreeCompanyName: "The Scions",
-		ClassJobs: []*godestone.ClassJob{
-			{JobID: 19, Name: "Paladin", Level: 90, ExpLevel: 12345},
+		ClassJobs: []contract.ClassJobRecord{
+			{ClassJobID: 19, Name: "Paladin", Level: 90, ExpLevel: 12345},
 		},
 	})
 	_ = rig.ach.UpsertCharacterMilestones(context.Background(), 1, []contract.CharacterMilestone{
@@ -263,7 +259,7 @@ func TestCensusController_Get(t *testing.T) {
 
 func TestCensusController_Get_NotFound(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &godestone.Character{ID: 1, Name: "Char", World: "Ultros", DC: "Primal"})
+	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "Char", World: "Ultros", Datacenter: "Primal"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/census/characters/999", nil)
 	req.SetPathValue("id", "999")
@@ -284,9 +280,9 @@ func TestCensusController_Get_InvalidID(t *testing.T) {
 
 func TestCensusController_Breakdown(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &godestone.Character{ID: 1, Name: "A", World: "Ultros", DC: "Primal"})
-	rig.seed(t, &godestone.Character{ID: 2, Name: "B", World: "Ultros", DC: "Primal"})
-	rig.seed(t, &godestone.Character{ID: 3, Name: "C", World: "Moogle", DC: "Chaos"})
+	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "A", World: "Ultros", Datacenter: "Primal"})
+	rig.seed(t, &contract.CharacterProfile{ID: 2, Name: "B", World: "Ultros", Datacenter: "Primal"})
+	rig.seed(t, &contract.CharacterProfile{ID: 3, Name: "C", World: "Moogle", Datacenter: "Chaos"})
 
 	var groups []response.BreakdownGroup
 	decodeJSON(t, doGET(t, rig.c.Breakdown, "/api/v1/stats/breakdown?by=world"), &groups)

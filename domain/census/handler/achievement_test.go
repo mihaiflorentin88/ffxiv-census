@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xivapi/godestone/v2"
-	"github.com/xivapi/godestone/v2/provider/models"
-
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	mocklodestone "github.com/mihaiflorentin88/ffxiv-census/mock/lodestone"
@@ -39,11 +36,13 @@ func TestAchievementCensus_Processes(t *testing.T) {
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 123, Name: "X", FirstSeenAt: time.Now()}, nil)
 
 	now := time.Now()
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
-		return []*godestone.AchievementInfo{
-			{NamedEntity: &models.NamedEntity{ID: 590, Name: "My Little Chocobo"}, Date: now.Add(-time.Hour)},
-			{NamedEntity: &models.NamedEntity{ID: 999, Name: "Other"}, Date: now},
-		}, &godestone.AllAchievementInfo{Private: false}, nil
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
+		return &contract.AchievementSummary{
+			Milestones: []contract.AchievementResult{
+				{AchievementID: 590, Name: "My Little Chocobo", Earned: true, EarnedAt: now.Add(-time.Hour)},
+			},
+			LatestAchievement: &contract.AchievementResult{AchievementID: 590, Name: "My Little Chocobo", Earned: true, EarnedAt: now},
+		}, nil
 	}
 
 	next, err := h.Handle(context.Background(), achievementPayload(123))
@@ -53,10 +52,9 @@ func TestAchievementCensus_Processes(t *testing.T) {
 	if len(next) != 0 {
 		t.Fatalf("next jobs = %d, want 0 (leaf event)", len(next))
 	}
-	// Latest achievement is 999 (any achievement), not just the milestone.
 	got, _ := chars.Get(context.Background(), 123)
-	if got.LatestAchievementID == nil || *got.LatestAchievementID != 999 {
-		t.Errorf("latest achievement = %v, want 999", got.LatestAchievementID)
+	if got.LatestAchievementID == nil || *got.LatestAchievementID != 590 {
+		t.Errorf("latest achievement = %v, want 590", got.LatestAchievementID)
 	}
 	// Only the registered milestone (590) is recorded.
 	milestones, err := ach.ListCharacterMilestones(context.Background(), 123)
@@ -70,8 +68,8 @@ func TestAchievementCensus_Processes(t *testing.T) {
 
 func TestAchievementCensus_FetchError(t *testing.T) {
 	h, ls, _, _ := newTestAchievementCensus(t)
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
-		return nil, nil, errors.New("boom")
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
+		return nil, errors.New("boom")
 	}
 	if _, err := h.Handle(context.Background(), achievementPayload(1)); err == nil {
 		t.Fatal("expected error on fetch failure")
@@ -88,9 +86,9 @@ func TestAchievementCensus_WaitsForRateLimitedLodestone(t *testing.T) {
 	rl.Pause(contract.ProviderLodestone, 100*time.Millisecond, "test pause")
 
 	var fetched bool
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
 		fetched = true
-		return []*godestone.AchievementInfo{}, &godestone.AllAchievementInfo{Private: false}, nil
+		return &contract.AchievementSummary{}, nil
 	}
 
 	h := NewAchievementCensus(ls, svc, nil, rl)
@@ -106,93 +104,6 @@ func TestAchievementCensus_WaitsForRateLimitedLodestone(t *testing.T) {
 	}
 	if elapsed < 90*time.Millisecond {
 		t.Errorf("Handle returned too quickly (%v), expected wait ~100ms", elapsed)
-	}
-}
-
-func TestAchievementCensus_SetsStopFn(t *testing.T) {
-	h, ls, _, _ := newTestAchievementCensus(t)
-
-	// Capture the stop function that the handler sets on the mock.
-	// The handler calls SetAchievementStopFn before FetchAchievements,
-	// so we capture it inside the FetchAchievementsFunc callback.
-	var capturedStopFn func([]*godestone.AchievementInfo) bool
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
-		capturedStopFn = ls.StopFn
-		return []*godestone.AchievementInfo{}, &godestone.AllAchievementInfo{Private: false}, nil
-	}
-
-	_, err := h.Handle(context.Background(), achievementPayload(1))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if capturedStopFn == nil {
-		t.Fatal("handler did not set stop function before FetchAchievements")
-	}
-
-	// The stop function should return false when no milestones are found.
-	if capturedStopFn([]*godestone.AchievementInfo{
-		{NamedEntity: &models.NamedEntity{ID: 100}},
-	}) {
-		t.Error("stopFn returned true for non-milestone achievements")
-	}
-
-	// The stop function should return true when all milestones are found.
-	// DefaultExpansions has 7 milestones; simulate finding them all.
-	milestoneIDs := []uint32{590, 1129, 1139, 1794, 2298, 2958, 3496}
-	page := make([]*godestone.AchievementInfo, len(milestoneIDs))
-	for i, id := range milestoneIDs {
-		page[i] = &godestone.AchievementInfo{NamedEntity: &models.NamedEntity{ID: id}}
-	}
-	if !capturedStopFn(page) {
-		t.Error("stopFn returned false when all milestones found")
-	}
-}
-
-func TestAchievementCensus_PreSeededStopFn(t *testing.T) {
-	h, ls, chars, ach := newTestAchievementCensus(t)
-	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 100, Name: "X", FirstSeenAt: time.Now()}, nil)
-
-	// Pre-seed 5 of 7 milestones in the DB.
-	now := time.Now()
-	preSeeded := []contract.CharacterMilestone{
-		{CharacterID: 100, AchievementID: 590, AchievedAt: now.Add(-48 * time.Hour)},
-		{CharacterID: 100, AchievementID: 1129, AchievedAt: now.Add(-48 * time.Hour)},
-		{CharacterID: 100, AchievementID: 1139, AchievedAt: now.Add(-48 * time.Hour)},
-		{CharacterID: 100, AchievementID: 1794, AchievedAt: now.Add(-48 * time.Hour)},
-		{CharacterID: 100, AchievementID: 2298, AchievedAt: now.Add(-48 * time.Hour)},
-	}
-	if err := ach.UpsertCharacterMilestones(context.Background(), 100, preSeeded); err != nil {
-		t.Fatalf("seed milestones: %v", err)
-	}
-
-	// Capture the stop function to verify pre-seeding.
-	var capturedStopFn func([]*godestone.AchievementInfo) bool
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
-		capturedStopFn = ls.StopFn
-		// Return only the 2 missing milestones.
-		return []*godestone.AchievementInfo{
-			{NamedEntity: &models.NamedEntity{ID: 2958}, Date: now.Add(-time.Hour)},
-			{NamedEntity: &models.NamedEntity{ID: 3496}, Date: now},
-		}, &godestone.AllAchievementInfo{Private: false}, nil
-	}
-
-	_, err := h.Handle(context.Background(), achievementPayload(100))
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if capturedStopFn == nil {
-		t.Fatal("handler did not set stop function")
-	}
-
-	// The stop function should return true when only the 2 missing milestones are found,
-	// because the 5 pre-seeded ones are already counted. This is the key optimization:
-	// the scraper only needs to find 2 milestones instead of all 7.
-	missingPage := []*godestone.AchievementInfo{
-		{NamedEntity: &models.NamedEntity{ID: 2958}},
-		{NamedEntity: &models.NamedEntity{ID: 3496}},
-	}
-	if !capturedStopFn(missingPage) {
-		t.Error("stopFn returned false when missing milestones found (pre-seeded should be counted)")
 	}
 }
 
@@ -221,9 +132,9 @@ func TestAchievementCensus_SkipsWhenAllMilestonesKnownAndFresh(t *testing.T) {
 	}
 
 	var fetched bool
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
 		fetched = true
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	next, err := h.Handle(context.Background(), achievementPayload(200))
@@ -264,9 +175,9 @@ func TestAchievementCensus_ScrapesWhenDataStale(t *testing.T) {
 	}
 
 	var fetched bool
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
 		fetched = true
-		return []*godestone.AchievementInfo{}, &godestone.AllAchievementInfo{Private: false}, nil
+		return &contract.AchievementSummary{}, nil
 	}
 
 	_, err := h.Handle(context.Background(), achievementPayload(300))
@@ -299,14 +210,17 @@ func TestAchievementCensus_ScrapesWhenMilestonesMissing(t *testing.T) {
 	}
 
 	var fetched bool
-	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
 		fetched = true
-		return []*godestone.AchievementInfo{
-			{NamedEntity: &models.NamedEntity{ID: 1794}, Date: now.Add(-time.Hour)},
-			{NamedEntity: &models.NamedEntity{ID: 2298}, Date: now.Add(-time.Hour)},
-			{NamedEntity: &models.NamedEntity{ID: 2958}, Date: now.Add(-time.Hour)},
-			{NamedEntity: &models.NamedEntity{ID: 3496}, Date: now},
-		}, &godestone.AllAchievementInfo{Private: false}, nil
+		return &contract.AchievementSummary{
+			Milestones: []contract.AchievementResult{
+				{AchievementID: 1794, Name: "Stormblood", Earned: true, EarnedAt: now.Add(-time.Hour)},
+				{AchievementID: 2298, Name: "Shadowbringers", Earned: true, EarnedAt: now.Add(-time.Hour)},
+				{AchievementID: 2958, Name: "Endwalker", Earned: true, EarnedAt: now.Add(-time.Hour)},
+				{AchievementID: 3496, Name: "Dawntrail", Earned: true, EarnedAt: now},
+			},
+			LatestAchievement: &contract.AchievementResult{AchievementID: 3496, Name: "Dawntrail", Earned: true, EarnedAt: now},
+		}, nil
 	}
 
 	_, err := h.Handle(context.Background(), achievementPayload(400))
