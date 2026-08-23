@@ -30,7 +30,7 @@ One row per Lodestone character. `id` is the Lodestone character ID (externally 
 
 ### `character_jobs`
 
-One row per (character, class/job) pair: `character_id`, `class_job_id`, `name`, `level`, `exp_level`. Primary key is `(character_id, class_job_id)`; the character repository replaces the whole set on each upsert.
+One row per (character, class/job) pair: `character_id`, `class_job_id`, `name`, `level`, `exp_level`. Primary key is `(character_id, class_job_id)`; the character repository replaces the whole set on each upsert. The `class_job_id` values come from either the Tomestone REST API (direct) or the Lodestone name→ID lookup table (indirect — see `lodestoneJobIDs` in `infrastructure/lodestone/client.go`).
 ### `character_gear`
 
 One row per equipped gear slot: `(character_id, slot)` primary key, `item_id`, `name`, `item_level`, `dye`, `materia` (JSON array of materia names/tiers), `updated_at`. Stores equipped gear pieces scraped from character profiles.

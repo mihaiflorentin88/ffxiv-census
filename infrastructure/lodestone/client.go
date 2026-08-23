@@ -61,6 +61,63 @@ var (
 	multiSpaceRe = regexp.MustCompile(`\s+`)
 )
 
+// lodestoneJobIDs maps English job/class names (as rendered on The Lodestone
+// character profile page) to their official FFXIV ClassJobID values.
+// These IDs are stable across patches — Square Enix never reassigns existing IDs.
+// New jobs (e.g. from expansions) need entries added here.
+var lodestoneJobIDs = map[string]uint8{
+	// Tanks
+	"Paladin":     19,
+	"Warrior":     21,
+	"Dark Knight": 32,
+	"Gunbreaker":  37,
+	// Healers
+	"White Mage":  24,
+	"Scholar":     28,
+	"Astrologian": 33,
+	"Sage":        40,
+	// Melee DPS
+	"Monk":    20,
+	"Dragoon": 22,
+	"Ninja":   30,
+	"Samurai": 34,
+	"Reaper":  39,
+	"Viper":   41,
+	// Physical Ranged DPS
+	"Bard":      23,
+	"Machinist": 31,
+	"Dancer":    38,
+	// Magic Ranged DPS
+	"Black Mage":  25,
+	"Summoner":    27,
+	"Red Mage":    35,
+	"Pictomancer": 42,
+	"Blue Mage":   36,
+	// Disciples of the Hand (Crafters)
+	"Carpenter":     8,
+	"Blacksmith":    9,
+	"Armorer":       10,
+	"Goldsmith":     11,
+	"Leatherworker": 12,
+	"Weaver":        13,
+	"Alchemist":     14,
+	"Culinarian":    15,
+	// Disciples of the Land (Gatherers)
+	"Miner":    16,
+	"Botanist": 17,
+	"Fisher":   18,
+	// Base Classes (still appear on Lodestone for some characters)
+	"Gladiator":   1,
+	"Pugilist":    2,
+	"Marauder":    3,
+	"Lancer":      4,
+	"Archer":      5,
+	"Conjurer":    6,
+	"Thaumaturge": 7,
+	"Arcanist":    26,
+	"Rogue":       29,
+}
+
 func stripTags(s string) string {
 	s = tagRe.ReplaceAllString(s, " ")
 	for entity, replacement := range entityMap {
@@ -640,6 +697,7 @@ func extractAttribute(tagHTML, attr string) string {
 	return tagHTML[start : start+end]
 }
 
+
 // parseClassJobs extracts class/job entries from the character profile HTML.
 func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 	var jobs []contract.ClassJobRecord
@@ -683,8 +741,16 @@ func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 		level, _ := strconv.ParseUint(levelStr, 10, 8)
 
 		if jobName != "" {
+			classJobID, ok := lodestoneJobIDs[jobName]
+			if !ok {
+				// Unknown job name — skip to avoid inserting with class_job_id=0
+				// which would collide in the (character_id, class_job_id) primary key.
+				searchFrom = entryIdx + entryEnd + 1
+				continue
+			}
 			jobs = append(jobs, contract.ClassJobRecord{
 				CharacterID: charID,
+				ClassJobID:  classJobID,
 				Name:        jobName,
 				Level:       uint8(level),
 			})
@@ -695,8 +761,6 @@ func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 
 	return jobs
 }
-
-// findLatest returns the most recently earned achievement in results.
 func findLatest(results []contract.AchievementResult) *contract.AchievementResult {
 	var latest *contract.AchievementResult
 	for i := range results {

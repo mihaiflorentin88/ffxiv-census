@@ -102,3 +102,14 @@ This ensures fields like `Name`, `World`, `Bio`, `GrandCompany`, `FreeCompanyNam
 ## Container wiring
 
 `container.Load.LodestoneClient()` lazily builds the adapter from `[lodestone]` config (which has defaults, so the accessor always works) and caches it. Like the other accessors, it degrades to a logged `nil` only if config is missing or construction fails.
+
+### Job Level Parsing
+
+`parseClassJobs` extracts class/job entries from the `character__level__list` HTML
+section. The Lodestone HTML provides job names (e.g. "Paladin") but not numeric IDs.
+A static lookup table (`lodestoneJobIDs`) maps each known job name to its official
+`ClassJobID`. Unknown job names are skipped to avoid inserting rows with
+`class_job_id=0` (which would collide in the primary key).
+
+When a new expansion adds jobs, add entries to `lodestoneJobIDs` in
+`infrastructure/lodestone/client.go`.
