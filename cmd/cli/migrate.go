@@ -84,7 +84,7 @@ func runMigrateQueue(dryRun bool) error {
 	}
 
 	if len(jobs) == 0 {
-		logger.InfoContext(ctx, "No queue jobs to migrate")
+		logger.InfoContext(ctx, "migrate.queue.no_jobs")
 		return nil
 	}
 
@@ -97,13 +97,15 @@ func runMigrateQueue(dryRun bool) error {
 	}
 
 	logger.InfoContext(
-		ctx, "Found queue jobs to migrate",
+		ctx, "migrate.queue.found",
 		slog.Int("total", len(jobs)),
 		slog.Any("by_type", typeCounts),
+		slog.Any("by_status", statusCounts),
+		slog.Bool("dry_run", dryRun),
 	)
 
 	if dryRun {
-		logger.InfoContext(ctx, "Queue migration dry run complete", slog.Int("total", len(jobs)))
+		logger.InfoContext(ctx, "migrate.queue.dry_run_complete")
 		return nil
 	}
 
@@ -116,7 +118,9 @@ func runMigrateQueue(dryRun bool) error {
 		}
 		if err := q.Publish(ctx, job); err != nil {
 			logger.WarnContext(
-				ctx, "Failed to publish migrated job",
+				ctx, "migrate.queue.publish_error",
+				slog.Int64("id", j.ID),
+				slog.String("type", j.Type),
 				slog.Any("error", err),
 			)
 			failed++
@@ -126,8 +130,9 @@ func runMigrateQueue(dryRun bool) error {
 	}
 
 	logger.InfoContext(
-		ctx, "Queue migration published",
-		slog.Int("total", published),
+		ctx, "migrate.queue.published",
+		slog.Int("published", published),
+		slog.Int("failed", failed),
 	)
 
 	if failed > 0 {
@@ -140,9 +145,10 @@ func runMigrateQueue(dryRun bool) error {
 	if err != nil {
 		return fmt.Errorf("delete migrated queue_jobs: %w", err)
 	}
-	_, _ = result.RowsAffected()
+	deleted, _ := result.RowsAffected()
 	logger.InfoContext(
-		ctx, "Queue migration cleanup complete",
+		ctx, "migrate.queue.cleanup",
+		slog.Int64("deleted", deleted),
 	)
 
 	return nil

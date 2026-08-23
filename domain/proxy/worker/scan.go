@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -74,8 +73,9 @@ func SplitScanConcurrency(concurrency, deadScanPercentage int) (regular, dead in
 func (w *ScanWorker) RunScan(ctx context.Context, concurrency, deadScanPercentage int) error {
 	regular, dead := SplitScanConcurrency(concurrency, deadScanPercentage)
 
-	w.logger.InfoContext(ctx, "Allocated scan worker pool",
-		slog.Int("pool_size", regular+dead))
+	w.logger.InfoContext(ctx, "scan_worker.pool_allocation",
+		"regular_workers", regular,
+		"dead_workers", dead)
 
 	poolCtx, poolCancel := context.WithCancel(ctx)
 	defer poolCancel()
@@ -147,17 +147,19 @@ func (w *ScanWorker) runScanPool(ctx context.Context, pool string, concurrency i
 				defer func() { <-sem }()
 				defer func() {
 					if r := recover(); r != nil {
-						w.logger.ErrorContext(ctx, "Scan worker panicked",
-							slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", rec.Protocol, rec.IP, rec.Port)),
-							slog.Any("error", fmt.Errorf("%v", r)),
-							slog.String("stack", string(debug.Stack())))
+						w.logger.ErrorContext(ctx, "scan_worker.panic",
+							"pool", pool,
+							"proxy_id", rec.ID,
+							"error", fmt.Sprintf("%v", r),
+							"stack", string(debug.Stack()))
 					}
 				}()
 
 				if err := w.scanner.ProcessScanProxy(ctx, rec); err != nil {
-					w.logger.WarnContext(ctx, "Proxy scan failed",
-						slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", rec.Protocol, rec.IP, rec.Port)),
-						slog.Any("error", err))
+					w.logger.WarnContext(ctx, "scan_worker.scan_error",
+						"pool", pool,
+						"proxy_id", rec.ID,
+						"error", err)
 					hadError.Store(true)
 				} else if w.notifier != nil {
 					w.notifier()

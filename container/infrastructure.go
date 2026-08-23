@@ -149,7 +149,7 @@ func (s *ServiceContainer) Statsd() contract.StatsdClient {
 	}
 	client, err := metrics.New(endpoint, prefix)
 	if err != nil {
-		logging.Error("Failed to initialize metrics client", fmt.Sprintf("component=metrics error=%v", err))
+		logging.Error("container.metrics", fmt.Sprintf("failed to create statsd client: %v", err))
 		return nil
 	}
 	s.infrastructure.statsd = client
@@ -202,12 +202,12 @@ func (s *ServiceContainer) databaseUnlocked() contract.DatabaseDriver {
 	}
 	cfg := s.configUnlocked().Postgres
 	if cfg == nil {
-		logging.Warn("Failed to initialize database", "component=postgres error=config missing")
+		logging.Warn("container.postgres", "postgres config missing")
 		return nil
 	}
 	driver, err := postgres.NewDriver(cfg, postgresmigration.FS())
 	if err != nil {
-		logging.Error("Failed to initialize database", fmt.Sprintf("component=postgres error=%v", err))
+		logging.Error("container.postgres", fmt.Sprintf("failed to create postgres driver: %v", err))
 		return nil
 	}
 	s.infrastructure.databaseDriver = driver
@@ -222,12 +222,12 @@ func (s *ServiceContainer) Queue() contract.Queue {
 	}
 	cfg := s.configUnlocked().RabbitMQ
 	if cfg == nil {
-		logging.Warn("Failed to initialize queue", "component=rabbitmq error=config missing")
+		logging.Warn("container.queue", "rabbitmq config missing")
 		return nil
 	}
 	q, err := rabbitmq.New(cfg.GetURL(), s.Logger())
 	if err != nil {
-		logging.Error("Failed to initialize queue", fmt.Sprintf("component=rabbitmq error=%v", err))
+		logging.Error("container.queue", fmt.Sprintf("failed to create rabbitmq queue: %v", err))
 		return nil
 	}
 	s.infrastructure.queue = q
@@ -242,12 +242,12 @@ func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
 	}
 	cfg := s.configUnlocked().Lodestone
 	if cfg == nil {
-		logging.Warn("Failed to initialize Lodestone client", "component=lodestone error=config missing")
+		logging.Warn("container.lodestone", "lodestone config missing")
 		return nil
 	}
 	client, err := lodestone.NewCustomClient(cfg, s.Logger(), s.providerRateLimiterUnlocked())
 	if err != nil {
-		logging.Error("Failed to initialize Lodestone client", fmt.Sprintf("component=lodestone error=%v", err))
+		logging.Error("container.lodestone", fmt.Sprintf("failed to create lodestone client: %v", err))
 		return nil
 	}
 	s.infrastructure.lodestoneClient = client
@@ -262,12 +262,12 @@ func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
 	}
 	cfg := s.configUnlocked().Tomestone
 	if cfg == nil {
-		logging.Warn("Failed to initialize Tomestone client", "component=tomestone error=config missing")
+		logging.Warn("container.tomestone", "tomestone config missing")
 		return nil
 	}
 	client, err := tomestone.NewClient(cfg, s.Logger(), tomestone.WithProviderRateLimiter(s.providerRateLimiterUnlocked()))
 	if err != nil {
-		logging.Error("Failed to initialize Tomestone client", fmt.Sprintf("component=tomestone error=%v", err))
+		logging.Error("container.tomestone", fmt.Sprintf("failed to create tomestone client: %v", err))
 		return nil
 	}
 	s.infrastructure.tomestoneClient = client
@@ -282,7 +282,7 @@ func (s *ServiceContainer) CharacterRepository() contract.CharacterRepository {
 	}
 	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("Failed to initialize character repository", "component=character_repository error=database driver unavailable")
+		logging.Warn("container.character_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.characterRepository = repository.NewCharacterRepository(driver)
@@ -297,7 +297,7 @@ func (s *ServiceContainer) AchievementRepository() contract.AchievementRepositor
 	}
 	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("Failed to initialize achievement repository", "component=achievement_repository error=database driver unavailable")
+		logging.Warn("container.achievement_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.achievementRepository = repository.NewAchievementRepository(driver)
@@ -312,7 +312,7 @@ func (s *ServiceContainer) CensusRunRepository() contract.CensusRunRepository {
 	}
 	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("Failed to initialize census run repository", "component=census_run_repository error=database driver unavailable")
+		logging.Warn("container.census_run_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.censusRunRepository = repository.NewCensusRunRepository(driver)
@@ -327,7 +327,7 @@ func (s *ServiceContainer) ProxyRepository() contract.ProxyRepository {
 	}
 	driver := s.databaseUnlocked()
 	if driver == nil {
-		logging.Warn("Failed to initialize proxy repository", "component=proxy_repository error=database driver unavailable")
+		logging.Warn("container.proxy_repository", "database driver unavailable")
 		return nil
 	}
 	s.infrastructure.proxyRepository = repository.NewProxyRepository(driver)

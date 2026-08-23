@@ -297,9 +297,8 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 
 		if attempts >= maxFailedAttempts {
 			q.logger.WarnContext(
-				processCtx, "Discarding permanently failed message",
+				processCtx, "rabbitmq.failed.permanent_discard",
 				slog.String("event_type", eventType),
-				slog.String("reason", "max attempts exceeded"),
 				slog.Int("attempts", attempts),
 			)
 			_ = msg.Ack(false)
@@ -315,8 +314,9 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 		})
 		if pubErr != nil {
 			q.logger.ErrorContext(
-				processCtx, "Failed to republish failed message",
+				processCtx, "rabbitmq.failed.republish_error",
 				slog.String("event_type", eventType),
+				slog.Int("attempts", attempts),
 				slog.Any("error", pubErr),
 			)
 			_ = msg.Nack(false, true)
@@ -325,9 +325,9 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 
 		_ = msg.Ack(false)
 		q.logger.InfoContext(
-			processCtx, "Republished failed message for retry",
+			processCtx, "rabbitmq.failed.republished",
 			slog.String("event_type", eventType),
-			slog.Int("attempt", attempts),
+			slog.Int("attempts", attempts),
 		)
 	}
 
@@ -390,13 +390,13 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 
 	if attempts >= maxAttempts {
 		q.logger.WarnContext(
-			ctx, "Message permanently failed after max retries",
+			ctx, "rabbitmq.permanent_failure",
 			slog.String("event_type", eventType),
 			slog.Int("attempts", attempts),
 			slog.Any("error", handlerErr),
 		)
 		if err := q.publishToFailed(failedQueue, eventType, msg.Body, msg.Headers, attempts, 0); err != nil {
-			q.logger.ErrorContext(ctx, "Failed to publish message to dead letter queue", slog.String("event_type", eventType), slog.Any("error", err))
+			q.logger.ErrorContext(ctx, "rabbitmq.failed_publish_error", slog.Any("error", err))
 		}
 	} else {
 		backoff := backoffBaseSec * int(math.Pow(2, float64(attempts-1)))
@@ -404,13 +404,14 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 			backoff = maxBackoffSec
 		}
 		q.logger.WarnContext(
-			ctx, "Retrying message publish",
+			ctx, "rabbitmq.retry",
 			slog.String("event_type", eventType),
-			slog.Int("attempt", attempts),
+			slog.Int("attempts", attempts),
+			slog.Int("backoff_sec", backoff),
 			slog.Any("error", handlerErr),
 		)
 		if err := q.publishToFailed(failedQueue, eventType, msg.Body, msg.Headers, attempts, backoff); err != nil {
-			q.logger.ErrorContext(ctx, "Failed to republish message after retry", slog.String("event_type", eventType), slog.Any("error", err))
+			q.logger.ErrorContext(ctx, "rabbitmq.retry_publish_error", slog.Any("error", err))
 		}
 	}
 

@@ -70,7 +70,7 @@ pause affected provider queues while letting others continue.`,
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				logger.ErrorContext(ctx, "Failed to close queue connection", slog.Any("error", err))
+				logger.ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
 			}
 		}()
 
@@ -239,11 +239,11 @@ Use --events to filter which failed queues to consume from (e.g. --events "id-sw
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				logger.ErrorContext(ctx, "Failed to close queue connection", slog.Any("error", err))
+				logger.ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
 			}
 		}()
 
-		logger.InfoContext(ctx, "Starting failed message consumer", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
+		logger.InfoContext(ctx, "consume.failed.start", slog.Int("concurrency", concurrency), slog.Any("event_types", eventTypes))
 		return q.ConsumeFailed(ctx, eventTypes, concurrency)
 	},
 }

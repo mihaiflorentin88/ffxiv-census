@@ -270,7 +270,7 @@ func TestWorker_SuccessfulJobQuietAtInfo(t *testing.T) {
 		t.Errorf("Info logger should not emit worker.job_start:\n%s", logs)
 	}
 	// job_done should appear exactly once.
-	if !strings.Contains(logs, "Job completed successfully") {
-		t.Errorf("expected 'Job completed successfully' in logs:\n%s", logs)
+	if !strings.Contains(logs, "worker.job_done") {
+		t.Errorf("expected worker.job_done in logs:\n%s", logs)
 	}
 }

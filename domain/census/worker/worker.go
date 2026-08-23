@@ -85,12 +85,12 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 	}
 
-	w.logger.InfoContext(ctx, "Worker started", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
+	w.logger.InfoContext(ctx, "worker.start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 
 	processJob := func(processCtx context.Context, job contract.QueueJob) error {
 		h, ok := w.handlers.Get(job.Type)
 		if !ok {
-			w.logger.ErrorContext(processCtx, "No handler registered for event type", slog.String("event_type", job.Type))
+			w.logger.ErrorContext(processCtx, "worker.missing_handler", slog.String("event_type", job.Type))
 			return fmt.Errorf("no handler registered for event %s", job.Type)
 		}
 
@@ -105,7 +105,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 		start := time.Now()
 		w.logger.DebugContext(
-			processCtx, "Processing job",
+			processCtx, "worker.job_start",
 			slog.String("event_type", job.Type),
 		)
 
@@ -123,7 +123,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 		if err != nil {
 			w.logger.WarnContext(
-				processCtx, "Job failed, retrying",
+				processCtx, "worker.job_retry",
 				slog.String("event_type", job.Type),
 				slog.Duration("duration", time.Since(start)),
 				slog.Any("error", err),
@@ -142,7 +142,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		for _, nextJob := range next {
 			if pubErr := w.queue.Publish(processCtx, nextJob); pubErr != nil {
 				w.logger.ErrorContext(
-					processCtx, "Failed to publish follow-up job",
+					processCtx, "worker.publish_error",
 					slog.String("event_type", nextJob.Type),
 					slog.Any("error", pubErr),
 				)
@@ -151,7 +151,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 
 		w.logger.InfoContext(
-			processCtx, "Job completed successfully",
+			processCtx, "worker.job_done",
 			slog.String("event_type", job.Type),
 			slog.Duration("duration", time.Since(start)),
 			slog.Int("chained", len(next)),
@@ -181,7 +181,7 @@ func (w *Worker) waitForProviders(ctx context.Context, eventType string) error {
 	case handler.EventAchievementCensus:
 		// Lodestone-only: wait for Lodestone to become available.
 		if !w.rateLimiter.IsAvailable(contract.ProviderLodestone) {
-			w.logger.InfoContext(ctx, "Waiting for provider to become available", slog.String("provider", "lodestone"))
+			w.logger.InfoContext(ctx, "worker.waiting_for_provider", slog.String("event_type", eventType), slog.String("provider", "lodestone"))
 			return w.rateLimiter.WaitUntilAvailable(ctx, contract.ProviderLodestone)
 		}
 	case handler.EventIDSweep, handler.EventCharacterCensus:
@@ -189,7 +189,7 @@ func (w *Worker) waitForProviders(ctx context.Context, eventType string) error {
 		lodestoneAvail := w.rateLimiter.IsAvailable(contract.ProviderLodestone)
 		tomestoneAvail := w.rateLimiter.IsAvailable(contract.ProviderTomestone)
 		if !lodestoneAvail && !tomestoneAvail {
-			w.logger.InfoContext(ctx, "Waiting for provider to become available", slog.String("provider", "any"))
+			w.logger.InfoContext(ctx, "worker.waiting_for_provider", slog.String("event_type", eventType), slog.String("provider", "any"))
 			earliest := w.rateLimiter.EarliestAvailable()
 			if !earliest.IsZero() {
 				select {
@@ -246,13 +246,13 @@ func (w *Worker) waitForProxy(ctx context.Context, owner string, proxyHub *proxy
 
 		if firstAttempt {
 			if err != nil {
-				w.logger.WarnContext(ctx, "No proxy available, waiting", slog.String("worker_id", owner), slog.Any("error", err))
+				w.logger.WarnContext(ctx, "worker.proxy_waiting", slog.String("owner", owner), slog.Any("error", err))
 			} else {
-				w.logger.InfoContext(ctx, "No proxy available, waiting", slog.String("worker_id", owner))
+				w.logger.InfoContext(ctx, "worker.proxy_waiting", slog.String("owner", owner), slog.String("reason", "no proxy available"))
 			}
 			firstAttempt = false
 		} else if !capLogged && backoff >= maxBackoff {
-			w.logger.InfoContext(ctx, "Proxy acquisition backing off", slog.String("worker_id", owner), slog.Duration("backoff", backoff))
+			w.logger.InfoContext(ctx, "worker.proxy_waiting_backoff", slog.String("owner", owner), slog.Duration("backoff", backoff))
 			capLogged = true
 		}
 
@@ -300,13 +300,13 @@ func (w *Worker) replaceProxy(
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if markBad {
 			if markErr := previous.MarkFailed(cleanupCtx, owner); markErr != nil {
-				w.logger.WarnContext(cleanupCtx, "Failed to mark proxy as failed",
-					slog.String("proxy_address", previous.Address()), slog.Any("error", markErr))
+				w.logger.WarnContext(cleanupCtx, "worker.proxy_mark_failed_error",
+					slog.String("proxy", previous.Address()), slog.Any("error", markErr))
 			}
 		} else {
 			if relErr := previous.Release(cleanupCtx, owner); relErr != nil {
-				w.logger.WarnContext(cleanupCtx, "Failed to release proxy",
-					slog.String("proxy_address", previous.Address()), slog.Any("error", relErr))
+				w.logger.WarnContext(cleanupCtx, "worker.proxy_release_error",
+					slog.String("proxy", previous.Address()), slog.Any("error", relErr))
 			}
 		}
 		cancel()
@@ -325,16 +325,16 @@ func (w *Worker) replaceProxy(
 	lodestoneClient, err := newLodestoneClient(replacement.Address(), proxyLimiter)
 	if err != nil {
 		if relErr := replacement.Release(context.Background(), owner); relErr != nil {
-			w.logger.WarnContext(context.Background(), "Failed to release proxy during cleanup",
-				slog.String("proxy_address", replacement.Address()), slog.Any("error", relErr))
+			w.logger.WarnContext(context.Background(), "worker.proxy_cleanup_release_error",
+				slog.String("proxy", replacement.Address()), slog.Any("error", relErr))
 		}
 		return nil, nil, nil, nil, nil, fmt.Errorf("create lodestone client: %w", err)
 	}
 	tomestoneClient, err := newTomestoneClient(replacement.Address(), proxyLimiter)
 	if err != nil {
 		if relErr := replacement.Release(context.Background(), owner); relErr != nil {
-			w.logger.WarnContext(context.Background(), "Failed to release proxy during cleanup",
-				slog.String("proxy_address", replacement.Address()), slog.Any("error", relErr))
+			w.logger.WarnContext(context.Background(), "worker.proxy_cleanup_release_error",
+				slog.String("proxy", replacement.Address()), slog.Any("error", relErr))
 		}
 		return nil, nil, nil, nil, nil, fmt.Errorf("create tomestone client: %w", err)
 	}
@@ -370,7 +370,7 @@ func (w *Worker) RunEventsWithProxy(
 		}
 	}
 
-	w.logger.InfoContext(ctx, "Proxy worker started", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
+	w.logger.InfoContext(ctx, "worker.proxy_start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 
 	childCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -384,7 +384,7 @@ func (w *Worker) RunEventsWithProxy(
 		go func(wid int) {
 			defer wg.Done()
 			if err := w.proxyWorkerLoop(ctx, childCtx, eventTypes, wid, ownerPrefix, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter); err != nil && !errors.Is(err, context.Canceled) {
-				w.logger.ErrorContext(childCtx, "Proxy worker loop error", slog.Int("worker_id", wid), slog.Any("error", err))
+				w.logger.ErrorContext(childCtx, "worker.proxy_loop_error", slog.Int("worker_id", wid), slog.Any("error", err))
 				errCh <- err
 			}
 		}(workerID)
@@ -392,7 +392,7 @@ func (w *Worker) RunEventsWithProxy(
 
 	wg.Wait()
 	close(errCh)
-	w.logger.InfoContext(ctx, "Proxy worker stopped", slog.String("owner", ownerPrefix))
+	w.logger.InfoContext(ctx, "worker.proxy_stop", slog.Any("event_types", eventTypes))
 
 	var errs []error
 	for err := range errCh {
@@ -426,7 +426,7 @@ func (w *Worker) proxyWorkerLoop(
 	if err != nil {
 		return fmt.Errorf("proxy acquire: %w", err)
 	}
-	w.logger.InfoContext(claimCtx, "Acquired proxy", slog.String("proxy_address", proxy.Address()))
+	w.logger.InfoContext(claimCtx, "worker.proxy_acquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 
 	// Create proxy-aware clients and handlers.
 	proxyLimiter := newRateLimiter()
@@ -435,7 +435,7 @@ func (w *Worker) proxyWorkerLoop(
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer releaseCancel()
 		if relErr := proxy.Release(releaseCtx, owner); relErr != nil {
-			w.logger.WarnContext(releaseCtx, "Failed to release proxy during cleanup", slog.String("proxy_address", proxy.Address()), slog.Any("error", relErr))
+			w.logger.WarnContext(releaseCtx, "worker.proxy_cleanup_release_error", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.Any("error", relErr))
 			return errors.Join(fmt.Errorf("create lodestone client: %w", err), fmt.Errorf("release proxy: %w", relErr))
 		}
 		return fmt.Errorf("create lodestone client: %w", err)
@@ -445,7 +445,7 @@ func (w *Worker) proxyWorkerLoop(
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer releaseCancel()
 		if relErr := proxy.Release(releaseCtx, owner); relErr != nil {
-			w.logger.WarnContext(releaseCtx, "Failed to release proxy during cleanup", slog.String("proxy_address", proxy.Address()), slog.Any("error", relErr))
+			w.logger.WarnContext(releaseCtx, "worker.proxy_cleanup_release_error", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.Any("error", relErr))
 			return errors.Join(fmt.Errorf("create tomestone client: %w", err), fmt.Errorf("release proxy: %w", relErr))
 		}
 		return fmt.Errorf("create tomestone client: %w", err)
@@ -458,9 +458,9 @@ func (w *Worker) proxyWorkerLoop(
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer releaseCancel()
 			if err := proxy.Release(releaseCtx, owner); err != nil {
-				w.logger.WarnContext(releaseCtx, "Failed to release proxy", slog.String("proxy_address", proxy.Address()), slog.Any("error", err))
+				w.logger.WarnContext(releaseCtx, "worker.proxy_release_error", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.Any("error", err))
 			} else {
-				w.logger.InfoContext(releaseCtx, "Proxy worker stopped", slog.String("owner", owner))
+				w.logger.InfoContext(releaseCtx, "worker.proxy_released", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 				proxyHub.NotifyAvailable()
 			}
 		}
@@ -478,14 +478,14 @@ func (w *Worker) proxyWorkerLoop(
 		switch eventType {
 		case handler.EventAchievementCensus:
 			if !proxyLimiter.IsAvailable(contract.ProviderLodestone) {
-				w.logger.InfoContext(ctx, "Waiting for provider to become available", slog.String("provider", "lodestone"))
+				w.logger.InfoContext(ctx, "worker.waiting_for_provider", slog.String("event_type", eventType), slog.String("provider", "lodestone"))
 				return proxyLimiter.WaitUntilAvailable(ctx, contract.ProviderLodestone)
 			}
 		case handler.EventIDSweep, handler.EventCharacterCensus:
 			lodestoneAvail := proxyLimiter.IsAvailable(contract.ProviderLodestone)
 			tomestoneAvail := proxyLimiter.IsAvailable(contract.ProviderTomestone)
 			if !lodestoneAvail && !tomestoneAvail {
-				w.logger.InfoContext(ctx, "Waiting for provider to become available", slog.String("provider", "any"))
+				w.logger.InfoContext(ctx, "worker.waiting_for_provider", slog.String("event_type", eventType), slog.String("provider", "any"))
 				earliest := proxyLimiter.EarliestAvailable()
 				if !earliest.IsZero() {
 					select {
@@ -508,11 +508,11 @@ func (w *Worker) proxyWorkerLoop(
 		lockCancel()
 		if canErr != nil {
 			// Database error — return for queue retry, retain current proxy.
-			w.logger.WarnContext(ctx, "Proxy worker loop error", slog.Int("worker_id", workerID), slog.Any("error", canErr))
+			w.logger.WarnContext(ctx, "worker.proxy_canuse_error", slog.Int("worker_id", workerID), slog.Any("error", canErr))
 			return fmt.Errorf("proxy canuse check: %w", canErr)
 		}
 		if !canUse {
-			w.logger.InfoContext(ctx, "Proxy ownership lost, acquiring replacement", slog.Int("worker_id", workerID), slog.String("proxy_address", proxy.Address()))
+			w.logger.InfoContext(ctx, "worker.proxy_lost", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 			newProxy, newLodestone, newTomestone, newLimiter, newReg, rerr := w.replaceProxy(
 				ctx, proxy, owner, false, proxyHub,
 				newLodestoneClient, newTomestoneClient, newRateLimiter, newHandlers,
@@ -526,7 +526,7 @@ func (w *Worker) proxyWorkerLoop(
 			tomestoneClient = newTomestone
 			proxyLimiter = newLimiter
 			handlers = newReg
-			w.logger.InfoContext(ctx, "Acquired proxy", slog.String("proxy_address", proxy.Address()))
+			w.logger.InfoContext(ctx, "worker.proxy_reacquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 		}
 
 		// Event-aware provider wait before handler call.
@@ -541,10 +541,10 @@ func (w *Worker) proxyWorkerLoop(
 
 		start := time.Now()
 		w.logger.DebugContext(
-			ctx, "Processing job",
+			ctx, "worker.job_start",
 			slog.String("event_type", job.Type),
 			slog.Int("worker_id", workerID),
-			slog.String("proxy_address", proxy.Address()),
+			slog.String("proxy", proxy.Address()),
 			slog.String("owner", owner),
 		)
 
@@ -562,7 +562,7 @@ func (w *Worker) proxyWorkerLoop(
 
 		if jobErr != nil {
 			w.logger.WarnContext(
-				ctx, "Job failed, retrying",
+				ctx, "worker.job_retry",
 				slog.String("event_type", job.Type),
 				slog.Duration("duration", time.Since(start)),
 				slog.Any("error", jobErr),
@@ -579,7 +579,7 @@ func (w *Worker) proxyWorkerLoop(
 
 			// Proxy transport error: replace the proxy and retry once.
 			if isProxyError(jobErr) {
-				w.logger.InfoContext(ctx, "Proxy connection failed, replacing", slog.Int("worker_id", workerID), slog.String("proxy_address", proxy.Address()))
+				w.logger.InfoContext(ctx, "worker.proxy_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
 				newProxy, newLodestone, newTomestone, newLimiter, newReg, rerr := w.replaceProxy(
 					ctx, proxy, owner, true, proxyHub,
 					newLodestoneClient, newTomestoneClient, newRateLimiter, newHandlers,
@@ -593,7 +593,7 @@ func (w *Worker) proxyWorkerLoop(
 				tomestoneClient = newTomestone
 				proxyLimiter = newLimiter
 				handlers = newReg
-				w.logger.InfoContext(ctx, "Acquired proxy", slog.String("proxy_address", proxy.Address()))
+				w.logger.InfoContext(ctx, "worker.proxy_reacquired", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 
 				// Retry the same delivery once through the replacement proxy.
 				// Wait for providers before retrying.
@@ -607,10 +607,10 @@ func (w *Worker) proxyWorkerLoop(
 
 				retryStart := time.Now()
 				w.logger.InfoContext(
-					ctx, "Processing job",
+					ctx, "worker.job_retry_start",
 					slog.String("event_type", job.Type),
 					slog.Int("worker_id", workerID),
-					slog.String("proxy_address", proxy.Address()),
+					slog.String("proxy", proxy.Address()),
 					slog.String("owner", owner),
 				)
 
@@ -629,16 +629,16 @@ func (w *Worker) proxyWorkerLoop(
 					// If the retry also failed with a proxy error, mark the
 					// replacement failed before returning to RabbitMQ.
 					if isProxyError(retryErr) {
-						w.logger.InfoContext(ctx, "Replacement proxy also failed", slog.Int("worker_id", workerID), slog.String("proxy_address", proxy.Address()))
+						w.logger.InfoContext(ctx, "worker.proxy_retry_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
 						markCtx, markCancel := context.WithTimeout(context.Background(), 10*time.Second)
 						if markErr := proxy.MarkFailed(markCtx, owner); markErr != nil {
-							w.logger.WarnContext(markCtx, "Failed to mark proxy as failed",
-								slog.String("proxy_address", proxy.Address()), slog.Any("error", markErr))
+							w.logger.WarnContext(markCtx, "worker.proxy_mark_failed_error",
+								slog.String("proxy", proxy.Address()), slog.Any("error", markErr))
 						}
 						markCancel()
 					}
 					w.logger.WarnContext(
-						ctx, "Job failed, retrying",
+						ctx, "worker.job_retry_failed",
 						slog.String("event_type", job.Type),
 						slog.Duration("duration", time.Since(retryStart)),
 						slog.Any("error", retryErr),
@@ -649,7 +649,7 @@ func (w *Worker) proxyWorkerLoop(
 				for _, nextJob := range retryNext {
 					if pubErr := w.queue.Publish(ctx, nextJob); pubErr != nil {
 						w.logger.ErrorContext(
-							ctx, "Failed to publish follow-up job",
+							ctx, "worker.publish_error",
 							slog.String("event_type", nextJob.Type),
 							slog.Any("error", pubErr),
 						)
@@ -657,7 +657,7 @@ func (w *Worker) proxyWorkerLoop(
 					}
 				}
 				w.logger.InfoContext(
-					ctx, "Job completed successfully",
+					ctx, "worker.job_done",
 					slog.String("event_type", job.Type),
 					slog.Duration("duration", time.Since(retryStart)),
 					slog.Int("chained", len(retryNext)),
@@ -672,7 +672,7 @@ func (w *Worker) proxyWorkerLoop(
 		for _, nextJob := range next {
 			if pubErr := w.queue.Publish(ctx, nextJob); pubErr != nil {
 				w.logger.ErrorContext(
-					ctx, "Failed to publish follow-up job",
+					ctx, "worker.publish_error",
 					slog.String("event_type", nextJob.Type),
 					slog.Any("error", pubErr),
 				)
@@ -681,7 +681,7 @@ func (w *Worker) proxyWorkerLoop(
 		}
 
 		w.logger.InfoContext(
-			ctx, "Job completed successfully",
+			ctx, "worker.job_done",
 			slog.String("event_type", job.Type),
 			slog.Duration("duration", time.Since(start)),
 			slog.Int("chained", len(next)),

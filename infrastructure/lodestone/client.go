@@ -46,6 +46,30 @@ func jittered(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * factor)
 }
 
+// stripTags removes HTML tags, decodes common entities, and collapses whitespace.
+var (
+	tagRe     = regexp.MustCompile(`<[^>]*>`)
+	entityMap = map[string]string{
+		"&#39;":  "'",
+		"&amp;":  "&",
+		"&lt;":   "<",
+		"&gt;":   ">",
+		"&quot;": `"`,
+		"&#34;":  `"`,
+		"&nbsp;": " ",
+	}
+	multiSpaceRe = regexp.MustCompile(`\s+`)
+)
+
+func stripTags(s string) string {
+	s = tagRe.ReplaceAllString(s, "")
+	for entity, replacement := range entityMap {
+		s = strings.ReplaceAll(s, entity, replacement)
+	}
+	s = multiSpaceRe.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
 // CustomClientOption configures the custom Lodestone client.
 type CustomClientOption func(*CustomClient)
 
@@ -157,12 +181,12 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 		if err != nil {
 			lastErr = err
 			backoff := c.backoffBase * time.Duration(1<<uint(attempt))
-			c.logger.WarnContext(ctx, "Retrying Lodestone request",
+			c.logger.WarnContext(ctx, "lodestone.request_retry",
 				slog.String("url", url),
 				slog.Int("attempt", attempt+1),
-				slog.Int("max_retries", c.maxRetries+1),
+				slog.Int("max_attempts", c.maxRetries+1),
 				slog.Duration("backoff", backoff),
-				slog.Any("error", err))
+				slog.String("error", err.Error()))
 			if attempt < c.maxRetries {
 				timer := time.NewTimer(jittered(backoff))
 				select {
@@ -187,10 +211,10 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 				c.rateLimiter.Pause(contract.ProviderLodestone, rateLimitPause, "lodestone 429 rate limited")
 			}
 			backoff := c.backoffBase * time.Duration(1<<uint(attempt))
-			c.logger.WarnContext(ctx, "Rate limited by Lodestone, backing off",
+			c.logger.WarnContext(ctx, "lodestone.rate_limited",
 				slog.String("url", url),
 				slog.Int("attempt", attempt+1),
-				slog.Duration("retry_after", backoff))
+				slog.Duration("backoff", backoff))
 			if attempt < c.maxRetries {
 				timer := time.NewTimer(jittered(backoff))
 				select {
@@ -213,20 +237,20 @@ func (c *CustomClient) FetchCharacter(ctx context.Context, id uint32) (*contract
 	start := time.Now()
 	charURL := fmt.Sprintf("https://na.finalfantasyxiv.com/lodestone/character/%d/", id)
 
-	c.logger.DebugContext(ctx, "Fetching character from Lodestone",
+	c.logger.DebugContext(ctx, "lodestone.fetch_character.attempt",
 		slog.Uint64("character_id", uint64(id)),
 		slog.String("proxy", c.proxyURL))
 
 	body, statusCode, err := c.doRequest(ctx, charURL)
 	if err != nil {
-		c.logger.WarnContext(ctx, "Failed to fetch character from Lodestone",
+		c.logger.WarnContext(ctx, "lodestone.fetch_character.error",
 			slog.Uint64("character_id", uint64(id)),
 			slog.Any("error", err))
 		return nil, fmt.Errorf("fetch character %d: %w", id, err)
 	}
 
 	if statusCode == http.StatusNotFound || statusCode == http.StatusForbidden {
-		c.logger.DebugContext(ctx, "Character not found on Lodestone",
+		c.logger.DebugContext(ctx, "lodestone.fetch_character.not_found",
 			slog.Uint64("character_id", uint64(id)),
 			slog.Int("status", statusCode))
 		return nil, contract.ErrCharacterNotFound
@@ -243,7 +267,7 @@ func (c *CustomClient) FetchCharacter(ctx context.Context, id uint32) (*contract
 	}
 
 	duration := time.Since(start)
-	c.logger.DebugContext(ctx, "Fetched character from Lodestone",
+	c.logger.DebugContext(ctx, "lodestone.fetch_character.success",
 		slog.Uint64("character_id", uint64(id)),
 		slog.String("name", profile.Name),
 		slog.String("world", profile.World),
@@ -258,7 +282,7 @@ func (c *CustomClient) FetchCharacter(ctx context.Context, id uint32) (*contract
 func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
 	start := time.Now()
 
-	c.logger.DebugContext(ctx, "Fetching achievements from Lodestone",
+	c.logger.DebugContext(ctx, "lodestone.fetch_achievements.start",
 		slog.Uint64("character_id", uint64(charID)),
 		slog.Int("milestones_to_check", len(milestoneIDs)))
 
@@ -268,7 +292,7 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 		return nil, fmt.Errorf("check privacy %d: %w", charID, err)
 	}
 	if private {
-		c.logger.DebugContext(ctx, "Achievements are private",
+		c.logger.DebugContext(ctx, "lodestone.fetch_achievements.private",
 			slog.Uint64("character_id", uint64(charID)))
 		return &contract.AchievementSummary{Private: true}, nil
 	}
@@ -287,10 +311,11 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 			results = append(results, result)
 		} else {
 			// Sequential dependency — no point checking further.
-			c.logger.DebugContext(ctx, "Stopping achievement discovery, milestone not earned",
+			c.logger.DebugContext(ctx, "lodestone.check_achievement.stopping",
 				slog.Uint64("character_id", uint64(charID)),
 				slog.Uint64("missing_id", uint64(id)),
 				slog.String("missing_name", result.Name),
+				slog.String("reason", "sequential_dependency"),
 				slog.Int("milestones_found", len(results)))
 			break
 		}
@@ -302,7 +327,7 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 	}
 
 	duration := time.Since(start)
-	c.logger.DebugContext(ctx, "Fetched achievements from Lodestone",
+	c.logger.DebugContext(ctx, "lodestone.fetch_achievements.complete",
 		slog.Uint64("character_id", uint64(charID)),
 		slog.Int("milestones_found", len(results)),
 		slog.Int("requests_made", requestsMade),
@@ -319,14 +344,14 @@ func (c *CustomClient) checkPrivacy(ctx context.Context, charID uint32) (bool, e
 		return false, err
 	}
 	if statusCode == http.StatusForbidden {
-		c.logger.DebugContext(ctx, "Achievement list is private",
+		c.logger.DebugContext(ctx, "lodestone.check_privacy.private",
 			slog.Uint64("character_id", uint64(charID)))
 		return true, nil
 	}
 	if statusCode != http.StatusOK {
 		return false, fmt.Errorf("achievement page for %d: HTTP %d", charID, statusCode)
 	}
-	c.logger.DebugContext(ctx, "Achievement list is public",
+	c.logger.DebugContext(ctx, "lodestone.check_privacy.public",
 		slog.Uint64("character_id", uint64(charID)))
 	return false, nil
 }
@@ -336,7 +361,7 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 	start := time.Now()
 	detailURL := fmt.Sprintf("https://na.finalfantasyxiv.com/lodestone/character/%d/achievement/detail/%d/", charID, achievementID)
 
-	c.logger.DebugContext(ctx, "Checking achievement",
+	c.logger.DebugContext(ctx, "lodestone.check_achievement.attempt",
 		slog.Uint64("character_id", uint64(charID)),
 		slog.Uint64("achievement_id", uint64(achievementID)))
 
@@ -359,7 +384,7 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 
 	if statusCode == http.StatusForbidden {
 		// Private or missing — treat as not earned.
-		c.logger.DebugContext(ctx, "Achievement not earned",
+		c.logger.DebugContext(ctx, "lodestone.check_achievement.not_earned",
 			slog.Uint64("character_id", uint64(charID)),
 			slog.Uint64("achievement_id", uint64(achievementID)),
 			slog.String("achievement_name", result.Name),
@@ -375,13 +400,13 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 	if strings.Contains(html, "entry__achievement__view--complete") {
 		result.Earned = true
 		result.EarnedAt = extractTimestamp(html)
-		c.logger.DebugContext(ctx, "Achievement earned",
+		c.logger.DebugContext(ctx, "lodestone.check_achievement.earned",
 			slog.Uint64("character_id", uint64(charID)),
 			slog.Uint64("achievement_id", uint64(achievementID)),
 			slog.String("achievement_name", result.Name),
 			slog.Duration("duration", duration))
 	} else {
-		c.logger.DebugContext(ctx, "Achievement not earned",
+		c.logger.DebugContext(ctx, "lodestone.check_achievement.not_earned",
 			slog.Uint64("character_id", uint64(charID)),
 			slog.Uint64("achievement_id", uint64(achievementID)),
 			slog.String("achievement_name", result.Name),
@@ -394,23 +419,11 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 // HTML parsing helpers.
 
 var (
-	timestampRe  = regexp.MustCompile(`ldst_strftime\((\d+),`)
-	nameRe       = regexp.MustCompile(`entry__activity__txt">([^<]+)</p>`)
-	worldDCRe    = regexp.MustCompile(`^([^\s]+)\s+\[([^\]]+)\]$`)
-	fcIDRe       = regexp.MustCompile(`/lodestone/freecompany/(\d+)/`)
-	tagRe        = regexp.MustCompile(`<[^>]*>`)
-	multiSpaceRe = regexp.MustCompile(`\s+`)
+	timestampRe = regexp.MustCompile(`ldst_strftime\((\d+),`)
+	nameRe      = regexp.MustCompile(`entry__activity__txt">([^<]+)</p>`)
+	worldDCRe   = regexp.MustCompile(`^([^\s]+)\s+\[([^\]]+)\]$`)
+	fcIDRe      = regexp.MustCompile(`/lodestone/freecompany/(\d+)/`)
 )
-
-var entityMap = map[string]string{
-	"&#39;":  "'",
-	"&amp;":  "&",
-	"&lt;":   "<",
-	"&gt;":   ">",
-	"&quot;": `"`,
-	"&#34;":  `"`,
-	"&nbsp;": " ",
-}
 
 // extractTimestamp extracts the earned-at timestamp from a Lodestone achievement detail page.
 func extractTimestamp(html string) time.Time {
@@ -495,16 +508,6 @@ func parseCharacterProfile(html string, id uint32) (*contract.CharacterProfile, 
 	profile.ClassJobs = parseClassJobs(html, id)
 
 	return profile, nil
-}
-
-// stripTags removes HTML tags, decodes common entities, and collapses whitespace.
-func stripTags(s string) string {
-	s = tagRe.ReplaceAllString(s, "")
-	for entity, replacement := range entityMap {
-		s = strings.ReplaceAll(s, entity, replacement)
-	}
-	s = multiSpaceRe.ReplaceAllString(s, " ")
-	return strings.TrimSpace(s)
 }
 
 // extractTextBetween finds text between a marker and an end tag.
