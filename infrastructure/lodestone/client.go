@@ -62,7 +62,7 @@ var (
 )
 
 func stripTags(s string) string {
-	s = tagRe.ReplaceAllString(s, "")
+	s = tagRe.ReplaceAllString(s, " ")
 	for entity, replacement := range entityMap {
 		s = strings.ReplaceAll(s, entity, replacement)
 	}
@@ -475,12 +475,35 @@ func parseCharacterProfile(html string, id uint32) (*contract.CharacterProfile, 
 	profile.Bio = extractTextBetween(html, `class="character__profile__state"`, "</p>")
 	profile.Bio = strings.TrimSpace(profile.Bio)
 
-	// Race/Tribe: .character-block__name entries
+	// Race/Tribe/Gender: .character-block__name entries
+	// New Lodestone HTML puts race, tribe, and gender in a single element:
+	// <p class="character-block__name">Roegadyn<br />Hellsguard / ♂</p>
+	// After stripTags: "Roegadyn Hellsguard / ♂"
 	raceTribe := extractAllTextBetween(html, `class="character-block__name"`, "</p>")
 	if len(raceTribe) >= 1 {
-		profile.Race = strings.TrimSpace(raceTribe[0])
+		combined := strings.TrimSpace(raceTribe[0])
+		// Extract gender from ♂/♀ symbol
+		if strings.Contains(combined, "♂") {
+			profile.Gender = 1
+			combined = strings.ReplaceAll(combined, "♂", "")
+		} else if strings.Contains(combined, "♀") {
+			profile.Gender = 2
+			combined = strings.ReplaceAll(combined, "♀", "")
+		}
+		// Split on " / " to separate race/tribe from gender suffix
+		if parts := strings.SplitN(combined, " / ", 2); len(parts) == 2 {
+			combined = parts[0]
+		}
+		combined = strings.TrimSpace(combined)
+		// Split race from tribe on first space
+		if idx := strings.Index(combined, " "); idx > 0 {
+			profile.Race = combined[:idx]
+			profile.Tribe = strings.TrimSpace(combined[idx+1:])
+		} else {
+			profile.Race = combined
+		}
 	}
-	if len(raceTribe) >= 2 {
+	if len(raceTribe) >= 2 && profile.Tribe == "" {
 		profile.Tribe = strings.TrimSpace(raceTribe[1])
 	}
 

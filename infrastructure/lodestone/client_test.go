@@ -15,6 +15,7 @@ func TestStripTags(t *testing.T) {
 		{"mixed content", `<a href="x">Name</a> on <i>World</i>`, "Name on World"},
 		{"whitespace collapse", "  lots   of   space  ", "lots of space"},
 		{"nbsp entity", `hello&nbsp;world`, "hello world"},
+		{"br tag becomes space", `Hyur<br />Highlander / ♂`, "Hyur Highlander / ♂"},
 		{"empty string", "", ""},
 	}
 	for _, tt := range tests {
@@ -59,8 +60,8 @@ func TestParseCharacterProfile_RealLodestoneHTML(t *testing.T) {
 	<p class="frame__chara__name"><a href="/lodestone/character/12345">Tataru Taru</a></p>
 	<p class="frame__chara__world"><i class="xiv-lds xiv-lds-home-world js__tooltip" data-tooltip="Home World"></i>Ultros [Primal]</p>
 	<div class="character__profile__state"><p>Adventurer</p></div>
-	<p class="character-block__name">Miqo&#39;te</p>
-	<p class="character-block__name">Keeper of the Moon</p>
+	<p class="character-block__name">Miqo&#39;te<br />Keeper of the Moon / ♀</p>
+	<p class="character-block__name">Nophica, the Matron</p>
 	<p class="character__freecompany__name"><a href="/lodestone/freecompany/1234567890/">My Free Company</a></p>
 	`
 	profile, err := parseCharacterProfile(html, 12345)
@@ -81,19 +82,47 @@ func TestParseCharacterProfile_RealLodestoneHTML(t *testing.T) {
 		t.Errorf("Datacenter = %q, want %q", profile.Datacenter, "Primal")
 	}
 
-	// Race should NOT contain &#39; entity
+	// Race should be just the race name
 	if profile.Race != "Miqo'te" {
 		t.Errorf("Race = %q, want %q", profile.Race, "Miqo'te")
 	}
 
-	// Tribe should be clean
+	// Tribe should be parsed from first character-block__name, NOT the patron deity
 	if profile.Tribe != "Keeper of the Moon" {
-		t.Errorf("Tribe = %q, want %q", profile.Tribe, "Keeper of the Moon")
+		t.Errorf("Tribe = %q, want %q (patron deity 'Nophica, the Matron' must NOT be stored as tribe)", profile.Tribe, "Keeper of the Moon")
+	}
+
+	// Gender should be extracted from ♀ symbol
+	if profile.Gender != 2 {
+		t.Errorf("Gender = %d, want %d", profile.Gender, 2)
 	}
 
 	// FC Name should NOT contain <a> tags
 	if profile.FreeCompanyName != "My Free Company" {
 		t.Errorf("FreeCompanyName = %q, want %q", profile.FreeCompanyName, "My Free Company")
+	}
+}
+
+// TestParseCharacterProfile_MaleGender tests male gender parsing from Lodestone HTML.
+func TestParseCharacterProfile_MaleGender(t *testing.T) {
+	html := `
+	<p class="frame__chara__name"><a href="/lodestone/character/999">Test Char</a></p>
+	<p class="frame__chara__world"><i class="xiv-lds"></i>Hyperion [Primal]</p>
+	<p class="character-block__name">Hyur<br />Highlander / ♂</p>
+	<p class="character-block__name">Halone, the Fury</p>
+	`
+	profile, err := parseCharacterProfile(html, 999)
+	if err != nil {
+		t.Fatalf("parseCharacterProfile: %v", err)
+	}
+	if profile.Race != "Hyur" {
+		t.Errorf("Race = %q, want %q", profile.Race, "Hyur")
+	}
+	if profile.Tribe != "Highlander" {
+		t.Errorf("Tribe = %q, want %q", profile.Tribe, "Highlander")
+	}
+	if profile.Gender != 1 {
+		t.Errorf("Gender = %d, want %d", profile.Gender, 1)
 	}
 }
 
@@ -108,7 +137,7 @@ func TestStripTags_LodestoneEntities(t *testing.T) {
 		{"br tag", `Keeper of the Moon / ♀`, "Keeper of the Moon / ♀"},
 		{"i tag with class", `<i class="xiv-lds xiv-lds-home-world"></i>Ultros`, "Ultros"},
 		{"a tag in fc name", `<a href="/lodestone/freecompany/123/">My FC</a>`, "My FC"},
-		{"nested p h4 a", `<p>Free Company</p><h4><a href="/x/">Name</a></h4>`, "Free CompanyName"},
+		{"nested p h4 a", `<p>Free Company</p><h4><a href="/x/">Name</a></h4>`, "Free Company Name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
