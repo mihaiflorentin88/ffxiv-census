@@ -533,3 +533,24 @@ When a new expansion adds jobs, add entries to `lodestoneJobIDs` in
 - **ClassJobID values are stable across FFXIV patches.** Square Enix has never changed existing job IDs; new jobs get new IDs. The map only needs updating when new jobs are added.
 - **Tomestone path is unaffected.** It already provides correct IDs from its REST API.
 - **If a new expansion adds jobs before the map is updated:** Those jobs are silently skipped for Lodestone-synced characters. Tomestone-synced characters are unaffected. The fix is a one-line addition to `lodestoneJobIDs`.
+
+## Post-Deploy Findings
+
+The initial implementation assumed the Lodestone HTML used `character__level__list__entry` divs with `character__level__list__name` and `character__level__list__level` child elements. The **actual** Lodestone HTML uses:
+
+```html
+<div class="character__level__list"><ul>
+  <li><img src="..." data-tooltip="Paladin / Gladiator">100</li>
+  <li><img src="..." data-tooltip="Blue Mage (Limited Job)">-</li>
+  <li><img src="..." data-tooltip="Warrior">-</li>
+</ul></div>
+```
+
+Key differences:
+- Job names are in `data-tooltip` attribute on `<img>` tags, not in text elements
+- Combined names like "Paladin / Gladiator" — use first part before " / "
+- "(Limited Job)" suffix on Blue Mage/Beastmaster — strip before lookup
+- Level is plain text after `</img>`, "-" means unleveled (skip)
+- No `Lv.` prefix in real HTML
+
+The function was rewritten to parse `<li>` entries with `data-tooltip` extraction. Verified in production: 33 jobs with correct IDs (Fisher=18, Blue Mage=36, etc.), zero `class_job_id=0` rows for new characters.
