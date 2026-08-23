@@ -60,6 +60,11 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	if lodestoneAvail {
 		char, err := h.lodestone.FetchCharacter(ctx, p.CharacterID)
 		if err == nil {
+			// Skip characters with no race data (private profiles)
+			if char.Race == "" {
+				h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "private_profile"))
+				return nil, nil
+			}
 			h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.String("fc_id", char.FreeCompanyID), slog.String("source", "lodestone"))
 			if err := h.census.UpsertCharacter(ctx, char); err != nil {
 				h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.Any("error", err))
@@ -75,6 +80,11 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 			if tomestoneAvail {
 				tChar, terr := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 				if terr == nil {
+					// Skip characters with no race data (private profiles)
+					if tChar.Race == "" {
+						h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "private_profile"))
+						return nil, nil
+					}
 					h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
 					if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
 						h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
