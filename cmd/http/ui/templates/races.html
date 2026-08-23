@@ -201,125 +201,86 @@
 </div>
 
 <script>
-    document.addEventListener("DOMContentLoaded", function () {
-        const ctx = document.getElementById('raceChart');
-        if (!ctx) return;
+document.addEventListener("DOMContentLoaded", function() {
+    var ctx = document.getElementById('raceChart');
+    if (!ctx) return;
 
-        const labels = {{jsonSafe .Data.ChartLabels}}
-    };
-    const data = {{jsonSafe .Data.ChartData}};
+    var labels = {{jsonSafe .Data.ChartLabels}};
+    var data = {{jsonSafe .Data.ChartData}};
 
-    const raceColors = [
-        '#38bdf8', // Cyan
-        '#d4af37', // Gold
-        '#a855f7', // Purple
-        '#22c55e', // Green
-        '#f97316', // Orange
-        '#ec4899', // Pink
-        '#14b8a6', // Teal
-        '#eab308', // Yellow
-        '#64748b'  // Grey/Other
+    var raceColors = [
+        '#38bdf8', '#d4af37', '#a855f7', '#22c55e', '#f97316',
+        '#ec4899', '#14b8a6', '#eab308', '#64748b'
     ];
 
     new Chart(ctx, {
         type: 'doughnut',
-        data: {
-            labels: labels,
-            datasets: [{
-                data: data,
-                backgroundColor: raceColors.slice(0, labels.length),
-                borderColor: '#141923',
-                borderWidth: 2
-            }]
-        },
+        data: { labels: labels, datasets: [{ data: data, backgroundColor: raceColors.slice(0, labels.length), borderColor: '#141923', borderWidth: 2 }] },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false, cutout: '65%',
             plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        color: '#94a3b8',
-                        padding: 12,
-                        font: {
-                            size: 11
-                        }
-                    }
-                },
-                tooltip: {
-                    backgroundColor: '#141923',
-                    borderColor: '#263248',
-                    borderWidth: 1,
-                    titleColor: '#d4af37',
-                    bodyColor: '#f1f5f9'
-                }
-            },
-            cutout: '65%'
+                legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12, font: { size: 11 } } },
+                tooltip: { backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9' }
+            }
         }
     });
 
     var tribeCtx = document.getElementById("tribePieChart");
     if (tribeCtx) {
-        var tribeLabels = {{jsonSafe .Data.TribeLabels}}
-    };
-    var tribeData = {{jsonSafe .Data.TribeData}};
-    var tribeColors = ['#d4af37', '#38bdf8', '#f472b6', '#34d399', '#a78bfa', '#fb923c', '#e879f9', '#22d3ee', '#fbbf24', '#60a5fa', '#f87171', '#4ade80', '#818cf8', '#f59e0b', '#10b981', '#ec4899'];
-    new Chart(tribeCtx, {
-        type: 'doughnut',
-        data: {labels: tribeLabels, datasets: [{data: tribeData, backgroundColor: tribeColors.slice(0, tribeLabels.length), borderColor: '#141923', borderWidth: 2}]},
-        options: {
-            responsive: true, maintainAspectRatio: false, cutout: '65%',
-            plugins: {
-                legend: {position: 'bottom', labels: {color: '#94a3b8', padding: 12, font: {size: 11}}},
-                tooltip: {
-                    backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
-                    callbacks: {label: function (ctx) {var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0); var pct = ((ctx.parsed / total) * 100).toFixed(1); return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';}}
+        var tribeLabels = {{jsonSafe .Data.TribeLabels}};
+        var tribeData = {{jsonSafe .Data.TribeData}};
+        var tribeColors = ['#d4af37','#38bdf8','#f472b6','#34d399','#a78bfa','#fb923c','#e879f9','#22d3ee','#fbbf24','#60a5fa','#f87171','#4ade80','#818cf8','#f59e0b','#10b981','#ec4899'];
+        new Chart(tribeCtx, {
+            type: 'doughnut',
+            data: { labels: tribeLabels, datasets: [{ data: tribeData, backgroundColor: tribeColors.slice(0, tribeLabels.length), borderColor: '#141923', borderWidth: 2 }] },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '65%',
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12, font: { size: 11 } } },
+                    tooltip: { backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
+                        callbacks: { label: function(ctx) { var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0); var pct = ((ctx.parsed/total)*100).toFixed(1); return ctx.label+': '+ctx.parsed.toLocaleString()+' ('+pct+'%)'; } }
+                    }
                 }
             }
-        }
-    });
+        });
     }
     var genderCtx = document.getElementById("genderPieChart");
     if (genderCtx) {
-        var genderLabels = {{jsonSafe .Data.GenderLabels}}
-    };
-    var genderData = {{jsonSafe .Data.GenderData}};
-    var genderColors = ['#38bdf8', '#f472b6', '#a78bfa'];
-    new Chart(genderCtx, {
-        type: 'doughnut',
-        data: {labels: genderLabels, datasets: [{data: genderData, backgroundColor: genderColors.slice(0, genderLabels.length), borderColor: '#141923', borderWidth: 2}]},
-        options: {
-            responsive: true, maintainAspectRatio: false, cutout: '65%',
-            plugins: {
-                legend: {position: 'bottom', labels: {color: '#94a3b8', padding: 12, font: {size: 11}}},
-                tooltip: {
-                    backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
-                    callbacks: {label: function (ctx) {var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0); var pct = ((ctx.parsed / total) * 100).toFixed(1); return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';}}
+        var genderLabels = {{jsonSafe .Data.GenderLabels}};
+        var genderData = {{jsonSafe .Data.GenderData}};
+        var genderColors = ['#38bdf8','#f472b6','#a78bfa'];
+        new Chart(genderCtx, {
+            type: 'doughnut',
+            data: { labels: genderLabels, datasets: [{ data: genderData, backgroundColor: genderColors.slice(0, genderLabels.length), borderColor: '#141923', borderWidth: 2 }] },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '65%',
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12, font: { size: 11 } } },
+                    tooltip: { backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
+                        callbacks: { label: function(ctx) { var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0); var pct = ((ctx.parsed/total)*100).toFixed(1); return ctx.label+': '+ctx.parsed.toLocaleString()+' ('+pct+'%)'; } }
+                    }
                 }
             }
-        }
-    });
+        });
     }
     var rgCtx = document.getElementById("raceGenderPieChart");
     if (rgCtx) {
-        var rgLabels = {{jsonSafe .Data.RaceGenderLabels}}
-    };
-    var rgData = {{jsonSafe .Data.RaceGenderData}};
-    var rgColors = ['#d4af37', '#38bdf8', '#f472b6', '#34d399', '#a78bfa', '#fb923c', '#e879f9', '#22d3ee', '#fbbf24', '#60a5fa', '#f87171', '#4ade80', '#818cf8', '#f59e0b', '#10b981', '#ec4899'];
-    new Chart(rgCtx, {
-        type: 'doughnut',
-        data: {labels: rgLabels, datasets: [{data: rgData, backgroundColor: rgColors.slice(0, rgLabels.length), borderColor: '#141923', borderWidth: 2}]},
-        options: {
-            responsive: true, maintainAspectRatio: false, cutout: '65%',
-            plugins: {
-                legend: {position: 'bottom', labels: {color: '#94a3b8', padding: 12, font: {size: 11}}},
-                tooltip: {
-                    backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
-                    callbacks: {label: function (ctx) {var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0); var pct = ((ctx.parsed / total) * 100).toFixed(1); return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';}}
+        var rgLabels = {{jsonSafe .Data.RaceGenderLabels}};
+        var rgData = {{jsonSafe .Data.RaceGenderData}};
+        var rgColors = ['#d4af37','#38bdf8','#f472b6','#34d399','#a78bfa','#fb923c','#e879f9','#22d3ee','#fbbf24','#60a5fa','#f87171','#4ade80','#818cf8','#f59e0b','#10b981','#ec4899'];
+        new Chart(rgCtx, {
+            type: 'doughnut',
+            data: { labels: rgLabels, datasets: [{ data: rgData, backgroundColor: rgColors.slice(0, rgLabels.length), borderColor: '#141923', borderWidth: 2 }] },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '65%',
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12, font: { size: 11 } } },
+                    tooltip: { backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
+                        callbacks: { label: function(ctx) { var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0); var pct = ((ctx.parsed/total)*100).toFixed(1); return ctx.label+': '+ctx.parsed.toLocaleString()+' ('+pct+'%)'; } }
+                    }
                 }
             }
-        }
-    });
+        });
     }
 });
 </script>
