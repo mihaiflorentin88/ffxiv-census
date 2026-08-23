@@ -30,6 +30,18 @@
                 detect new player registrations, and periodically refresh existing character profiles. All requests
                 adhere to strict rate limiting and polite backoff policies to avoid impacting official infrastructure.
             </p>
+            <div
+                style="background: var(--bg-elevated); border-left: 3px solid var(--gold-light); border-radius: var(--radius-md); padding: 1rem 1.25rem; margin-top: 1.25rem;">
+                <p style="margin: 0; font-size: 0.92rem; color: var(--text-muted);">
+                    <strong style="color: var(--gold-light);">Profile Visibility:</strong> Some players choose to
+                    restrict their Lodestone profile visibility through Square Enix account settings. When a profile
+                    is set to private, the census cannot retrieve achievement data for that character — including
+                    activity timestamps and milestone progression. In these cases, the character may still appear in
+                    population counts (as their profile page remains discoverable), but achievement-dependent metrics
+                    such as active status and MSQ completion will be incomplete. Job levels and basic profile data
+                    are unaffected by this setting and are collected whenever the profile page is accessible.
+                </p>
+            </div>
         </div>
     </div>
 
@@ -90,7 +102,8 @@
                 <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
                     <span style="font-size: 1.5rem;">🏅</span>
                     <div>
-                        <strong style="color: var(--gold-light); font-size: 1.05rem;">Achievement ID 590: "My Little Chocobo"</strong>
+                        <strong style="color: var(--gold-light); font-size: 1.05rem;">Achievement ID 590: "My Little
+                            Chocobo"</strong>
                         <div style="font-size: 0.85rem; color: var(--text-dim);">Grand Company Questline &bull; Level 20
                             MSQ Milestone</div>
                     </div>
@@ -137,7 +150,8 @@
                             <td><strong>{{.Name}}</strong></td>
                             <td><em>{{.FinalQuest}}</em> ({{.Version}} Finale)</td>
                             <td class="text-right"><span
-                                    class="badge {{if ge .LevelCap 100}}badge-gold{{else}}badge-region{{end}}">Lv. {{.LevelCap}}</span></td>
+                                    class="badge {{if ge .LevelCap 100}}badge-gold{{else}}badge-region{{end}}">Lv.
+                                    {{.LevelCap}}</span></td>
                         </tr>
                         {{end}}
                     </tbody>
