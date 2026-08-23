@@ -25,7 +25,7 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	}
 	achievements := s.AchievementRepository()
 	if achievements == nil {
-		logging.Warn("container.census", "database driver unavailable, census service disabled")
+		logging.Warn("Failed to initialize census service", "component=census error=database driver unavailable")
 		return nil
 	}
 	svc := census.NewService(
@@ -54,7 +54,7 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	// Seed the milestone registry (idempotent) so achievement processing never
 	// runs against an empty registry.
 	if err := svc.SyncMilestones(context.Background()); err != nil {
-		logging.Error("container.census", fmt.Sprintf("failed to sync milestones: %v", err))
+		logging.Error("Failed to sync milestones", fmt.Sprintf("component=census error=%v", err))
 	}
 	s.domain.censusService = svc
 	return svc
@@ -82,12 +82,12 @@ func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 	}
 	repo := s.ProxyRepository()
 	if repo == nil {
-		logging.Warn("container.proxy_service", "database driver unavailable, proxy service disabled")
+		logging.Warn("Failed to initialize proxy service", "component=proxy_service error=database driver unavailable")
 		return nil
 	}
 	checker := s.ProxyChecker()
 	if checker == nil {
-		logging.Warn("container.proxy_service", "proxy checker unavailable")
+		logging.Warn("Failed to initialize proxy service", "component=proxy_service error=proxy checker unavailable")
 		return nil
 	}
 
@@ -126,7 +126,7 @@ func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 		providers = append(providers, p)
 	}
 	if len(providers) == 0 {
-		logging.Warn("container.proxy_service", "no proxy providers configured")
+		logging.Warn("No proxy providers configured", "component=proxy_service")
 	}
 
 	cfg := s.Config().Proxy

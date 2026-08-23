@@ -2,11 +2,11 @@ package metrics
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -64,6 +64,6 @@ func (c *client) send(metric string) {
 		return
 	}
 	if _, err := c.conn.Write([]byte(metric)); err != nil {
-		log.Printf("statsd send failed: %v", err)
+		logging.Error("Statsd send failed", fmt.Sprintf("%v", err))
 	}
 }

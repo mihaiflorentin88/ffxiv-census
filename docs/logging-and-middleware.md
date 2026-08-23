@@ -36,29 +36,85 @@ Injection:
   outside the container and `main`.
 - Constructors take `logger contract.Logger` as their last parameter. A `nil` logger is
   substituted with a discard logger, so forgetting injection is silent-and-safe.
-- Level policy: `Info` = one completed queue job (`worker.job_done` after all downstream
+- Level policy: `Info` = one completed queue job (`Job completed successfully` after all downstream
   publishes succeed) plus lifecycle/provider/proxy state; `Warn` = transient retry/fetch
   errors; `Error` = terminal failure; `Debug` = fetch/store/probe detail, per-ID sweep
-  probes, and `worker.job_start`. Debug is opt-in via `logging.level = "debug"`
+  probes, and `Processing job`. Debug is opt-in via `logging.level = "debug"`
   (`LOGGING_LEVEL=debug`); no new config keys were added. Per-ID ID-sweep logs and the
-  achievement `latestAchievement` diagnostic are guarded with `logger.Enabled(ctx, slog.LevelDebug)`
+  achievement milestone diagnostic are guarded with `logger.Enabled(ctx, slog.LevelDebug)`
   to avoid building slog attributes when Debug is disabled.
 
 ### Consumer log events (live)
 
 A running `consume` worker emits one line per processing moment, with the identifiers
-relevant to the event (IDs, names, worlds):
+relevant to the event (IDs, names, worlds). All messages are descriptive sentences;
+structured attributes carry the identifying context.
 
-| Handler | Events |
-|---|---|
-| `id-sweep` | `handler.id_sweep.start` (Debug, range), `handler.id_sweep.probe` (Debug, guarded, `not_found`), `handler.id_sweep.discovered` (Debug, guarded, `character_id`/`name`/`world`), `handler.id_sweep.done` (Debug, `discovered`) |
-| `character-census` | `handler.character_census` (Debug, `character_id`), `.fetched` (Debug, `name`/`world`/`fc_id`), `.stored` (Debug, `name`/`world`), `.deleted` (Debug), `.done` (Debug, `chained`) |
-| `achievement-census` | `handler.achievement_census` (Debug, `character_id`), `.fetched` (Debug, guarded, `earned`/`latest_id`/`latest_name`), `.done` (Debug, `milestones`/`private`) |
-| errors | `handler.<event>.fetch_error` (Warn), `handler.<event>.store_error` / `.process_error` (Error), plus the worker's `worker.job_retry` (Warn) and queue's `queue.retry` / `queue.failed` |
+#### Character Census (`character-census`)
 
-`worker.job_start` is Debug (event type only); `worker.job_done` is Info and emitted once
+| Level | Message | Attributes |
+|-------|---------|------------|
+| Debug | `Processing character census` | `character_id` |
+| Debug | `Fetched character from Lodestone` | `character_id`, `name`, `world`, `datacenter`, `duration` |
+| Debug | `Stored character in database` | `character_id`, `name`, `world` |
+| Debug | `Character census complete` | `character_id`, `name`, `world`, `chained_jobs` |
+| Debug | `Fetched character from Tomestone` | `character_id`, `name`, `world`, `datacenter`, `duration` |
+| Debug | `Character marked as deleted` | `character_id` |
+| Warn | `Failed to fetch character` | `character_id`, `source`, `error` |
+| Error | `Failed to store character` | `character_id`, `name`, `world`, `source`, `error` |
+| Warn | `Character not found on Tomestone, retrying with Lodestone` | `character_id` |
+
+#### Achievement Census (`achievement-census`)
+
+| Level | Message | Attributes |
+|-------|---------|------------|
+| Debug | `Processing achievement census` | `character_id` |
+| Info | `Waiting for Lodestone rate limiter` | `character_id` |
+| Warn | `Failed to query known milestones` | `character_id`, `error` |
+| Debug | `Skipping achievement census, all milestones already known` | `character_id`, `known_milestones` |
+| Warn | `Failed to fetch achievements from Lodestone` | `character_id`, `error`, `duration` |
+| Debug | `Achievements are private` | `character_id` |
+| Error | `Failed to process milestone results` | `character_id`, `error` |
+| Debug | `Achievement census complete` | `character_id`, `milestones`, `requests`, `private`, `duration` |
+
+#### ID Sweep (`id-sweep`)
+
+| Level | Message | Attributes |
+|-------|---------|------------|
+| Debug | `Scanning ID range` | `from`, `to`, `count` |
+| Debug | `Discovered new character` | `character_id`, `name`, `world`, `source` |
+| Debug | `Character not found` | `character_id`, `source` |
+| Debug | `ID range scan complete` | `from`, `to`, `discovered` |
+| Warn | `Failed to fetch character` | `character_id`, `source`, `error` |
+| Error | `Failed to store character` | `character_id`, `name`, `world`, `source`, `error` |
+| Warn | `Character not found on Tomestone, retrying with Lodestone` | `character_id` |
+
+#### Worker
+
+| Level | Message | Attributes |
+|-------|---------|------------|
+| Info | `Worker started` | `event_types`, `concurrency` |
+| Error | `No handler registered for event type` | `event_type` |
+| Debug | `Processing job` | `event_type` |
+| Info | `Job completed successfully` | `event_type`, `duration` |
+| Warn | `Job failed, retrying` | `event_type`, `error`, `attempt` |
+| Error | `Failed to publish follow-up job` | `event_type`, `error` |
+
+#### Queue (RabbitMQ)
+
+| Level | Message | Attributes |
+|-------|---------|------------|
+| Warn | `Discarding permanently failed message` | `event_type`, `reason`, `attempts` |
+| Error | `Failed to republish failed message` | `event_type`, `error` |
+| Info | `Republished failed message for retry` | `event_type`, `attempt` |
+| Warn | `Message permanently failed after max retries` | `event_type`, `attempts` |
+| Error | `Failed to publish message to dead letter queue` | `event_type`, `error` |
+| Warn | `Retrying message publish` | `event_type`, `attempt`, `error` |
+| Error | `Failed to republish message after retry` | `event_type`, `error` |
+
+`Processing job` is Debug (event type only); `Job completed successfully` is Info and emitted once
 per fully successful job after all downstream publishes succeed. The full fetch → store →
-complete flow is visible at Debug level; at Info level only one `worker.job_done` line
-appears per completed job. Per-ID sweep probes and the achievement `latestAchievement`
+complete flow is visible at Debug level; at Info level only one `Job completed successfully` line
+appears per completed job. Per-ID sweep probes and the achievement milestone
 diagnostic are guarded with `logger.Enabled(ctx, slog.LevelDebug)` to avoid building
 slog attributes when Debug is disabled.

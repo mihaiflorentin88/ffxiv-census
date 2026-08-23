@@ -25,8 +25,6 @@ type CharacterProfile struct {
 	World           string
 	Datacenter      string
 	Gender          uint8
-	AvatarURL       string
-	PortraitURL     string
 	Bio             string
 	Race            string
 	Tribe           string

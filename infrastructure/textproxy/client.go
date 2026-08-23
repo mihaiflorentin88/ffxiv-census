@@ -44,7 +44,7 @@ func (c *Client) FetchProxies(ctx context.Context, emit func(contract.ProxyRecor
 			if errors.Is(err, errEmitFailed) {
 				return err
 			}
-			logging.Warn(c.name, fmt.Sprintf("failed to fetch %s proxies from %s: %v", protocol, url, err))
+			logging.Warn("Failed to fetch proxies from provider", fmt.Sprintf("provider=%s url=%s error=%v", c.name, url, err))
 			continue
 		}
 	}
@@ -77,13 +77,13 @@ func (c *Client) fetchFromURL(ctx context.Context, url, protocol string, emit fu
 
 			host, portStr, err := net.SplitHostPort(line)
 			if err != nil {
-				logging.Warn(c.name, fmt.Sprintf("skipping malformed line %q: %v", line, err))
+				logging.Warn("Skipping malformed proxy line", fmt.Sprintf("provider=%s line=%q error=%v", c.name, line, err))
 				continue
 			}
 
 			var port int
 			if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
-				logging.Warn(c.name, fmt.Sprintf("skipping invalid port in %q: %v", line, err))
+				logging.Warn("Skipping invalid proxy port", fmt.Sprintf("provider=%s line=%q error=%v", c.name, line, err))
 				continue
 			}
 

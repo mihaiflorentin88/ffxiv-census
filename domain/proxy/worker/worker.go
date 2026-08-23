@@ -59,18 +59,18 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}
 	}
 
-	w.logger.InfoContext(ctx, "worker.start", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
+	w.logger.InfoContext(ctx, "Proxy worker started", slog.Any("event_types", eventTypes), slog.Int("concurrency", concurrency))
 
 	processJob := func(ctx context.Context, job contract.QueueJob) error {
 		h, ok := w.handlers.Get(job.Type)
 		if !ok {
-			w.logger.ErrorContext(ctx, "worker.missing_handler", slog.String("event_type", job.Type))
+			w.logger.ErrorContext(ctx, "No handler registered for event type", slog.String("event_type", job.Type))
 			return fmt.Errorf("no handler registered for event %s", job.Type)
 		}
 
 		start := time.Now()
 		w.logger.InfoContext(
-			ctx, "worker.job_start",
+			ctx, "Processing proxy job",
 			slog.String("event_type", job.Type),
 		)
 
@@ -88,26 +88,25 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 		if err != nil {
 			w.logger.WarnContext(
-				ctx, "worker.job_retry",
+				ctx, "Proxy job failed, retrying",
 				slog.String("event_type", job.Type),
-				slog.Duration("duration", time.Since(start)),
 				slog.Any("error", err),
+				slog.Duration("duration", time.Since(start)),
 			)
 			return err
 		}
 
 		w.logger.InfoContext(
-			ctx, "worker.job_done",
+			ctx, "Proxy job completed",
 			slog.String("event_type", job.Type),
 			slog.Duration("duration", time.Since(start)),
-			slog.Int("chained", len(next)),
 		)
 
 		// Publish downstream jobs individually.
 		for _, nextJob := range next {
 			if pubErr := w.queue.Publish(ctx, nextJob); pubErr != nil {
 				w.logger.ErrorContext(
-					ctx, "worker.publish_error",
+					ctx, "Failed to publish follow-up proxy job",
 					slog.String("event_type", nextJob.Type),
 					slog.Any("error", pubErr),
 				)

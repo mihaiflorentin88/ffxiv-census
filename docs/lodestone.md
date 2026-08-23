@@ -85,6 +85,20 @@ The upstream godestone library doesn't support proxies. Our fork (`github.com/mi
 
 **Why AllowURLRevisit:** Colly tracks visited URLs in a per-collector store. When a request times out (10s), the caller creates a new collector for the retry. But the first collector's async goroutine may still be running — if it visits the same URL after the retry's collector has already visited it, colly returns `ErrAlreadyVisited`. Since each `FetchCharacterAchievements` call creates a fresh collector with no shared state, `AllowURLRevisit` is safe and prevents this race.
 
+## HTML Sanitization (`stripTags`)
+
+Lodestone pages wrap field values (character names, worlds, FC names) in HTML tags (`<a>`, `<i>`, etc.). The client applies a `stripTags` helper to every text value extracted by `extractTextBetween` and `extractAllTextBetween`:
+
+1. Removes all HTML tags via regex `<[^>]*>`.
+2. Decodes common HTML entities: `&#39;` → `'`, `&amp;` → `&`, `&lt;` → `<`, `&gt;` → `>`, `&quot;` → `"`, `&nbsp;` → space.
+3. Collapses multiple whitespace into single spaces and trims.
+
+This ensures fields like `Name`, `World`, `Bio`, `GrandCompany`, `FreeCompanyName`, `Race`, and `Tribe` contain clean text regardless of Lodestone's HTML structure. Attribute-based extractors (`extractAttr`, `extractAlt`, `extractHref`) read tag attributes directly and are not affected.
+
+## Removed Fields
+
+`avatar_url` and `portrait_url` have been removed from the character profile. These fields are no longer extracted from Lodestone or stored in the database (see migration `00013_drop_avatar_portrait`).
+
 ## Container wiring
 
 `container.Load.LodestoneClient()` lazily builds the adapter from `[lodestone]` config (which has defaults, so the accessor always works) and caches it. Like the other accessors, it degrades to a logged `nil` only if config is missing or construction fails.

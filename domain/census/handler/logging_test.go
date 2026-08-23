@@ -34,7 +34,7 @@ func TestCharacterCensus_LogsFetchAndStore(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 	logs := buf.String()
-	for _, want := range []string{"handler.character_census.fetched", "handler.character_census.stored", "character_id=42", "Tataru Taru", "Ultros"} {
+	for _, want := range []string{"Fetched character from Lodestone", "Stored character in database", "character_id=42", "Tataru Taru", "Ultros"} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}
@@ -54,7 +54,7 @@ func TestCharacterCensus_LogsFetchError(t *testing.T) {
 		t.Fatal("expected error on fetch failure")
 	}
 	logs := buf.String()
-	for _, want := range []string{"handler.character_census.fetch_error", "character_id=1", "boom"} {
+	for _, want := range []string{"Failed to fetch character", "character_id=1", "boom"} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}
@@ -84,7 +84,7 @@ func TestAchievementCensus_LogsFetchedLatest(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 	logs := buf.String()
-	for _, want := range []string{"handler.achievement_census.complete", "milestones=1"} {
+	for _, want := range []string{"Achievement census complete", "milestones=1"} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}
@@ -109,19 +109,19 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	}
 	logs := buf.String()
 	for _, want := range []string{
-		"handler.id_sweep.start",
+		"Scanning ID range",
 		"from=9",
 		"to=11",
 		"count=3",
-		"handler.id_sweep.probe",
+		"Character not found",
 		"character_id=9",
-		"status=not_found",
-		"handler.id_sweep.discovered",
+		"source=lodestone",
+		"Discovered new character",
 		"character_id=10",
 		"Alisaie Leveilleur",
 		"Louisoix",
 		"character_id=11",
-		"handler.id_sweep.done",
+		"ID range scan complete",
 		"discovered=1",
 	} {
 		if !strings.Contains(logs, want) {

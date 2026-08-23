@@ -85,7 +85,7 @@ func publishAll(q contract.Queue, logger contract.Logger, ctx context.Context, j
 			return i, fmt.Errorf("publish %q job %d of %d: %w", job.Type, i+1, len(jobs), err)
 		}
 	}
-	logger.InfoContext(ctx, "publish.enqueued", slog.Int("count", len(jobs)))
+	logger.InfoContext(ctx, "Published jobs to queue", slog.Int("count", len(jobs)))
 	return len(jobs), nil
 }
 
@@ -126,7 +126,7 @@ var publishIDSweepCmd = &cobra.Command{
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				container.Load.Logger().ErrorContext(cmd.Context(), "queue.close_error", slog.Any("error", err))
+				container.Load.Logger().ErrorContext(cmd.Context(), "Failed to close queue connection", slog.Any("error", err))
 			}
 		}()
 		logger := container.Load.Logger()
@@ -150,7 +150,7 @@ var publishIDSweepCmd = &cobra.Command{
 						return fmt.Errorf("find id gaps: %w", err)
 					}
 					if len(gaps) == 0 {
-						logger.InfoContext(cmd.Context(), "publish.id_sweep_gaps.none_found", slog.Uint64("max_id", uint64(maxID)))
+						logger.InfoContext(cmd.Context(), "No ID gaps found to fill")
 						return nil
 					}
 					jobs = buildGapSweepJobs(gaps, chunkSize, source)
@@ -174,10 +174,9 @@ var publishIDSweepCmd = &cobra.Command{
 				return err
 			}
 			logger.InfoContext(
-				cmd.Context(), "publish.id_sweep",
-				slog.Bool("fill_gaps", fillGaps),
-				slog.Uint64("chunk_size", uint64(chunkSize)),
-				slog.String("source", source),
+				cmd.Context(), "Published ID sweep jobs",
+				slog.Uint64("from", uint64(from)),
+				slog.Uint64("to", uint64(to)),
 				slog.Int("count", len(jobs)),
 			)
 			return nil
@@ -191,14 +190,13 @@ var publishIDSweepCmd = &cobra.Command{
 		defer stop()
 
 		logger.InfoContext(
-			ctx, "publish.id_sweep_daemon.started",
+			ctx, "ID sweep daemon started",
+			slog.Int("chunk_size", int(chunkSize)),
 			slog.Duration("interval", daemonInterval),
-			slog.Bool("fill_gaps", fillGaps),
-			slog.String("source", source),
 		)
 
 		if err := publishBatch(); err != nil {
-			logger.WarnContext(ctx, "publish.id_sweep_daemon.initial_sweep_error", slog.Any("error", err))
+			logger.WarnContext(ctx, "ID sweep daemon initial sweep failed", slog.Any("error", err))
 		}
 
 		ticker := time.NewTicker(daemonInterval)
@@ -207,11 +205,11 @@ var publishIDSweepCmd = &cobra.Command{
 		for {
 			select {
 			case <-ctx.Done():
-				logger.InfoContext(ctx, "publish.id_sweep_daemon.stopped")
+				logger.InfoContext(ctx, "ID sweep daemon stopped")
 				return nil
 			case <-ticker.C:
 				if err := publishBatch(); err != nil {
-					logger.WarnContext(ctx, "publish.id_sweep_daemon.publish_error", slog.Any("error", err))
+					logger.WarnContext(ctx, "ID sweep daemon publish failed", slog.Any("error", err))
 				}
 			}
 		}
@@ -256,18 +254,16 @@ var publishCharacterCensusCmd = &cobra.Command{
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				container.Load.Logger().ErrorContext(cmd.Context(), "queue.close_error", slog.Any("error", err))
+				container.Load.Logger().ErrorContext(cmd.Context(), "Failed to close queue connection", slog.Any("error", err))
 			}
 		}()
 		if _, err := publishAll(q, container.Load.Logger(), cmd.Context(), jobs); err != nil {
 			return err
 		}
 		container.Load.Logger().InfoContext(
-			cmd.Context(), "publish.character_census",
-			slog.String("older_than", olderThan.String()),
-			slog.Int("limit", limit),
-			slog.Int("stale", len(stale)),
+			cmd.Context(), "Published character census jobs",
 			slog.Int("count", len(jobs)),
+			slog.Int("limit", limit),
 		)
 		return nil
 	},
@@ -286,7 +282,7 @@ var publishAchievementCensusCmd = &cobra.Command{
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				container.Load.Logger().ErrorContext(cmd.Context(), "queue.close_error", slog.Any("error", err))
+				container.Load.Logger().ErrorContext(cmd.Context(), "Failed to close queue connection", slog.Any("error", err))
 			}
 		}()
 
@@ -296,7 +292,7 @@ var publishAchievementCensusCmd = &cobra.Command{
 				return err
 			}
 			container.Load.Logger().InfoContext(
-				cmd.Context(), "publish.achievement_census",
+				cmd.Context(), "Published achievement census jobs",
 				slog.Uint64("character_id", uint64(charID)),
 			)
 			return nil
@@ -323,10 +319,9 @@ var publishAchievementCensusCmd = &cobra.Command{
 			return err
 		}
 		container.Load.Logger().InfoContext(
-			cmd.Context(), "publish.achievement_census",
-			slog.Int("limit", limit),
-			slog.Int("found", len(chars)),
+			cmd.Context(), "Published achievement census jobs",
 			slog.Int("count", len(jobs)),
+			slog.Int("limit", limit),
 		)
 		return nil
 	},

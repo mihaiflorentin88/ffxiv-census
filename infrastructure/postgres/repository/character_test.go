@@ -28,8 +28,6 @@ func TestCharacterRepository_UpsertAndGet(t *testing.T) {
 		GrandCompany:        "Maelstrom",
 		FreeCompanyID:       &fcID,
 		FreeCompanyName:     &fcName,
-		AvatarURL:           "https://avatar.url",
-		PortraitURL:         "https://portrait.url",
 		Bio:                 "Accounting master",
 		ActiveJob:           "MIN",
 		ItemLevel:           650,

@@ -33,11 +33,11 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return nil, fmt.Errorf("achievement-census payload: %w", err)
 	}
-	h.logger.DebugContext(ctx, "handler.achievement_census", slog.Uint64("character_id", uint64(p.CharacterID)))
+	h.logger.DebugContext(ctx, "Processing achievement census", slog.Uint64("character_id", uint64(p.CharacterID)))
 
 	// Wait for Lodestone if rate-limited (blocks until cooldown expires).
 	if h.rateLimiter != nil && !h.rateLimiter.IsAvailable(contract.ProviderLodestone) {
-		h.logger.InfoContext(ctx, "handler.achievement_census.waiting_for_lodestone", slog.Uint64("character_id", uint64(p.CharacterID)))
+		h.logger.InfoContext(ctx, "Waiting for Lodestone rate limiter", slog.Uint64("character_id", uint64(p.CharacterID)))
 		if err := h.rateLimiter.WaitUntilAvailable(ctx, contract.ProviderLodestone); err != nil {
 			return nil, fmt.Errorf("achievement-census %d: waiting for lodestone: %w", p.CharacterID, err)
 		}
@@ -47,7 +47,7 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	knownMilestones, err := h.census.ListCharacterMilestones(ctx, p.CharacterID)
 	if err != nil {
 		// Log warning but continue — DB check is optimization, not requirement.
-		h.logger.WarnContext(ctx, "handler.achievement_census.milestone_query_failed", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
+		h.logger.WarnContext(ctx, "Failed to query known milestones", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 	}
 
 	// Get milestone IDs from config.
@@ -76,9 +76,9 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		}
 
 		if allMilestonesKnown && freshEnough {
-			h.logger.DebugContext(ctx, "handler.achievement_census.skipped",
+			h.logger.DebugContext(ctx, "Skipping achievement census, all milestones already known",
 				slog.Uint64("character_id", uint64(p.CharacterID)),
-				slog.String("reason", "all_milestones_known_and_fresh"))
+				slog.Int("known_milestones", len(knownMilestones)))
 			return nil, nil
 		}
 	}
@@ -92,17 +92,17 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	start := time.Now()
 	summary, err := h.lodestone.FetchAchievements(ctx, p.CharacterID, milestoneIDs)
 	if err != nil {
-		h.logger.WarnContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
+		h.logger.WarnContext(ctx, "Failed to fetch achievements from Lodestone", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err), slog.Duration("duration", time.Since(start)))
 		return nil, fmt.Errorf("achievement-census fetch %d: %w", p.CharacterID, err)
 	}
 
 	if summary != nil && summary.Private {
-		h.logger.DebugContext(ctx, "handler.achievement_census.private", slog.Uint64("character_id", uint64(p.CharacterID)))
+		h.logger.DebugContext(ctx, "Achievements are private", slog.Uint64("character_id", uint64(p.CharacterID)))
 	}
 
 	milestones, err := h.census.ProcessMilestoneResults(ctx, p.CharacterID, summary)
 	if err != nil {
-		h.logger.ErrorContext(ctx, "handler.achievement_census.process_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
+		h.logger.ErrorContext(ctx, "Failed to process milestone results", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 		return nil, fmt.Errorf("achievement-census process %d: %w", p.CharacterID, err)
 	}
 
@@ -116,7 +116,7 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		}
 	}
 
-	h.logger.DebugContext(ctx, "handler.achievement_census.complete",
+	h.logger.DebugContext(ctx, "Achievement census complete",
 		slog.Uint64("character_id", uint64(p.CharacterID)),
 		slog.Int("milestones", len(milestones)),
 		slog.Int("requests", requests),

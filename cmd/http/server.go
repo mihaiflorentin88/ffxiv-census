@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/pprof"
 	"runtime"
@@ -49,7 +48,7 @@ func StartServer(ctx context.Context, port int, poolSize int, certFile, keyFile 
 		startPprofServer()
 	}
 
-	logging.Info("http.server", fmt.Sprintf("listening on http://0.0.0.0:%d", port))
+	logging.Info("HTTP server started", fmt.Sprintf("listening on http://0.0.0.0:%d", port))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -95,6 +94,7 @@ func initLoggingMiddleware(mw *middleware.Middleware) {
 		mw.Register(middleware.LoggingColored)
 	}
 }
+
 func initMetricsMiddleWare(mw *middleware.Middleware) {
 	statsd := container.Load.Statsd()
 	registry := container.Load.PrometheusRegistry()
@@ -102,7 +102,7 @@ func initMetricsMiddleWare(mw *middleware.Middleware) {
 }
 
 func startPprofServer() {
-	log.Println("🟢 pprof listening on http://localhost:6060")
+	logging.Info("Pprof server started", "listening on http://localhost:6060")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", http.HandlerFunc(pprof.Index))
 	mux.HandleFunc("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
@@ -111,7 +111,7 @@ func startPprofServer() {
 	mux.HandleFunc("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
 	go func() {
 		if err := http.ListenAndServe("localhost:6060", mux); err != nil {
-			log.Printf("🔴 pprof server error: %v", err)
+			logging.Error("Pprof server error", fmt.Sprintf("%v", err))
 		}
 	}()
 }

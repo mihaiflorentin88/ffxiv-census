@@ -60,9 +60,9 @@ func (c *RequestRateController) RecordRateLimit(logger contract.Logger, ctx cont
 	}
 	c.limiter.SetLimit(rate.Limit(newRate))
 	logger.InfoContext(
-		ctx, "tomestone.rate_limit",
-		slog.Int("consecutive_429s", c.consecutive429s),
+		ctx, "Tomestone rate limit hit, reducing request rate",
 		slog.Float64("new_rate", newRate),
+		slog.Int("consecutive_429s", c.consecutive429s),
 	)
 	return c.consecutive429s
 }
@@ -87,9 +87,8 @@ func (c *RequestRateController) RecordSuccess(logger contract.Logger, ctx contex
 		}
 		c.limiter.SetLimit(rate.Limit(newRate))
 		logger.InfoContext(
-			ctx, "tomestone.rate_recovery",
-			slog.Int("consecutive_429s", c.consecutive429s),
-			slog.Float64("recovered_rate", newRate),
+			ctx, "Tomestone rate recovered",
+			slog.Float64("new_rate", newRate),
 		)
 	}
 }

@@ -29,8 +29,6 @@ type TomestoneCharacter struct {
 	FreeCompanyID   *string
 	FreeCompanyName *string
 	Bio             string
-	AvatarURL       string
-	PortraitURL     string
 	ActiveJob       string
 	Jobs            []TomestoneClassJob
 	Gear            []TomestoneGear

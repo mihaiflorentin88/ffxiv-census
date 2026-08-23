@@ -63,19 +63,11 @@ func (d *Driver) initialise(ctx context.Context) error {
 
 No separate migration step is needed. The schema is always current when the process starts.
 
-### Manual operations
+### Migration log
 
-The `migrate` CLI command provides manual control:
-
-```bash
-# Apply all pending migrations (same as automatic)
-./bin/ffxiv-census migrate --direction up
-
-# Roll back ALL migrations (destructive — drops everything)
-./bin/ffxiv-census migrate --direction down
-```
-
-`--direction down` calls `goose.DownTo(0)` — it rolls back every migration to version 0. This is destructive and intended for development/testing only.
+| Version | Description |
+|---------|-------------|
+| `00013` | Drops `avatar_url` and `portrait_url` columns from `characters`. These fields are no longer extracted from Lodestone or stored. Down migration re-adds both columns as `TEXT`.
 
 ## The DatabaseDriver Contract
 

@@ -346,7 +346,7 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	}
 
-	c.logger.DebugContext(ctx, "tomestone.request", slog.String("url", rawURL))
+	c.logger.DebugContext(ctx, "Fetching character from Tomestone", slog.String("url", rawURL))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -358,14 +358,14 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 	case http.StatusOK:
 		c.requestRate.RecordSuccess(c.logger, ctx)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxTomestoneErrorBytes))
-		c.logger.ErrorContext(ctx, "tomestone.unauthenticated", slog.Int("status", resp.StatusCode), slog.String("body", string(errBody)))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxTomestoneErrorBytes))
+		c.logger.ErrorContext(ctx, "Tomestone API authentication failed", slog.Int("status", resp.StatusCode))
 		return nil, contract.ErrTomestoneUnauthenticated
 	case http.StatusNotFound:
-		c.logger.DebugContext(ctx, "tomestone.not_found", slog.String("url", rawURL))
+		c.logger.DebugContext(ctx, "Character not found on Tomestone", slog.String("url", rawURL))
 		return nil, contract.ErrCharacterNotFound
 	case http.StatusTooManyRequests:
-		consecutive := c.requestRate.RecordRateLimit(c.logger, ctx)
+		_ = c.requestRate.RecordRateLimit(c.logger, ctx)
 
 		retryAfterHeader := resp.Header.Get("Retry-After")
 		var retryAfterDuration time.Duration
@@ -386,9 +386,8 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		}
 
 		c.logger.WarnContext(
-			ctx, "tomestone.rate_limited",
-			slog.Int("status", resp.StatusCode),
-			slog.Int("consecutive_429s", consecutive),
+			ctx, "Rate limited by Tomestone, backing off",
+			slog.String("url", rawURL),
 			slog.Duration("retry_after", retryAfterDuration),
 		)
 
@@ -404,7 +403,7 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		return nil, errors.New("tomestone api rate limit exceeded (HTTP 429)")
 	default:
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxTomestoneErrorBytes))
-		c.logger.ErrorContext(ctx, "tomestone.error", slog.Int("status", resp.StatusCode), slog.String("body", string(errBody)))
+		c.logger.ErrorContext(ctx, "Tomestone API error", slog.String("url", rawURL), slog.Int("status", resp.StatusCode), slog.Any("error", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(errBody))))
 		return nil, fmt.Errorf("tomestone api error: HTTP %d: %s", resp.StatusCode, string(errBody))
 	}
 
@@ -428,7 +427,7 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 		server = charData.World
 	}
 	if charData.Name == "" && server == "" {
-		c.logger.DebugContext(ctx, "tomestone.empty_character", slog.Uint64("character_id", uint64(charData.ID)))
+		c.logger.DebugContext(ctx, "Empty character response from Tomestone", slog.String("character_id", fmt.Sprintf("%d", charData.ID)))
 		return nil, contract.ErrCharacterNotFound
 	}
 
@@ -452,15 +451,6 @@ func toContractCharacter(j *jsonCharacter) *contract.TomestoneCharacter {
 	if bio == "" {
 		bio = j.Introduction
 	}
-	avatar := j.Avatar
-	if avatar == "" {
-		avatar = j.AvatarURL
-	}
-	portrait := j.Portrait
-	if portrait == "" {
-		portrait = j.PortraitURL
-	}
-
 	var genderStr string
 	switch g := j.Gender.(type) {
 	case string:
@@ -524,8 +514,6 @@ func toContractCharacter(j *jsonCharacter) *contract.TomestoneCharacter {
 		FreeCompanyID:   j.FreeCompanyID,
 		FreeCompanyName: j.FreeCompanyName,
 		Bio:             bio,
-		AvatarURL:       avatar,
-		PortraitURL:     portrait,
 		ActiveJob:       j.ActiveJob,
 		Jobs:            contractJobs,
 		Gear:            contractGear,

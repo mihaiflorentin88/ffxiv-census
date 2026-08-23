@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -44,16 +46,16 @@ func (s *Service) Providers() []contract.ProxyProvider {
 // ProcessNewProxy inserts a discovered proxy and tests it.
 // Returns nil if the proxy already exists (dedup).
 func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port int, country, anonymity *string, source string, uptimePercent *float64) error {
-	s.logger.InfoContext(ctx, "proxy.process_new.start", "protocol", protocol, "ip", ip, "port", port, "source", source)
+	s.logger.InfoContext(ctx, "Processing new proxy", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", protocol, ip, port)))
 
 	// Pre-insert existence check (read-only, no database write).
 	exists, err := s.repo.Exists(ctx, protocol, ip, port)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "proxy.process_new.exists_failed", "protocol", protocol, "ip", ip, "port", port, "error", err)
+		s.logger.ErrorContext(ctx, "Failed to check if proxy exists", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", protocol, ip, port)), slog.Any("error", err))
 		return err
 	}
 	if exists {
-		s.logger.InfoContext(ctx, "proxy.process_new.skipped_exists", "protocol", protocol, "ip", ip, "port", port)
+		s.logger.InfoContext(ctx, "Proxy already exists, skipping", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", protocol, ip, port)))
 		return nil
 	}
 
@@ -69,16 +71,16 @@ func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port
 
 	id, inserted, err := s.repo.InsertIfAbsent(ctx, rec)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "proxy.process_new.insert_failed", "ip", ip, "port", port, "error", err)
+		s.logger.ErrorContext(ctx, "Failed to insert new proxy", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", protocol, ip, port)), slog.Any("error", err))
 		return err
 	}
 	if !inserted {
 		// Concurrent delivery race: another process inserted this tuple.
-		s.logger.InfoContext(ctx, "proxy.process_new.skipped_exists", "protocol", protocol, "ip", ip, "port", port)
+		s.logger.InfoContext(ctx, "Proxy already exists, skipping", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", protocol, ip, port)))
 		return nil
 	}
 
-	s.logger.InfoContext(ctx, "proxy.process_new.inserted", "proxy_id", id, "ip", ip, "port", port, "testing", true)
+	s.logger.InfoContext(ctx, "New proxy added", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", protocol, ip, port)))
 
 	// Fetch the newly inserted proxy by ID.
 	p, err := s.repo.Get(ctx, id)
@@ -96,7 +98,7 @@ func (s *Service) ProcessNewProxy(ctx context.Context, protocol, ip string, port
 // The caller provides the already-selected ProxyRecord directly, avoiding
 // a redundant repository Get round trip.
 func (s *Service) ProcessScanProxy(ctx context.Context, p *contract.ProxyRecord) error {
-	s.logger.InfoContext(ctx, "proxy.process_scan.start", "proxy_id", p.ID, "ip", p.IP, "port", p.Port, "protocol", p.Protocol, "current_status", p.Status, "fail_count", p.FailCount)
+	s.logger.InfoContext(ctx, "Starting proxy scan", slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", p.Protocol, p.IP, p.Port)))
 
 	return s.processProxyCheck(ctx, p)
 }
@@ -127,10 +129,9 @@ func (s *Service) processProxyCheck(ctx context.Context, p *contract.ProxyRecord
 		if err := s.repo.UpdateStatus(ctx, p.ID, newStatus, nil, newFailCount, p.LastAliveAt); err != nil {
 			return err
 		}
-		s.logger.InfoContext(ctx, "proxy.check_failed",
-			"proxy_id", p.ID, "protocol", p.Protocol, "ip", p.IP, "port", p.Port, "source", p.Source,
-			"previous_status", p.Status, "new_status", newStatus, "fail_count", newFailCount,
-			"last_alive_at", p.LastAliveAt, "error", err)
+		s.logger.InfoContext(ctx, "Proxy check failed",
+			slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", p.Protocol, p.IP, p.Port)),
+			slog.Any("error", err))
 		return nil
 	}
 
@@ -138,8 +139,8 @@ func (s *Service) processProxyCheck(ctx context.Context, p *contract.ProxyRecord
 	if err := s.repo.UpdateStatus(ctx, p.ID, contract.ProxyStatusActive, &latency, 0, &now); err != nil {
 		return err
 	}
-	s.logger.InfoContext(ctx, "proxy.check_passed",
-		"proxy_id", p.ID, "protocol", p.Protocol, "ip", p.IP, "port", p.Port, "source", p.Source,
-		"previous_status", p.Status, "latency_ms", latency)
+	s.logger.InfoContext(ctx, "Proxy check passed",
+		slog.String("proxy_address", fmt.Sprintf("%s://%s:%d", p.Protocol, p.IP, p.Port)),
+		slog.Int("duration_ms", latency))
 	return nil
 }

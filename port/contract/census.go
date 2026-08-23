@@ -19,8 +19,6 @@ type CharacterRecord struct {
 	GrandCompany        string
 	FreeCompanyID       *string
 	FreeCompanyName     *string
-	AvatarURL           string
-	PortraitURL         string
 	Bio                 string
 	ActiveJob           string
 	ItemLevel           int

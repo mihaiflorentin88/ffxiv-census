@@ -20,7 +20,7 @@ func NewCharacterRepository(driver contract.DatabaseDriver) contract.CharacterRe
 }
 
 const characterColumns = `id, name, world, datacenter, region, race, tribe, gender, grand_company,
-		        fc_id, fc_name, avatar_url, portrait_url, bio, active_job, item_level,
+		        fc_id, fc_name, bio, active_job, item_level,
 		        achievements_private, latest_achievement_id, latest_achievement_at,
 		        first_seen_at, last_census_at, deleted_at`
 
@@ -37,10 +37,10 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 
 	query := `INSERT INTO characters (
 			id, name, world, datacenter, region, race, tribe, gender, grand_company,
-			fc_id, fc_name, avatar_url, portrait_url, bio, active_job, item_level,
+			fc_id, fc_name, bio, active_job, item_level,
 			achievements_private, latest_achievement_id, latest_achievement_at,
 			first_seen_at, last_census_at, deleted_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name,
 			world = excluded.world,
@@ -52,8 +52,6 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 			grand_company = excluded.grand_company,
 			fc_id = excluded.fc_id,
 			fc_name = excluded.fc_name,
-			avatar_url = excluded.avatar_url,
-			portrait_url = excluded.portrait_url,
 			bio = excluded.bio,
 			active_job = excluded.active_job,
 			item_level = excluded.item_level,
@@ -66,7 +64,7 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 	if _, err := tx.ExecContext(ctx, query,
 		rec.ID, rec.Name, rec.World, rec.Datacenter, rec.Region, rec.Race, rec.Tribe,
 		rec.Gender, rec.GrandCompany, nullableString(rec.FreeCompanyID), nullableString(rec.FreeCompanyName),
-		rec.AvatarURL, rec.PortraitURL, rec.Bio, rec.ActiveJob, rec.ItemLevel,
+		rec.Bio, rec.ActiveJob, rec.ItemLevel,
 		boolInt(rec.AchievementsPrivate), nullableUint32(rec.LatestAchievementID), nullableTime(rec.LatestAchievementAt),
 		rec.FirstSeenAt, nullableTime(rec.LastCensusAt), nullableTime(rec.DeletedAt)); err != nil {
 		return fmt.Errorf("character upsert: %w", err)
@@ -537,7 +535,7 @@ func (r *CharacterRepository) MaxID(ctx context.Context) (uint32, error) {
 func scanCharacter(row rowScanner) (*contract.CharacterRecord, error) {
 	var c contract.CharacterRecord
 	var race, tribe, grandCompany, fcID, fcName sql.NullString
-	var avatarURL, portraitURL, bio, activeJob sql.NullString
+	var bio, activeJob sql.NullString
 	var itemLevel sql.NullInt64
 	var achievementsPrivate int
 	var latestAchievementID sql.NullInt64
@@ -547,7 +545,7 @@ func scanCharacter(row rowScanner) (*contract.CharacterRecord, error) {
 	err := row.Scan(
 		&c.ID, &c.Name, &c.World, &c.Datacenter, &c.Region,
 		&race, &tribe, &c.Gender, &grandCompany,
-		&fcID, &fcName, &avatarURL, &portraitURL, &bio, &activeJob, &itemLevel,
+		&fcID, &fcName, &bio, &activeJob, &itemLevel,
 		&achievementsPrivate, &latestAchievementID, &latestAchievementAt,
 		&firstSeenAt, &lastCensusAt, &deletedAt,
 	)
@@ -560,8 +558,6 @@ func scanCharacter(row rowScanner) (*contract.CharacterRecord, error) {
 	c.GrandCompany = grandCompany.String
 	c.FreeCompanyID = sqlStringPtr(fcID)
 	c.FreeCompanyName = sqlStringPtr(fcName)
-	c.AvatarURL = avatarURL.String
-	c.PortraitURL = portraitURL.String
 	c.Bio = bio.String
 	c.ActiveJob = activeJob.String
 	if itemLevel.Valid {

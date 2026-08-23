@@ -48,7 +48,7 @@ func publishDiscoveredProxies(ctx context.Context, q contract.Queue, repo contra
 	totalErrors := 0
 
 	for _, p := range providers {
-		logger.InfoContext(ctx, "proxy.discover.fetching", "provider", p.Name())
+		logger.InfoContext(ctx, "Fetching proxies from provider", slog.String("provider", p.Name()))
 		start := time.Now()
 		publishedForProvider := 0
 		skippedExistingForProvider := 0
@@ -83,20 +83,20 @@ func publishDiscoveredProxies(ctx context.Context, q contract.Queue, repo contra
 		})
 		if err != nil {
 			if errors.Is(err, errDiscoveryLimitReached) {
-				logger.InfoContext(ctx, "proxy.discover.limit_reached", "provider", p.Name(), "published", publishedForProvider, "skipped_existing", skippedExistingForProvider, "total", totalPublished, "duration", time.Since(start))
+				logger.InfoContext(ctx, "Proxy discovery limit reached", slog.String("provider", p.Name()), slog.Int("limit", limit), slog.Duration("duration", time.Since(start)))
 				return totalPublished, nil
 			}
 			if errors.Is(err, errLookupFailed) {
-				logger.ErrorContext(ctx, "proxy.discover.lookup_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+				logger.ErrorContext(ctx, "Failed to lookup proxies", slog.String("provider", p.Name()), slog.Any("error", err))
 			} else if errors.Is(err, errPublishFailed) {
-				logger.ErrorContext(ctx, "proxy.discover.publish_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+				logger.ErrorContext(ctx, "Failed to publish proxy job", slog.String("provider", p.Name()), slog.Any("error", err))
 			} else {
-				logger.ErrorContext(ctx, "proxy.discover.provider_failed", "provider", p.Name(), "error", err, "duration", time.Since(start))
+				logger.ErrorContext(ctx, "Provider fetch failed", slog.String("provider", p.Name()), slog.Any("error", err))
 			}
 			totalErrors++
 			continue
 		}
-		logger.InfoContext(ctx, "proxy.discover.provider_done", "provider", p.Name(), "published", publishedForProvider, "skipped_existing", skippedExistingForProvider, "duration", time.Since(start))
+		logger.InfoContext(ctx, "Provider fetch complete", slog.String("provider", p.Name()), slog.Int("found", publishedForProvider), slog.Duration("duration", time.Since(start)))
 	}
 
 	if totalPublished == 0 && totalErrors > 0 {
@@ -112,7 +112,7 @@ var proxyDiscoverCmd = &cobra.Command{
 		ctx := cmd.Context()
 		logger := container.Load.Logger()
 
-		logger.InfoContext(ctx, "proxy.discover.start")
+		logger.InfoContext(ctx, "Starting proxy discovery")
 
 		q := container.Load.Queue()
 		if q == nil {
@@ -120,7 +120,7 @@ var proxyDiscoverCmd = &cobra.Command{
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				logger.ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
+				logger.ErrorContext(ctx, "Failed to close queue connection", slog.Any("error", err))
 			}
 		}()
 
@@ -138,7 +138,7 @@ var proxyDiscoverCmd = &cobra.Command{
 		if len(providers) == 0 {
 			return fmt.Errorf("no proxy providers configured")
 		}
-		logger.InfoContext(ctx, "proxy.discover.providers", "count", len(providers))
+		logger.InfoContext(ctx, "Configured proxy providers", slog.Int("count", len(providers)))
 
 		limit, _ := cmd.Flags().GetInt("limit")
 		if limit < 0 {
@@ -150,7 +150,7 @@ var proxyDiscoverCmd = &cobra.Command{
 			return err
 		}
 
-		logger.InfoContext(ctx, "proxy.discover.complete", "published", published)
+		logger.InfoContext(ctx, "Proxy discovery complete", slog.Int("discovered", published))
 		return nil
 	},
 }
@@ -170,9 +170,8 @@ empty batches or per-record errors before querying again.`,
 		defer stop()
 
 		logger := container.Load.Logger()
-		logger.InfoContext(ctx, "proxy.scan.start",
-			"concurrency", concurrency,
-			"dead_scan_percentage", deadScanPercentage)
+		logger.InfoContext(ctx, "Starting proxy scan",
+			slog.Int("proxy_count", concurrency))
 
 		repo := container.Load.ProxyRepository()
 		if repo == nil {
@@ -210,7 +209,7 @@ Scans are performed directly by the proxy scan worker, not via the queue.`,
 		}
 		defer func() {
 			if err := q.Close(); err != nil {
-				container.Load.Logger().ErrorContext(ctx, "queue.close_error", slog.Any("error", err))
+				container.Load.Logger().ErrorContext(ctx, "Failed to close queue connection", slog.Any("error", err))
 			}
 		}()
 

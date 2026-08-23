@@ -1,11 +1,13 @@
 package middleware
 
 import (
-	"log"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"os"
 	"sync/atomic"
+
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 )
 
 type MaxReqMiddleware struct {
@@ -31,12 +33,12 @@ func (m *MaxReqMiddleware) Handler(next http.Handler) http.Handler {
 		if count >= m.max {
 			proc, err := os.FindProcess(os.Getpid())
 			if err == nil {
-				log.Printf("sending %s to pid %d", os.Interrupt, proc.Pid)
+				logging.Info("Sending shutdown signal", fmt.Sprintf("signal=%s pid=%d", os.Interrupt, proc.Pid))
 				if err := proc.Signal(os.Interrupt); err != nil {
-					log.Printf("failed to send %s to pid %d: %v", os.Interrupt, proc.Pid, err)
+					logging.Error("Failed to send shutdown signal", fmt.Sprintf("signal=%s pid=%d error=%v", os.Interrupt, proc.Pid, err))
 				}
 			} else {
-				log.Printf("cannot send kill signal: %v", err)
+				logging.Error("Cannot find process for shutdown", fmt.Sprintf("error=%v", err))
 			}
 		}
 		next.ServeHTTP(w, r)

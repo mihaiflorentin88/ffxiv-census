@@ -166,17 +166,15 @@ func TestService_UpsertTomestoneCharacter_ProfileAndGear(t *testing.T) {
 
 	dye := "Snow White"
 	tChar := &contract.TomestoneCharacter{
-		ID:          789,
-		Name:        "Thancred Waters",
-		Server:      "Ragnarok",
-		Datacenter:  "Chaos",
-		Gender:      "male",
-		Race:        "Hyur",
-		Tribe:       "Midlander",
-		AvatarURL:   "https://tomestone.gg/avatar.png",
-		PortraitURL: "https://tomestone.gg/portrait.png",
-		Bio:         "Gunbreaker of the Scions",
-		ActiveJob:   "Gunbreaker",
+		ID:         789,
+		Name:       "Thancred Waters",
+		Server:     "Ragnarok",
+		Datacenter: "Chaos",
+		Gender:     "male",
+		Race:       "Hyur",
+		Tribe:      "Midlander",
+		Bio:        "Gunbreaker of the Scions",
+		ActiveJob:  "Gunbreaker",
 		Gear: []contract.TomestoneGear{
 			{
 				Slot:      "MainHand",
@@ -206,7 +204,7 @@ func TestService_UpsertTomestoneCharacter_ProfileAndGear(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get: %v / %+v", err, got)
 	}
-	if got.AvatarURL != tChar.AvatarURL || got.PortraitURL != tChar.PortraitURL || got.Bio != tChar.Bio || got.ActiveJob != tChar.ActiveJob {
+	if got.Bio != tChar.Bio || got.ActiveJob != tChar.ActiveJob {
 		t.Errorf("profile fields mismatch: %+v", got)
 	}
 	// Average item level: (660 + 650) / 2 = 655
@@ -236,14 +234,12 @@ func TestService_UpsertCharacter_Profile(t *testing.T) {
 	ctx := context.Background()
 
 	char := &contract.CharacterProfile{
-		ID:          555,
-		Name:        "Y'shtola Rhul",
-		World:       "Louisoix",
-		Datacenter:  "Chaos",
-		AvatarURL:   "https://lodestone.com/avatar.jpg",
-		PortraitURL: "https://lodestone.com/portrait.jpg",
-		Bio:         "Sorceress of the Night's Blessed",
-		ActiveJob:   "Black Mage",
+		ID:         555,
+		Name:       "Y'shtola Rhul",
+		World:      "Louisoix",
+		Datacenter: "Chaos",
+		Bio:        "Sorceress of the Night's Blessed",
+		ActiveJob:  "Black Mage",
 	}
 
 	if err := svc.UpsertCharacter(ctx, char); err != nil {
@@ -254,7 +250,7 @@ func TestService_UpsertCharacter_Profile(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Get: %v / %+v", err, got)
 	}
-	if got.AvatarURL != char.AvatarURL || got.PortraitURL != char.PortraitURL || got.Bio != char.Bio || got.ActiveJob != "Black Mage" {
+	if got.Bio != char.Bio || got.ActiveJob != "Black Mage" {
 		t.Errorf("profile fields mismatch: %+v", got)
 	}
 }
