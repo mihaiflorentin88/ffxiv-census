@@ -185,25 +185,13 @@ func TestStripTags_LodestoneEntities(t *testing.T) {
 		})
 	}
 }
-
 func TestParseClassJobs_SetsClassJobID(t *testing.T) {
-	// Minimal HTML mimicking Lodestone's character__level__list structure.
-	// Each entry has a name and level element.
-	html := `
-<div class="character__level__list">
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">Paladin</p>
-		<p class="character__level__list__level">Lv.90</p>
-	</li></div>
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">Warrior</p>
-		<p class="character__level__list__level">Lv.80</p>
-	</li></div>
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">White Mage</p>
-		<p class="character__level__list__level">Lv.100</p>
-	</li></div>
-</div>`
+	// Real Lodestone HTML: <li><img ... data-tooltip="JobName">Level</li>
+	html := `<div class="character__level__list"><ul>
+		<li><img src="x" data-tooltip="Paladin">90</li>
+		<li><img src="x" data-tooltip="Warrior">80</li>
+		<li><img src="x" data-tooltip="White Mage">100</li>
+	</ul></div>`
 
 	jobs := parseClassJobs(html, 12345)
 	if len(jobs) != 3 {
@@ -236,22 +224,72 @@ func TestParseClassJobs_SetsClassJobID(t *testing.T) {
 	}
 }
 
+func TestParseClassJobs_CombinedNames(t *testing.T) {
+	// Lodestone shows "Paladin / Gladiator" for classes with job upgrades.
+	html := `<div class="character__level__list"><ul>
+		<li><img src="x" data-tooltip="Paladin / Gladiator">100</li>
+		<li><img src="x" data-tooltip="Bard / Archer">50</li>
+		<li><img src="x" data-tooltip="White Mage / Conjurer">80</li>
+	</ul></div>`
+
+	jobs := parseClassJobs(html, 12345)
+	if len(jobs) != 3 {
+		t.Fatalf("parseClassJobs returned %d jobs, want 3", len(jobs))
+	}
+	// Should use first part of combined name for lookup.
+	if jobs[0].Name != "Paladin" || jobs[0].ClassJobID != 19 {
+		t.Errorf("job[0] = {Name:%q, ClassJobID:%d}, want {Paladin, 19}", jobs[0].Name, jobs[0].ClassJobID)
+	}
+	if jobs[1].Name != "Bard" || jobs[1].ClassJobID != 23 {
+		t.Errorf("job[1] = {Name:%q, ClassJobID:%d}, want {Bard, 23}", jobs[1].Name, jobs[1].ClassJobID)
+	}
+	if jobs[2].Name != "White Mage" || jobs[2].ClassJobID != 24 {
+		t.Errorf("job[2] = {Name:%q, ClassJobID:%d}, want {White Mage, 24}", jobs[2].Name, jobs[2].ClassJobID)
+	}
+}
+
+func TestParseClassJobs_LimitedJobs(t *testing.T) {
+	// Blue Mage and Beastmaster have "(Limited Job)" suffix.
+	html := `<div class="character__level__list"><ul>
+		<li><img src="x" data-tooltip="Blue Mage (Limited Job)">80</li>
+		<li><img src="x" data-tooltip="Beastmaster (Limited Job)">-</li>
+	</ul></div>`
+
+	jobs := parseClassJobs(html, 12345)
+	if len(jobs) != 1 {
+		t.Fatalf("parseClassJobs returned %d jobs, want 1 (Beastmaster has level -)", len(jobs))
+	}
+	if jobs[0].Name != "Blue Mage" || jobs[0].ClassJobID != 36 {
+		t.Errorf("job[0] = {Name:%q, ClassJobID:%d}, want {Blue Mage, 36}", jobs[0].Name, jobs[0].ClassJobID)
+	}
+}
+
+func TestParseClassJobs_SkipsUnleveled(t *testing.T) {
+	// Jobs with level "-" should be skipped.
+	html := `<div class="character__level__list"><ul>
+		<li><img src="x" data-tooltip="Paladin">90</li>
+		<li><img src="x" data-tooltip="Warrior">-</li>
+		<li><img src="x" data-tooltip="Dark Knight">80</li>
+	</ul></div>`
+
+	jobs := parseClassJobs(html, 12345)
+	if len(jobs) != 2 {
+		t.Fatalf("parseClassJobs returned %d jobs, want 2 (unleveled should be skipped)", len(jobs))
+	}
+	if jobs[0].Name != "Paladin" || jobs[0].Level != 90 {
+		t.Errorf("job[0] = {Name:%q, Level:%d}, want {Paladin, 90}", jobs[0].Name, jobs[0].Level)
+	}
+	if jobs[1].Name != "Dark Knight" || jobs[1].Level != 80 {
+		t.Errorf("job[1] = {Name:%q, Level:%d}, want {Dark Knight, 80}", jobs[1].Name, jobs[1].Level)
+	}
+}
+
 func TestParseClassJobs_SkipsUnknownJobName(t *testing.T) {
-	html := `
-<div class="character__level__list">
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">Paladin</p>
-		<p class="character__level__list__level">Lv.90</p>
-	</li></div>
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">FutureJobNotInMap</p>
-		<p class="character__level__list__level">Lv.50</p>
-	</li></div>
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">Warrior</p>
-		<p class="character__level__list__level">Lv.80</p>
-	</li></div>
-</div>`
+	html := `<div class="character__level__list"><ul>
+		<li><img src="x" data-tooltip="Paladin">90</li>
+		<li><img src="x" data-tooltip="FutureJobNotInMap">50</li>
+		<li><img src="x" data-tooltip="Warrior">80</li>
+	</ul></div>`
 
 	jobs := parseClassJobs(html, 99999)
 	if len(jobs) != 2 {
@@ -266,19 +304,10 @@ func TestParseClassJobs_SkipsUnknownJobName(t *testing.T) {
 }
 
 func TestParseClassJobs_NoClassJobIDZero(t *testing.T) {
-	// Verify that NO job ever gets ClassJobID=0 after the fix.
-	// This is the regression test for the original bug.
-	html := `
-<div class="character__level__list">
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">Paladin</p>
-		<p class="character__level__list__level">Lv.90</p>
-	</li></div>
-	<div class="character__level__list__entry">
-		<p class="character__level__list__name">Dark Knight</p>
-		<p class="character__level__list__level">Lv.80</p>
-	</li></div>
-</div>`
+	html := `<div class="character__level__list"><ul>
+		<li><img src="x" data-tooltip="Paladin">90</li>
+		<li><img src="x" data-tooltip="Dark Knight">80</li>
+	</ul></div>`
 
 	jobs := parseClassJobs(html, 12345)
 	for _, j := range jobs {
@@ -289,15 +318,11 @@ func TestParseClassJobs_NoClassJobIDZero(t *testing.T) {
 }
 
 func TestParseClassJobs_AllKnownJobs(t *testing.T) {
-	// Build HTML with ALL known jobs to verify every entry in the lookup table.
 	var entries string
 	for name := range lodestoneJobIDs {
-		entries += `<div class="character__level__list__entry">
-			<p class="character__level__list__name">` + name + `</p>
-			<p class="character__level__list__level">Lv.50</p>
-		</li></div>`
+		entries += `<li><img src="x" data-tooltip="` + name + `">50</li>`
 	}
-	html := `<div class="character__level__list">` + entries + `</div>`
+	html := `<div class="character__level__list"><ul>` + entries + `</ul></div>`
 
 	jobs := parseClassJobs(html, 12345)
 	if len(jobs) != len(lodestoneJobIDs) {
@@ -316,30 +341,8 @@ func TestParseClassJobs_AllKnownJobs(t *testing.T) {
 	}
 }
 
-func TestParseClassJobs_SpanTags(t *testing.T) {
-	// Lodestone sometimes uses <span> instead of <p> for name/level.
-	html := `
-<div class="character__level__list">
-	<div class="character__level__list__entry">
-		<span class="character__level__list__name">Monk</span>
-		<span class="character__level__list__level">Lv.70</span>
-	</li></div>
-</div>`
-
-	jobs := parseClassJobs(html, 12345)
-	if len(jobs) != 1 {
-		t.Fatalf("parseClassJobs returned %d jobs, want 1", len(jobs))
-	}
-	if jobs[0].ClassJobID != 20 {
-		t.Errorf("ClassJobID = %d, want 20 (Monk)", jobs[0].ClassJobID)
-	}
-	if jobs[0].Level != 70 {
-		t.Errorf("Level = %d, want 70", jobs[0].Level)
-	}
-}
-
 func TestParseClassJobs_EmptyList(t *testing.T) {
-	jobs := parseClassJobs(`<div class="character__level__list"></div>`, 12345)
+	jobs := parseClassJobs(`<div class="character__level__list"><ul></ul></div>`, 12345)
 	if len(jobs) != 0 {
 		t.Errorf("parseClassJobs returned %d jobs for empty list, want 0", len(jobs))
 	}
@@ -357,60 +360,58 @@ func TestParseClassJobs_VariousCharacterProfiles(t *testing.T) {
 		name     string
 		html     string
 		wantJobs int
-		wantIDs  []uint8
 	}{
 		{
-			name: "omni_crafter_max_level",
-			html: `<div class="character__level__list">
-				<div class="character__level__list__entry"><p class="character__level__list__name">Paladin</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Warrior</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Dark Knight</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Gunbreaker</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">White Mage</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Scholar</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Astrologian</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Sage</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Monk</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Dragoon</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Ninja</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Samurai</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Reaper</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Viper</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Bard</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Machinist</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Dancer</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Black Mage</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Summoner</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Red Mage</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Pictomancer</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Blue Mage</p><p class="character__level__list__level">Lv.80</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Carpenter</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Blacksmith</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Armorer</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Goldsmith</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Leatherworker</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Weaver</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Alchemist</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Culinarian</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Miner</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Botanist</p><p class="character__level__list__level">Lv.100</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Fisher</p><p class="character__level__list__level">Lv.100</p></li></div>
-			</div>`,
+			name: "max_level_omni",
+			html: `<div class="character__level__list"><ul>
+				<li><img src="x" data-tooltip="Paladin">100</li>
+				<li><img src="x" data-tooltip="Warrior">100</li>
+				<li><img src="x" data-tooltip="Dark Knight">100</li>
+				<li><img src="x" data-tooltip="Gunbreaker">100</li>
+				<li><img src="x" data-tooltip="White Mage">100</li>
+				<li><img src="x" data-tooltip="Scholar">100</li>
+				<li><img src="x" data-tooltip="Astrologian">100</li>
+				<li><img src="x" data-tooltip="Sage">100</li>
+				<li><img src="x" data-tooltip="Monk">100</li>
+				<li><img src="x" data-tooltip="Dragoon">100</li>
+				<li><img src="x" data-tooltip="Ninja">100</li>
+				<li><img src="x" data-tooltip="Samurai">100</li>
+				<li><img src="x" data-tooltip="Reaper">100</li>
+				<li><img src="x" data-tooltip="Viper">100</li>
+				<li><img src="x" data-tooltip="Bard">100</li>
+				<li><img src="x" data-tooltip="Machinist">100</li>
+				<li><img src="x" data-tooltip="Dancer">100</li>
+				<li><img src="x" data-tooltip="Black Mage">100</li>
+				<li><img src="x" data-tooltip="Summoner">100</li>
+				<li><img src="x" data-tooltip="Red Mage">100</li>
+				<li><img src="x" data-tooltip="Pictomancer">100</li>
+				<li><img src="x" data-tooltip="Blue Mage (Limited Job)">80</li>
+				<li><img src="x" data-tooltip="Carpenter">100</li>
+				<li><img src="x" data-tooltip="Blacksmith">100</li>
+				<li><img src="x" data-tooltip="Armorer">100</li>
+				<li><img src="x" data-tooltip="Goldsmith">100</li>
+				<li><img src="x" data-tooltip="Leatherworker">100</li>
+				<li><img src="x" data-tooltip="Weaver">100</li>
+				<li><img src="x" data-tooltip="Alchemist">100</li>
+				<li><img src="x" data-tooltip="Culinarian">100</li>
+				<li><img src="x" data-tooltip="Miner">100</li>
+				<li><img src="x" data-tooltip="Botanist">100</li>
+				<li><img src="x" data-tooltip="Fisher">100</li>
+			</ul></div>`,
 			wantJobs: 33,
 		},
 		{
-			name: "casual_character_few_jobs",
-			html: `<div class="character__level__list">
-				<div class="character__level__list__entry"><p class="character__level__list__name">Paladin</p><p class="character__level__list__level">Lv.50</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">White Mage</p><p class="character__level__list__level">Lv.30</p></li></div>
-				<div class="character__level__list__entry"><p class="character__level__list__name">Miner</p><p class="character__level__list__level">Lv.15</p></li></div>
-			</div>`,
+			name: "casual_few_jobs",
+			html: `<div class="character__level__list"><ul>
+				<li><img src="x" data-tooltip="Paladin">50</li>
+				<li><img src="x" data-tooltip="White Mage">30</li>
+				<li><img src="x" data-tooltip="Miner">15</li>
+			</ul></div>`,
 			wantJobs: 3,
-			wantIDs:  []uint8{19, 24, 16},
 		},
 		{
 			name:     "new_character_no_jobs",
-			html:     `<div class="character__level__list"></div>`,
+			html:     `<div class="character__level__list"><ul></ul></div>`,
 			wantJobs: 0,
 		},
 		{
@@ -432,16 +433,6 @@ func TestParseClassJobs_VariousCharacterProfiles(t *testing.T) {
 				}
 				if j.CharacterID != 12345 {
 					t.Errorf("job %q has CharacterID=%d, want 12345", j.Name, j.CharacterID)
-				}
-			}
-			if tt.wantIDs != nil {
-				for i, wantID := range tt.wantIDs {
-					if i >= len(jobs) {
-						break
-					}
-					if jobs[i].ClassJobID != wantID {
-						t.Errorf("job[%d].ClassJobID = %d, want %d", i, jobs[i].ClassJobID, wantID)
-					}
 				}
 			}
 		})

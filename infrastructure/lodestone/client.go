@@ -699,6 +699,8 @@ func extractAttribute(tagHTML, attr string) string {
 
 
 // parseClassJobs extracts class/job entries from the character profile HTML.
+// The Lodestone renders jobs as <li><img data-tooltip="JobName">Level</li>
+// inside a <div class="character__level__list"><ul>...</ul></div>.
 func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 	var jobs []contract.ClassJobRecord
 
@@ -708,55 +710,67 @@ func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 		return jobs
 	}
 
-	// Extract each entry within the list.
+	// Extract each <li> entry within the list.
 	searchFrom := listIdx
 	for {
-		entryIdx := strings.Index(html[searchFrom:], `class="character__level__list__entry"`)
-		if entryIdx == -1 {
+		liIdx := strings.Index(html[searchFrom:], "<li>")
+		if liIdx == -1 {
 			break
 		}
-		entryIdx += searchFrom
-		entryEnd := strings.Index(html[entryIdx:], "</li>")
-		if entryEnd == -1 {
+		liIdx += searchFrom
+		liEnd := strings.Index(html[liIdx:], "</li>")
+		if liEnd == -1 {
 			break
 		}
-		entryHTML := html[entryIdx : entryIdx+entryEnd]
+		entryHTML := html[liIdx : liIdx+liEnd]
 
-		// Job name from the tooltip or text.
-		jobName := extractTextBetween(entryHTML, `class="character__level__list__name"`, "</p>")
+		// Job name from data-tooltip attribute on the <img> tag.
+		jobName := extractAttribute(entryHTML, "data-tooltip")
 		if jobName == "" {
-			jobName = extractTextBetween(entryHTML, `class="character__level__list__name"`, "</span>")
+			searchFrom = liIdx + liEnd + 1
+			continue
+		}
+
+		// Strip "(Limited Job)" suffix (Blue Mage, Beastmaster).
+		jobName = strings.TrimSuffix(jobName, " (Limited Job)")
+
+		// Handle combined names like "Paladin / Gladiator" — use the first part.
+		if idx := strings.Index(jobName, " / "); idx != -1 {
+			jobName = jobName[:idx]
 		}
 		jobName = strings.TrimSpace(jobName)
 
-		// Level from the level display.
-		levelStr := extractTextBetween(entryHTML, `class="character__level__list__level"`, "</p>")
-		if levelStr == "" {
-			levelStr = extractTextBetween(entryHTML, `class="character__level__list__level"`, "</span>")
+		// Level is the text content after </img> (or after the last > of the img tag).
+		// Format is either a plain number ("100") or "-" (unleveled).
+		imgEnd := strings.LastIndex(entryHTML, ">")
+		if imgEnd == -1 || imgEnd+1 >= len(entryHTML) {
+			searchFrom = liIdx + liEnd + 1
+			continue
 		}
-		levelStr = strings.TrimSpace(levelStr)
+		levelStr := strings.TrimSpace(entryHTML[imgEnd+1:])
+		if levelStr == "-" || levelStr == "" {
+			searchFrom = liIdx + liEnd + 1
+			continue
+		}
 		levelStr = strings.TrimPrefix(levelStr, "Lv.")
 		levelStr = strings.TrimSpace(levelStr)
 
 		level, _ := strconv.ParseUint(levelStr, 10, 8)
 
-		if jobName != "" {
-			classJobID, ok := lodestoneJobIDs[jobName]
-			if !ok {
-				// Unknown job name — skip to avoid inserting with class_job_id=0
-				// which would collide in the (character_id, class_job_id) primary key.
-				searchFrom = entryIdx + entryEnd + 1
-				continue
-			}
-			jobs = append(jobs, contract.ClassJobRecord{
-				CharacterID: charID,
-				ClassJobID:  classJobID,
-				Name:        jobName,
-				Level:       uint8(level),
-			})
+		classJobID, ok := lodestoneJobIDs[jobName]
+		if !ok {
+			// Unknown job name — skip to avoid inserting with class_job_id=0.
+			searchFrom = liIdx + liEnd + 1
+			continue
 		}
+		jobs = append(jobs, contract.ClassJobRecord{
+			CharacterID: charID,
+			ClassJobID:  classJobID,
+			Name:        jobName,
+			Level:       uint8(level),
+		})
 
-		searchFrom = entryIdx + entryEnd + 1
+		searchFrom = liIdx + liEnd + 1
 	}
 
 	return jobs
