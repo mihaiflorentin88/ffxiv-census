@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -122,7 +123,12 @@ func newProxyTransport(proxyURL string) (*http.Transport, error) {
 		}
 		ctxDialer, ok := dialer.(proxy.ContextDialer)
 		if !ok {
-			return nil, fmt.Errorf("%s dialer does not support context", u.Scheme)
+			// go-socks4 dialer doesn't implement ContextDialer; wrap plain Dialer.
+			return &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				},
+			}, nil
 		}
 		return &http.Transport{DialContext: ctxDialer.DialContext}, nil
 	default:
