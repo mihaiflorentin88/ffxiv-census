@@ -75,11 +75,11 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 
-		// Fetch summary + max level
+		// Goroutine 1: Summary counts (single query replacing 3)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			t, a, m, err := c.svc.Summary(ctx)
+			t, a, m, err := c.svc.SummaryCounts(ctx)
 			if err != nil {
 				logging.Error("ui.dashboard.summary", err.Error())
 				return
@@ -92,7 +92,75 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 			mu.Unlock()
 		}()
 
-		// Fetch 30-day time series
+		// Goroutine 2: Region + Race breakdown (single query replacing 2)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			breakdowns, err := c.svc.MultiBreakdown(ctx, []string{"region", "race"})
+			if err != nil {
+				logging.Error("ui.dashboard.multi_breakdown", err.Error())
+				return
+			}
+			var reg []RegionSummary
+			for _, rRow := range breakdowns["region"] {
+				regName := rRow.Key
+				if regName == "" {
+					regName = "Unknown"
+				}
+				reg = append(reg, RegionSummary{
+					Region:      regName,
+					Total:       rRow.Total,
+					Active:      rRow.Active,
+					ActiveRatio: formatPercent(rRow.Active, rRow.Total),
+				})
+			}
+			byRace := breakdowns["race"]
+			sort.Slice(byRace, func(i, j int) bool {
+				return byRace[i].Total > byRace[j].Total
+			})
+			var rLabels []string
+			var rData []int64
+			for _, rc := range byRace {
+				if rc.Key == "" {
+					continue
+				}
+				rLabels = append(rLabels, rc.Key)
+				rData = append(rData, rc.Total)
+			}
+			mu.Lock()
+			regions = reg
+			raceLabels, raceData = rLabels, rData
+			mu.Unlock()
+		}()
+
+		// Goroutine 3: Expansion completions (config-order iteration)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			completions, err := c.svc.ExpansionCompletions(ctx)
+			if err != nil {
+				logging.Error("ui.dashboard.expansion_completions", err.Error())
+				return
+			}
+			expansions := c.svc.Expansions()
+			countMap := make(map[string]int64, len(completions))
+			for _, ec := range completions {
+				countMap[ec.Expansion] = ec.Count
+			}
+			var cards []ExpansionCard
+			for _, exp := range expansions {
+				cards = append(cards, ExpansionCard{
+					Icon:  exp.Icon,
+					Name:  exp.Name,
+					Count: countMap[exp.Name],
+				})
+			}
+			mu.Lock()
+			expansionCards = cards
+			mu.Unlock()
+		}()
+
+		// Goroutine 4: 30-day time series (single query)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -116,91 +184,6 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 			}
 			mu.Lock()
 			chartLabels, chartData = labels, data
-			mu.Unlock()
-		}()
-
-		// Fetch region breakdown
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			byRegion, err := c.svc.Breakdown(ctx, "region")
-			if err != nil {
-				logging.Error("ui.dashboard.breakdown", err.Error())
-				return
-			}
-			var reg []RegionSummary
-			for _, rRow := range byRegion {
-				regName := rRow.Key
-				if regName == "" {
-					regName = "Unknown"
-				}
-				reg = append(reg, RegionSummary{
-					Region:      regName,
-					Total:       rRow.Total,
-					Active:      rRow.Active,
-					ActiveRatio: formatPercent(rRow.Active, rRow.Total),
-				})
-			}
-			mu.Lock()
-			regions = reg
-			mu.Unlock()
-		}()
-
-		// Fetch race distribution
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			byRace, err := c.svc.Breakdown(ctx, "race")
-			if err != nil {
-				logging.Error("ui.dashboard.race_breakdown", err.Error())
-				return
-			}
-			sort.Slice(byRace, func(i, j int) bool {
-				return byRace[i].Total > byRace[j].Total
-			})
-			var labels []string
-			var data []int64
-			for _, rc := range byRace {
-				if rc.Key == "" {
-					continue
-				}
-				labels = append(labels, rc.Key)
-				data = append(data, rc.Total)
-			}
-			mu.Lock()
-			raceLabels, raceData = labels, data
-			mu.Unlock()
-		}()
-
-		// Fetch expansion completions
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			completions, err := c.svc.ExpansionCompletions(ctx)
-			if err != nil {
-				logging.Error("ui.dashboard.expansion_completions", err.Error())
-				return
-			}
-			expansions := c.svc.Expansions()
-			expMap := make(map[string]census.ExpansionConfig)
-			for _, e := range expansions {
-				expMap[e.Name] = e
-			}
-			var cards []ExpansionCard
-			for _, ec := range completions {
-				cfg, ok := expMap[ec.Expansion]
-				icon := "⚔️"
-				if ok {
-					icon = cfg.Icon
-				}
-				cards = append(cards, ExpansionCard{
-					Icon:  icon,
-					Name:  ec.Expansion,
-					Count: ec.Count,
-				})
-			}
-			mu.Lock()
-			expansionCards = cards
 			mu.Unlock()
 		}()
 

@@ -9,11 +9,15 @@
 
 <!-- Filter Controls Panel -->
 <div class="panel" style="margin-bottom: 1.5rem;">
-    <div class="panel-body" style="padding: 1rem 1.5rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem;">
-        <form method="GET" action="/ui/races" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; width: 100%;">
+    <div class="panel-body"
+        style="padding: 1rem 1.5rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem;">
+        <form method="GET" action="/ui/races"
+            style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; width: 100%;">
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Region:</span>
-                <select name="region" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
+                <span
+                    style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Region:</span>
+                <select name="region" onchange="this.form.submit()" class="search-input"
+                    style="width: auto; padding: 0.4rem 0.75rem;">
                     <option value="">-- All Regions --</option>
                     {{range .Data.Regions}}
                     <option value="{{.}}" {{if eq $.Data.SelectedRegion .}}selected{{end}}>{{.}}</option>
@@ -22,8 +26,10 @@
             </div>
 
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Datacenter:</span>
-                <select name="dc" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
+                <span
+                    style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Datacenter:</span>
+                <select name="dc" onchange="this.form.submit()" class="search-input"
+                    style="width: auto; padding: 0.4rem 0.75rem;">
                     <option value="">-- All Datacenters --</option>
                     {{range .Data.Datacenters}}
                     <option value="{{.}}" {{if eq $.Data.SelectedDC .}}selected{{end}}>{{.}}</option>
@@ -32,8 +38,10 @@
             </div>
 
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">World:</span>
-                <select name="world" onchange="this.form.submit()" class="search-input" style="width: auto; padding: 0.4rem 0.75rem;">
+                <span
+                    style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">World:</span>
+                <select name="world" onchange="this.form.submit()" class="search-input"
+                    style="width: auto; padding: 0.4rem 0.75rem;">
                     <option value="">-- All Worlds --</option>
                     {{range .Data.Worlds}}
                     <option value="{{.}}" {{if eq $.Data.SelectedWorld .}}selected{{end}}>{{.}}</option>
@@ -42,14 +50,16 @@
             </div>
 
             {{if or .Data.SelectedRegion .Data.SelectedDC .Data.SelectedWorld}}
-            <a href="/ui/races" class="btn btn-outline" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; margin-left: auto;">Clear Filters</a>
+            <a href="/ui/races" class="btn btn-outline"
+                style="padding: 0.4rem 0.75rem; font-size: 0.85rem; margin-left: auto;">Clear Filters</a>
             {{end}}
         </form>
     </div>
 </div>
 
 <!-- Grid with Chart and Top Stats -->
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+<div
+    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
     <!-- Doughnut Chart Panel -->
     <div class="panel" style="margin-bottom: 0;">
         <div class="panel-header">
@@ -81,11 +91,15 @@
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Active (30d)</div>
-                    <div class="stat-value" style="font-size: 1.5rem; color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
+                    <div class="stat-value" style="font-size: 1.5rem; color: var(--cyan);">{{formatNumber
+                        .Data.ActiveCharacters}}</div>
                 </div>
             </div>
             <p class="text-dim" style="font-size: 0.9rem; line-height: 1.6;">
-                Race choices reflect character creation and Fantasia usage{{if .Data.SelectedWorld}} on <strong>{{.Data.SelectedWorld}}</strong>{{else if .Data.SelectedDC}} on the <strong>{{.Data.SelectedDC}}</strong> datacenter{{else}} across all datacenters{{end}}. Active percentages track characters who earned achievements in the last 30 days.
+                Race choices reflect character creation and Fantasia usage{{if .Data.SelectedWorld}} on
+                <strong>{{.Data.SelectedWorld}}</strong>{{else if .Data.SelectedDC}} on the
+                <strong>{{.Data.SelectedDC}}</strong> datacenter{{else}} across all datacenters{{end}}. Active
+                percentages track characters who earned achievements in the last 30 days.
             </p>
         </div>
     </div>
@@ -122,7 +136,8 @@
                                 <div class="progress-bar-container" style="flex: 1;">
                                     <div class="progress-bar-fill gold" style="width: {{.ShareOfTotal}};"></div>
                                 </div>
-                                <span style="font-size: 0.85rem; font-family: var(--font-mono); min-width: 45px; text-align: right;">
+                                <span
+                                    style="font-size: 0.85rem; font-family: var(--font-mono); min-width: 45px; text-align: right;">
                                     {{.ShareOfTotal}}
                                 </span>
                             </div>
@@ -142,12 +157,56 @@
     </div>
 </div>
 
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-    const ctx = document.getElementById('raceChart');
-    if (!ctx) return;
+<!-- Tribe, Gender & Race×Gender Distribution -->
+<div
+    style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; margin-top: 2rem;">
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title"><span>🧝</span><span>Tribe Distribution</span></h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.TribeLabels}}
+            <div class="chart-container" style="height: 340px;"><canvas id="tribePieChart"></canvas></div>
+            {{else}}
+            <p class="text-dim">No tribe data available yet.</p>
+            {{end}}
+        </div>
+    </div>
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title"><span>⚧</span><span>Gender Distribution</span></h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.GenderLabels}}
+            <div class="chart-container" style="height: 340px;"><canvas id="genderPieChart"></canvas></div>
+            {{else}}
+            <p class="text-dim">No gender data available yet.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
+<div style="margin-bottom: 2rem;">
+    <div class="panel" style="margin-bottom: 0;">
+        <div class="panel-header">
+            <h2 class="panel-title"><span>👥</span><span>Race × Gender Distribution</span></h2>
+        </div>
+        <div class="panel-body">
+            {{if .Data.RaceGenderLabels}}
+            <div class="chart-container" style="height: 400px;"><canvas id="raceGenderPieChart"></canvas></div>
+            {{else}}
+            <p class="text-dim">No race/gender data available yet.</p>
+            {{end}}
+        </div>
+    </div>
+</div>
 
-    const labels = {{jsonSafe .Data.ChartLabels}};
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const ctx = document.getElementById('raceChart');
+        if (!ctx) return;
+
+        const labels = {{jsonSafe .Data.ChartLabels}}
+    };
     const data = {{jsonSafe .Data.ChartData}};
 
     const raceColors = [
@@ -198,6 +257,70 @@ document.addEventListener("DOMContentLoaded", function() {
             cutout: '65%'
         }
     });
+
+    var tribeCtx = document.getElementById("tribePieChart");
+    if (tribeCtx) {
+        var tribeLabels = {{jsonSafe .Data.TribeLabels}}
+    };
+    var tribeData = {{jsonSafe .Data.TribeData}};
+    var tribeColors = ['#d4af37', '#38bdf8', '#f472b6', '#34d399', '#a78bfa', '#fb923c', '#e879f9', '#22d3ee', '#fbbf24', '#60a5fa', '#f87171', '#4ade80', '#818cf8', '#f59e0b', '#10b981', '#ec4899'];
+    new Chart(tribeCtx, {
+        type: 'doughnut',
+        data: {labels: tribeLabels, datasets: [{data: tribeData, backgroundColor: tribeColors.slice(0, tribeLabels.length), borderColor: '#141923', borderWidth: 2}]},
+        options: {
+            responsive: true, maintainAspectRatio: false, cutout: '65%',
+            plugins: {
+                legend: {position: 'bottom', labels: {color: '#94a3b8', padding: 12, font: {size: 11}}},
+                tooltip: {
+                    backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
+                    callbacks: {label: function (ctx) {var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0); var pct = ((ctx.parsed / total) * 100).toFixed(1); return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';}}
+                }
+            }
+        }
+    });
+    }
+    var genderCtx = document.getElementById("genderPieChart");
+    if (genderCtx) {
+        var genderLabels = {{jsonSafe .Data.GenderLabels}}
+    };
+    var genderData = {{jsonSafe .Data.GenderData}};
+    var genderColors = ['#38bdf8', '#f472b6', '#a78bfa'];
+    new Chart(genderCtx, {
+        type: 'doughnut',
+        data: {labels: genderLabels, datasets: [{data: genderData, backgroundColor: genderColors.slice(0, genderLabels.length), borderColor: '#141923', borderWidth: 2}]},
+        options: {
+            responsive: true, maintainAspectRatio: false, cutout: '65%',
+            plugins: {
+                legend: {position: 'bottom', labels: {color: '#94a3b8', padding: 12, font: {size: 11}}},
+                tooltip: {
+                    backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
+                    callbacks: {label: function (ctx) {var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0); var pct = ((ctx.parsed / total) * 100).toFixed(1); return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';}}
+                }
+            }
+        }
+    });
+    }
+    var rgCtx = document.getElementById("raceGenderPieChart");
+    if (rgCtx) {
+        var rgLabels = {{jsonSafe .Data.RaceGenderLabels}}
+    };
+    var rgData = {{jsonSafe .Data.RaceGenderData}};
+    var rgColors = ['#d4af37', '#38bdf8', '#f472b6', '#34d399', '#a78bfa', '#fb923c', '#e879f9', '#22d3ee', '#fbbf24', '#60a5fa', '#f87171', '#4ade80', '#818cf8', '#f59e0b', '#10b981', '#ec4899'];
+    new Chart(rgCtx, {
+        type: 'doughnut',
+        data: {labels: rgLabels, datasets: [{data: rgData, backgroundColor: rgColors.slice(0, rgLabels.length), borderColor: '#141923', borderWidth: 2}]},
+        options: {
+            responsive: true, maintainAspectRatio: false, cutout: '65%',
+            plugins: {
+                legend: {position: 'bottom', labels: {color: '#94a3b8', padding: 12, font: {size: 11}}},
+                tooltip: {
+                    backgroundColor: '#141923', borderColor: '#263248', borderWidth: 1, titleColor: '#d4af37', bodyColor: '#f1f5f9',
+                    callbacks: {label: function (ctx) {var total = ctx.dataset.data.reduce(function (a, b) {return a + b;}, 0); var pct = ((ctx.parsed / total) * 100).toFixed(1); return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';}}
+                }
+            }
+        }
+    });
+    }
 });
 </script>
 {{end}}

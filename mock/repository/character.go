@@ -16,27 +16,30 @@ import (
 // deleted_at clearing, jobs replacement, stale ordering) so handler tests don't
 // drift from production behavior.
 type CharacterRepository struct {
-	mu              sync.Mutex
-	characters      map[uint32]contract.CharacterRecord
-	jobs            map[uint32][]contract.ClassJobRecord
-	gear            map[uint32][]contract.CharacterGearRecord
-	UpsertErr       error
-	UpsertGearErr   error
-	GetGearErr      error
-	FindIDGapsErr   error
-	GetErr          error
-	MarkDeletedErr  error
-	UpdateErr       error
-	ListStaleErr    error
-	ListErr         error
-	StreamErr       error
-	CountErr        error
-	CountActiveErr  error
-	BreakdownErr    error
-	NewPerDayErr    error
-	MaxIDErr        error
-	UpsertCalls     int
-	UpsertGearCalls int
+	mu                      sync.Mutex
+	characters              map[uint32]contract.CharacterRecord
+	jobs                    map[uint32][]contract.ClassJobRecord
+	gear                    map[uint32][]contract.CharacterGearRecord
+	UpsertErr               error
+	UpsertGearErr           error
+	GetGearErr              error
+	FindIDGapsErr           error
+	GetErr                  error
+	MarkDeletedErr          error
+	UpdateErr               error
+	ListStaleErr            error
+	ListErr                 error
+	StreamErr               error
+	CountErr                error
+	CountActiveErr          error
+	BreakdownErr            error
+	SummaryCountsErr        error
+	MultiBreakdownErr       error
+	DemographicBreakdownErr error
+	NewPerDayErr            error
+	MaxIDErr                error
+	UpsertCalls             int
+	UpsertGearCalls         int
 }
 
 func NewCharacterFake() *CharacterRepository {
@@ -485,6 +488,159 @@ func (f *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 		}
 		return out[i].Key < out[j].Key
 	})
+	return out, nil
+}
+
+// SummaryCounts mirrors the SQL: total, active, and max-level counts in a single query.
+func (f *CharacterRepository) SummaryCounts(ctx context.Context, since time.Time, maxLevel uint32) (total, active, maxLevelCount int64, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.SummaryCountsErr != nil {
+		return 0, 0, 0, f.SummaryCountsErr
+	}
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil {
+			continue
+		}
+		total++
+		if rec.LatestAchievementAt != nil && !rec.LatestAchievementAt.Before(since) {
+			active++
+		}
+		for _, j := range f.jobs[rec.ID] {
+			if uint32(j.Level) >= maxLevel {
+				maxLevelCount++
+				break
+			}
+		}
+	}
+	return total, active, maxLevelCount, nil
+}
+
+// MultiBreakdown mirrors the SQL UNION ALL group-by for multiple columns.
+func (f *CharacterRepository) MultiBreakdown(ctx context.Context, columns []string, since time.Time, filter contract.CharacterFilter) (map[string][]contract.GroupCount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.MultiBreakdownErr != nil {
+		return nil, f.MultiBreakdownErr
+	}
+	out := make(map[string][]contract.GroupCount, len(columns))
+	for _, col := range columns {
+		counts := map[string]*contract.GroupCount{}
+		for _, rec := range f.characters {
+			if rec.DeletedAt != nil || !matchesFilter(rec, f.jobs[rec.ID], filter) {
+				continue
+			}
+			var key string
+			switch col {
+			case "race":
+				key = rec.Race
+			case "world":
+				key = rec.World
+			case "datacenter":
+				key = rec.Datacenter
+			case "region":
+				key = rec.Region
+			}
+			g := counts[key]
+			if g == nil {
+				g = &contract.GroupCount{Key: key}
+				counts[key] = g
+			}
+			g.Total++
+			if rec.LatestAchievementAt != nil && !rec.LatestAchievementAt.Before(since) {
+				g.Active++
+			}
+		}
+		var list []contract.GroupCount
+		for _, g := range counts {
+			list = append(list, *g)
+		}
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].Total != list[j].Total {
+				return list[i].Total > list[j].Total
+			}
+			return list[i].Key < list[j].Key
+		})
+		out[col] = list
+	}
+	return out, nil
+}
+
+// DemographicBreakdown mirrors the SQL: tribe, gender, and race×gender counts.
+func (f *CharacterRepository) DemographicBreakdown(ctx context.Context, since time.Time, filter contract.CharacterFilter) (*contract.DemographicCounts, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DemographicBreakdownErr != nil {
+		return nil, f.DemographicBreakdownErr
+	}
+	tribeCounts := map[string]*contract.GroupCount{}
+	genderCounts := map[string]*contract.GroupCount{}
+	rgCounts := map[string]*contract.GroupCount{}
+
+	for _, rec := range f.characters {
+		if rec.DeletedAt != nil || !matchesFilter(rec, f.jobs[rec.ID], filter) {
+			continue
+		}
+		active := rec.LatestAchievementAt != nil && !rec.LatestAchievementAt.Before(since)
+
+		// Tribe breakdown
+		if rec.Tribe != "" {
+			g := tribeCounts[rec.Tribe]
+			if g == nil {
+				g = &contract.GroupCount{Key: rec.Tribe}
+				tribeCounts[rec.Tribe] = g
+			}
+			g.Total++
+			if active {
+				g.Active++
+			}
+		}
+
+		// Gender breakdown
+		var genderKey string
+		switch rec.Gender {
+		case 1:
+			genderKey = "Male"
+		case 2:
+			genderKey = "Female"
+		default:
+			genderKey = "Unknown"
+		}
+		g := genderCounts[genderKey]
+		if g == nil {
+			g = &contract.GroupCount{Key: genderKey}
+			genderCounts[genderKey] = g
+		}
+		g.Total++
+		if active {
+			g.Active++
+		}
+
+		// Race×Gender breakdown
+		if rec.Race != "" {
+			rgKey := rec.Race + "|" + genderKey
+			rg := rgCounts[rgKey]
+			if rg == nil {
+				rg = &contract.GroupCount{Key: rgKey}
+				rgCounts[rgKey] = rg
+			}
+			rg.Total++
+			if active {
+				rg.Active++
+			}
+		}
+	}
+
+	out := &contract.DemographicCounts{}
+	for _, g := range tribeCounts {
+		out.Tribes = append(out.Tribes, *g)
+	}
+	for _, g := range genderCounts {
+		out.Genders = append(out.Genders, *g)
+	}
+	for _, g := range rgCounts {
+		out.RaceGenders = append(out.RaceGenders, *g)
+	}
 	return out, nil
 }
 

@@ -143,3 +143,80 @@ func TestRacesCascadingFilters(t *testing.T) {
 		t.Error("region=EU&dc=Chaos: World dropdown should NOT contain Light world Lich")
 	}
 }
+
+func TestRacesHandler_DemographicPieCharts(t *testing.T) {
+	rig := newTestRig(t)
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 7001, Name: "SunSeeker", World: "Balmung", Datacenter: "Crystal", Region: "NA",
+		Race: "Miqo'te", Tribe: "Seekers of the Sun", Gender: 2,
+		FirstSeenAt: recent, LatestAchievementAt: &recent,
+	}, nil)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 7002, Name: "Highlander", World: "Louisoix", Datacenter: "Chaos", Region: "EU",
+		Race: "Hyur", Tribe: "Highlander", Gender: 1,
+		FirstSeenAt: recent, LatestAchievementAt: &recent,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/races", nil)
+	rec := httptest.NewRecorder()
+	rig.ctrl.Races(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "tribePieChart") {
+		t.Error("expected tribePieChart canvas in body")
+	}
+	if !strings.Contains(body, "Seekers of the Sun") {
+		t.Error("expected tribe 'Seekers of the Sun' in body")
+	}
+
+	if !strings.Contains(body, "genderPieChart") {
+		t.Error("expected genderPieChart canvas in body")
+	}
+
+	if !strings.Contains(body, "raceGenderPieChart") {
+		t.Error("expected raceGenderPieChart canvas in body")
+	}
+}
+
+func TestRacesHandler_DemographicChartsFiltered(t *testing.T) {
+	rig := newTestRig(t)
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 8001, Name: "NAChar", World: "Balmung", Datacenter: "Crystal", Region: "NA",
+		Race: "Miqo'te", Tribe: "Seekers of the Sun", Gender: 2,
+		FirstSeenAt: recent, LatestAchievementAt: &recent,
+	}, nil)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 8002, Name: "EUChar", World: "Louisoix", Datacenter: "Chaos", Region: "EU",
+		Race: "Hyur", Tribe: "Highlander", Gender: 1,
+		FirstSeenAt: recent, LatestAchievementAt: &recent,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/races?region=NA", nil)
+	rec := httptest.NewRecorder()
+	rig.ctrl.Races(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Seekers of the Sun") {
+		t.Error("expected filtered body to contain NA tribe")
+	}
+	if strings.Contains(body, "Highlander") {
+		t.Error("expected filtered body to exclude EU tribe")
+	}
+}

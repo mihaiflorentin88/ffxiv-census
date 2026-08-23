@@ -197,3 +197,41 @@ func TestWorldDrilldownHandler(t *testing.T) {
 		t.Errorf("expected body to contain 'Balmung', got:\n%s", body)
 	}
 }
+
+func TestDashboardHandler_ExpansionSortOrder(t *testing.T) {
+	rig := newTestRig(t)
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 5001, Name: "TestChar", World: "Balmung", Datacenter: "Crystal", Region: "NA",
+		Race: "Hyur", FirstSeenAt: recent, LatestAchievementAt: &recent,
+	}, nil)
+
+	_ = rig.ach.SyncMilestones(context.Background(), census.DefaultMilestones())
+	_ = rig.ach.UpsertCharacterMilestones(context.Background(), 5001, []contract.CharacterMilestone{
+		{CharacterID: 5001, AchievementID: 1129, AchievedAt: recent},
+		{CharacterID: 5001, AchievementID: 3496, AchievedAt: recent},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil)
+	rec := httptest.NewRecorder()
+	rig.ctrl.Dashboard(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	arIdx := strings.Index(body, "A Realm Reborn")
+	dtIdx := strings.Index(body, "Dawntrail")
+	if arIdx < 0 {
+		t.Fatal("expected 'A Realm Reborn' in body")
+	}
+	if dtIdx < 0 {
+		t.Fatal("expected 'Dawntrail' in body")
+	}
+	if arIdx > dtIdx {
+		t.Errorf("expansion sort order wrong: A Realm Reborn (idx %d) should appear before Dawntrail (idx %d)", arIdx, dtIdx)
+	}
+}

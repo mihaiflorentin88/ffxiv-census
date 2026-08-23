@@ -653,3 +653,29 @@ func (s *Service) NewCharacters(ctx context.Context, since, until time.Time, fil
 func (s *Service) ExpansionCompletions(ctx context.Context) ([]contract.ExpansionCount, error) {
 	return s.achievements.CountExpansions(ctx)
 }
+
+// SummaryCounts returns total, active, and max-level character counts in a
+// single repository query. More efficient than Summary() which uses 3 queries.
+func (s *Service) SummaryCounts(ctx context.Context) (total, active, maxLevelCount int64, err error) {
+	return s.characters.SummaryCounts(ctx, s.activitySince(), s.MaxLevel())
+}
+
+// MultiBreakdown returns group-by counts for multiple columns in a single
+// query. More efficient than calling Breakdown() multiple times.
+func (s *Service) MultiBreakdown(ctx context.Context, columns []string, filter ...contract.CharacterFilter) (map[string][]contract.GroupCount, error) {
+	f := contract.CharacterFilter{}
+	if len(filter) > 0 {
+		f = filter[0]
+	}
+	return s.characters.MultiBreakdown(ctx, columns, s.activitySince(), f)
+}
+
+// DemographicBreakdown returns tribe, gender, and race×gender counts in a
+// single query. Used by the races page for demographic pie charts.
+func (s *Service) DemographicBreakdown(ctx context.Context, filter ...contract.CharacterFilter) (*contract.DemographicCounts, error) {
+	f := contract.CharacterFilter{}
+	if len(filter) > 0 {
+		f = filter[0]
+	}
+	return s.characters.DemographicBreakdown(ctx, s.activitySince(), f)
+}

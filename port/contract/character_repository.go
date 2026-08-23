@@ -23,6 +23,14 @@ type CharacterFilter struct {
 	SortOrder     string // "asc", "desc"
 }
 
+// DemographicCounts holds tribe, gender, and race×gender breakdowns from a
+// single query.
+type DemographicCounts struct {
+	Tribes      []GroupCount
+	Genders     []GroupCount
+	RaceGenders []GroupCount // Key format: "Race|Gender"
+}
+
 // CharacterRepository persists character snapshots and their job levels.
 type CharacterRepository interface {
 	// Upsert replaces the character row and its jobs in one transaction.
@@ -63,11 +71,21 @@ type CharacterRepository interface {
 	// CountActive returns the number of non-deleted characters whose
 	// latest_achievement_at is at or after since.
 	CountActive(ctx context.Context, since time.Time) (int64, error)
+	// SummaryCounts returns total, active (latest_achievement_at >= since), and
+	// max-level (character_jobs.level >= maxLevel) counts in a single query.
+	SummaryCounts(ctx context.Context, since time.Time, maxLevel uint32) (total, active, maxLevelCount int64, err error)
 	// Breakdown groups non-deleted characters by column (one of
 	// race|world|datacenter|region), with total and active counts per group.
 	// Active counts rows whose latest_achievement_at is at or after since.
 	// Groups are ordered by total count descending.
 	Breakdown(ctx context.Context, column string, since time.Time, filter CharacterFilter) ([]GroupCount, error)
+	// MultiBreakdown returns group-by counts for multiple columns in a single
+	// query using UNION ALL. Returns a map[column][]GroupCount. Supported
+	// columns: race, world, datacenter, region.
+	MultiBreakdown(ctx context.Context, columns []string, since time.Time, filter CharacterFilter) (map[string][]GroupCount, error)
+	// DemographicBreakdown returns tribe, gender, and race×gender character
+	// counts in a single query. RaceGenders keys use "Race|Gender" format.
+	DemographicBreakdown(ctx context.Context, since time.Time, filter CharacterFilter) (*DemographicCounts, error)
 	// NewPerDay returns non-deleted characters first seen in [since, until),
 	// counted per UTC day, ordered ascending by day.
 	NewPerDay(ctx context.Context, since, until time.Time, filter CharacterFilter) ([]DailyCount, error)

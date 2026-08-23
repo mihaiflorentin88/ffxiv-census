@@ -14,9 +14,9 @@
 | Route | Method | Description |
 |---|---|---|
 | `/` | `GET` | Redirects to `/ui/dashboard` |
-| `/ui/dashboard` | `GET` | Executive overview: responsive stat-card grid (total population, 30-day active ratio, ingest status), race distribution doughnut chart with circular bottom-centered legend, expansion MSQ completion card, 30-day time-series line chart (new characters based on Chocobo milestone achievement 590), and region summary with world drill-down |
+| `/ui/dashboard` | `GET` | Executive overview: responsive stat-card grid (total population, 30-day active ratio, ingest status), race distribution doughnut chart with circular bottom-centered legend, expansion MSQ completion card (sorted by config release order), 30-day time-series line chart (new characters based on Chocobo milestone achievement 590), and region summary with world drill-down. Queries optimized: 4 concurrent goroutines, 4 DB calls (SummaryCounts, MultiBreakdown, ExpansionCompletions, NewCharactersPerDay). |
 | `/ui/partials/world-breakdown` | `GET` | HTMX partial returning world and datacenter rows for a requested region (`?region=NA`) |
-| `/ui/races` | `GET` | Playable race demographics, global percentage shares, active ratios, and Chart.js doughnut chart |
+| `/ui/races` | `GET` | Playable race demographics with cascading region/DC/world filters, global percentage shares, active ratios, Chart.js doughnut chart, and three additional demographic doughnut charts: tribe distribution, gender distribution, and race×gender combination distribution. All demographic data fetched via single `DemographicBreakdown` query. |
 | `/ui/worlds` | `GET` | Global server rankings table with interactive region/datacenter filters |
 | `/ui/worlds/{world}` | `GET` | World detail page: total population, active players (30d), new characters (chocobo milestone 590 in last 30 days), race breakdown, MSQ completions, and 30-day new-character timeline |
 | `/ui/expansions` | `GET` | MSQ story completion funnel (A Realm Reborn, Heavensward, Stormblood, Shadowbringers, Endwalker, Dawntrail) with retention and drop-off metrics |
@@ -36,7 +36,7 @@ cmd/http/ui/
 ├── templates/
 │   ├── layout.html         # Base shell (navbar, search, header, footer, script tags)
 │   ├── dashboard.html      # Headline stats, 30-day time-series chart, region table
-│   ├── races.html          # Race & clan breakdown tables and progress bars
+│   ├── races.html          # Race & clan demographics with race, tribe, gender, and race×gender doughnut charts
 │   ├── worlds.html         # Global worlds & datacenters table with active ratios
 │   ├── expansions.html     # MSQ expansion completion funnel & drop-off rates
 │   ├── character.html      # Full character profile (jobs grid, milestones, FC, badges)

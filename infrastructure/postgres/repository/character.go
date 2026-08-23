@@ -452,6 +452,23 @@ func (r *CharacterRepository) CountActive(ctx context.Context, since time.Time) 
 	return count, nil
 }
 
+func (r *CharacterRepository) SummaryCounts(ctx context.Context, since time.Time, maxLevel uint32) (total, active, maxLevelCount int64, err error) {
+	row, err := r.driver.FetchOne(ctx,
+		`SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active,
+			COUNT(*) FILTER (WHERE id IN (SELECT character_id FROM character_jobs WHERE level >= $2)) AS max_level
+		FROM characters
+		WHERE deleted_at IS NULL`, since, maxLevel)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if err := row.Scan(&total, &active, &maxLevelCount); err != nil {
+		return 0, 0, 0, err
+	}
+	return total, active, maxLevelCount, nil
+}
+
 func (r *CharacterRepository) Breakdown(ctx context.Context, column string, since time.Time, f contract.CharacterFilter) ([]contract.GroupCount, error) {
 	if !breakdownColumns[column] {
 		return nil, fmt.Errorf("invalid breakdown column %q", column)
@@ -488,6 +505,124 @@ func (r *CharacterRepository) Breakdown(ctx context.Context, column string, sinc
 		out = append(out, g)
 	}
 	return out, rows.Err()
+}
+
+func (r *CharacterRepository) MultiBreakdown(ctx context.Context, columns []string, since time.Time, f contract.CharacterFilter) (map[string][]contract.GroupCount, error) {
+	if len(columns) == 0 {
+		return map[string][]contract.GroupCount{}, nil
+	}
+	for _, col := range columns {
+		if !breakdownColumns[col] {
+			return nil, fmt.Errorf("invalid breakdown column %q", col)
+		}
+	}
+
+	filterWhere, filterArgs := characterFilterWhereWithStart(f, 2)
+	args := []any{since}
+	args = append(args, filterArgs...)
+
+	var unions []string
+	for _, col := range columns {
+		unions = append(unions, fmt.Sprintf(
+			`SELECT '%s' AS dimension, %s AS key, COUNT(*) AS total,
+			        COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active
+			   FROM characters WHERE deleted_at IS NULL %s
+			  GROUP BY %s`, col, col, filterWhere, col,
+		))
+	}
+	query := strings.Join(unions, " UNION ALL ")
+
+	rows, err := r.driver.FetchMany(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string][]contract.GroupCount)
+	for rows.Next() {
+		var dimension string
+		var g contract.GroupCount
+		var key sql.NullString
+		if err := rows.Scan(&dimension, &key, &g.Total, &g.Active); err != nil {
+			return nil, err
+		}
+		if key.Valid {
+			g.Key = key.String
+		}
+		out[dimension] = append(out[dimension], g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *CharacterRepository) DemographicBreakdown(ctx context.Context, since time.Time, f contract.CharacterFilter) (*contract.DemographicCounts, error) {
+	// Build filter clauses with unique parameter indices for each UNION branch.
+	// Branch 1 (tribe): $1 = since, $2..N = filter params
+	filterWhere1, filterArgs1 := characterFilterWhereWithStart(f, 2)
+	// Branch 2 (gender): params continue after branch 1
+	offset2 := 2 + len(filterArgs1)
+	filterWhere2, filterArgs2 := characterFilterWhereWithStart(f, offset2)
+	// Branch 3 (race_gender): params continue after branch 2
+	offset3 := offset2 + len(filterArgs2)
+	filterWhere3, filterArgs3 := characterFilterWhereWithStart(f, offset3)
+
+	args := []any{since}
+	args = append(args, filterArgs1...)
+	args = append(args, filterArgs2...)
+	args = append(args, filterArgs3...)
+
+	query := fmt.Sprintf(`
+		SELECT 'tribe' AS dimension, tribe AS key, COUNT(*) AS total,
+		       COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active
+		  FROM characters WHERE deleted_at IS NULL AND tribe != '' %s
+		  GROUP BY tribe
+		UNION ALL
+		SELECT 'gender' AS dimension,
+		       CASE gender WHEN 1 THEN 'Male' WHEN 2 THEN 'Female' ELSE 'Unknown' END AS key,
+		       COUNT(*) AS total,
+		       COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active
+		  FROM characters WHERE deleted_at IS NULL %s
+		  GROUP BY gender
+		UNION ALL
+		SELECT 'race_gender' AS dimension,
+		       race || '|' || CASE gender WHEN 1 THEN 'Male' WHEN 2 THEN 'Female' ELSE 'Unknown' END AS key,
+		       COUNT(*) AS total,
+		       COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active
+		  FROM characters WHERE deleted_at IS NULL AND race != '' %s
+		  GROUP BY race, gender`, filterWhere1, filterWhere2, filterWhere3)
+
+	rows, err := r.driver.FetchMany(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := &contract.DemographicCounts{}
+	for rows.Next() {
+		var dimension string
+		var g contract.GroupCount
+		var key sql.NullString
+		if err := rows.Scan(&dimension, &key, &g.Total, &g.Active); err != nil {
+			return nil, err
+		}
+		if key.Valid {
+			g.Key = key.String
+		}
+		switch dimension {
+		case "tribe":
+			out.Tribes = append(out.Tribes, g)
+		case "gender":
+			out.Genders = append(out.Genders, g)
+		case "race_gender":
+			out.RaceGenders = append(out.RaceGenders, g)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *CharacterRepository) NewPerDay(ctx context.Context, since, until time.Time, f contract.CharacterFilter) ([]contract.DailyCount, error) {
