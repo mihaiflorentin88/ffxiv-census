@@ -83,7 +83,7 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 			tChar, err := h.tomestone.FetchCharacterProfile(ctx, id, false)
 			if err == nil {
 				// Skip characters with no race data (private profiles)
-				if tChar.Race == "" {
+				if tChar.Race == "" || tChar.Race == "----" {
 					if h.logger.Enabled(ctx, slog.LevelDebug) {
 						h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "private_profile"))
 					}
@@ -113,7 +113,7 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 			lChar, err := h.lodestone.FetchCharacter(ctx, id)
 			if err == nil {
 				// Skip characters with no race data (private profiles)
-				if lChar.Race == "" {
+				if lChar.Race == "" || lChar.Race == "----" {
 					if h.logger.Enabled(ctx, slog.LevelDebug) {
 						h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "private_profile"))
 					}
@@ -152,7 +152,7 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				lChar, err := h.lodestone.FetchCharacter(ctx, id)
 				if err == nil {
 					// Skip characters with no race data (private profiles)
-					if lChar.Race == "" {
+					if lChar.Race == "" || lChar.Race == "----" {
 						if h.logger.Enabled(ctx, slog.LevelDebug) {
 							h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "private_profile"))
 						}
@@ -180,7 +180,7 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 						tChar, terr := h.tomestone.FetchCharacterProfile(ctx, id, false)
 						if terr == nil {
 							// Skip characters with no race data (private profiles)
-							if tChar.Race == "" {
+							if tChar.Race == "" || tChar.Race == "----" {
 								if h.logger.Enabled(ctx, slog.LevelDebug) {
 									h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "private_profile"))
 								}

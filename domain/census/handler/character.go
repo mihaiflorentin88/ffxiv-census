@@ -61,7 +61,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 		char, err := h.lodestone.FetchCharacter(ctx, p.CharacterID)
 		if err == nil {
 			// Skip characters with no race data (private profiles)
-			if char.Race == "" {
+			if char.Race == "" || char.Race == "----" {
 				h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "private_profile"))
 				return nil, nil
 			}
@@ -81,7 +81,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 				tChar, terr := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 				if terr == nil {
 					// Skip characters with no race data (private profiles)
-					if tChar.Race == "" {
+					if tChar.Race == "" || tChar.Race == "----" {
 						h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "private_profile"))
 						return nil, nil
 					}
