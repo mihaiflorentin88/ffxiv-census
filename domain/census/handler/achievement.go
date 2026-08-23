@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/xivapi/godestone/v2"
 
@@ -44,11 +45,44 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		}
 	}
 
+	// Query DB for already-known milestones to optimize scraping.
+	knownMilestones, err := h.census.ListCharacterMilestones(ctx, p.CharacterID)
+	if err != nil {
+		// Log warning but continue — DB check is optimization, not requirement.
+		h.logger.WarnContext(ctx, "handler.achievement_census.milestone_query_failed", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
+	}
+
 	// Build early-termination callback from milestone IDs so the scraper
-	// stops paginating once all milestones are found.
+	// stops paginating once all milestones are found. Pre-seed with already-known
+	// milestones so the scraper only looks for missing ones.
 	milestoneIDs, err := h.census.MilestoneIDs(ctx)
 	if err == nil && len(milestoneIDs) > 0 {
+		// Pre-seed with already-known milestones from DB.
 		found := make(map[uint32]bool, len(milestoneIDs))
+		for _, m := range knownMilestones {
+			if milestoneIDs[m.AchievementID] {
+				found[m.AchievementID] = true
+			}
+		}
+
+		// Check if we can skip scraping entirely: all milestones known + fresh data.
+		allMilestonesKnown := len(found) == len(milestoneIDs)
+		freshEnough := false
+		if allMilestonesKnown {
+			char, getErr := h.census.GetCharacter(ctx, p.CharacterID)
+			if getErr == nil && char.LatestAchievementAt != nil {
+				staleness := time.Since(*char.LatestAchievementAt)
+				freshEnough = staleness < time.Duration(h.census.AchievementStalenessDays())*24*time.Hour
+			}
+		}
+
+		if allMilestonesKnown && freshEnough {
+			h.logger.DebugContext(ctx, "handler.achievement_census.skipped",
+				slog.Uint64("character_id", uint64(p.CharacterID)),
+				slog.String("reason", "all_milestones_known_and_fresh"))
+			return nil, nil
+		}
+
 		stopFn := func(page []*godestone.AchievementInfo) bool {
 			for _, a := range page {
 				if a != nil && milestoneIDs[a.ID] {

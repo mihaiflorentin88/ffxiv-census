@@ -23,6 +23,7 @@ type Service struct {
 	mu             sync.RWMutex
 	activityWindow time.Duration
 	maxLevel       uint32
+	achievementStalenessDays int
 	expansions     []ExpansionConfig
 	// milestoneCache holds the last-fetched milestone registry to avoid
 	// re-querying the DB on every ProcessAchievements call.
@@ -42,13 +43,14 @@ func NewService(
 		censusRuns:        censusRuns,
 		activityWindow:    defaultActivityWindow,
 		maxLevel:          100,
+		achievementStalenessDays: 7,
 		expansions:        DefaultExpansions,
 		milestoneCacheTTL: 5 * time.Minute,
 	}
 }
 
-// SetConfig configures max level and expansion milestones.
-func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig) {
+// SetConfig configures max level, expansion milestones, and achievement staleness.
+func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig, stalenessDays ...int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if maxLevel > 0 {
@@ -58,6 +60,9 @@ func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig) {
 		s.expansions = make([]ExpansionConfig, len(expansions))
 		copy(s.expansions, expansions)
 	}
+	if len(stalenessDays) > 0 && stalenessDays[0] > 0 {
+		s.achievementStalenessDays = stalenessDays[0]
+	}
 }
 
 // MaxLevel returns the configured max level cap.
@@ -65,6 +70,13 @@ func (s *Service) MaxLevel() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxLevel
+}
+
+// AchievementStalenessDays returns the configured staleness threshold in days.
+func (s *Service) AchievementStalenessDays() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.achievementStalenessDays
 }
 
 // Expansions returns a copy of the configured expansions.
@@ -132,6 +144,19 @@ func (s *Service) MilestoneIDs(ctx context.Context) (map[uint32]bool, error) {
 		ids[m.AchievementID] = true
 	}
 	return ids, nil
+}
+
+// ListCharacterMilestones returns the milestones already earned by a character.
+// Used by handlers to pre-seed the stop function and skip scraping when all
+// milestones are known.
+func (s *Service) ListCharacterMilestones(ctx context.Context, charID uint32) ([]contract.CharacterMilestone, error) {
+	return s.achievements.ListCharacterMilestones(ctx, charID)
+}
+
+// GetCharacter returns a character record by ID, or nil if not found.
+// Used by handlers that need to check staleness or other character fields.
+func (s *Service) GetCharacter(ctx context.Context, charID uint32) (*contract.CharacterRecord, error) {
+	return s.characters.Get(ctx, charID)
 }
 
 // UpsertCharacter converts a Lodestone character into a CharacterRecord and

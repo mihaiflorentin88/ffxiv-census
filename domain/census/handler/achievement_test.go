@@ -147,3 +147,173 @@ func TestAchievementCensus_SetsStopFn(t *testing.T) {
 		t.Error("stopFn returned false when all milestones found")
 	}
 }
+
+func TestAchievementCensus_PreSeededStopFn(t *testing.T) {
+	h, ls, chars, ach := newTestAchievementCensus(t)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 100, Name: "X", FirstSeenAt: time.Now()}, nil)
+
+	// Pre-seed 5 of 7 milestones in the DB.
+	now := time.Now()
+	preSeeded := []contract.CharacterMilestone{
+		{CharacterID: 100, AchievementID: 590, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 100, AchievementID: 1129, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 100, AchievementID: 1139, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 100, AchievementID: 1794, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 100, AchievementID: 2298, AchievedAt: now.Add(-48 * time.Hour)},
+	}
+	if err := ach.UpsertCharacterMilestones(context.Background(), 100, preSeeded); err != nil {
+		t.Fatalf("seed milestones: %v", err)
+	}
+
+	// Capture the stop function to verify pre-seeding.
+	var capturedStopFn func([]*godestone.AchievementInfo) bool
+	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+		capturedStopFn = ls.StopFn
+		// Return only the 2 missing milestones.
+		return []*godestone.AchievementInfo{
+			{NamedEntity: &models.NamedEntity{ID: 2958}, Date: now.Add(-time.Hour)},
+			{NamedEntity: &models.NamedEntity{ID: 3496}, Date: now},
+		}, &godestone.AllAchievementInfo{Private: false}, nil
+	}
+
+	_, err := h.Handle(context.Background(), achievementPayload(100))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if capturedStopFn == nil {
+		t.Fatal("handler did not set stop function")
+	}
+
+	// The stop function should return true when only the 2 missing milestones are found,
+	// because the 5 pre-seeded ones are already counted. This is the key optimization:
+	// the scraper only needs to find 2 milestones instead of all 7.
+	missingPage := []*godestone.AchievementInfo{
+		{NamedEntity: &models.NamedEntity{ID: 2958}},
+		{NamedEntity: &models.NamedEntity{ID: 3496}},
+	}
+	if !capturedStopFn(missingPage) {
+		t.Error("stopFn returned false when missing milestones found (pre-seeded should be counted)")
+	}
+}
+
+func TestAchievementCensus_SkipsWhenAllMilestonesKnownAndFresh(t *testing.T) {
+	h, ls, chars, ach := newTestAchievementCensus(t)
+	now := time.Now()
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID:                  200,
+		Name:                "Fresh",
+		FirstSeenAt:         now,
+		LatestAchievementAt: &now, // Fresh data
+	}, nil)
+
+	// Pre-seed all 7 milestones.
+	allMilestones := []contract.CharacterMilestone{
+		{CharacterID: 200, AchievementID: 590, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 200, AchievementID: 1129, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 200, AchievementID: 1139, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 200, AchievementID: 1794, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 200, AchievementID: 2298, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 200, AchievementID: 2958, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 200, AchievementID: 3496, AchievedAt: now.Add(-48 * time.Hour)},
+	}
+	if err := ach.UpsertCharacterMilestones(context.Background(), 200, allMilestones); err != nil {
+		t.Fatalf("seed milestones: %v", err)
+	}
+
+	var fetched bool
+	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+		fetched = true
+		return nil, nil, nil
+	}
+
+	next, err := h.Handle(context.Background(), achievementPayload(200))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("next jobs = %d, want 0", len(next))
+	}
+	if fetched {
+		t.Error("FetchAchievements was called when all milestones known and data is fresh")
+	}
+}
+
+func TestAchievementCensus_ScrapesWhenDataStale(t *testing.T) {
+	h, ls, chars, ach := newTestAchievementCensus(t)
+	now := time.Now()
+	stale := now.Add(-10 * 24 * time.Hour) // 10 days old > 7-day threshold
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID:                  300,
+		Name:                "Stale",
+		FirstSeenAt:         now,
+		LatestAchievementAt: &stale,
+	}, nil)
+
+	// Pre-seed all 7 milestones.
+	allMilestones := []contract.CharacterMilestone{
+		{CharacterID: 300, AchievementID: 590, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 300, AchievementID: 1129, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 300, AchievementID: 1139, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 300, AchievementID: 1794, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 300, AchievementID: 2298, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 300, AchievementID: 2958, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 300, AchievementID: 3496, AchievedAt: now.Add(-48 * time.Hour)},
+	}
+	if err := ach.UpsertCharacterMilestones(context.Background(), 300, allMilestones); err != nil {
+		t.Fatalf("seed milestones: %v", err)
+	}
+
+	var fetched bool
+	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+		fetched = true
+		return []*godestone.AchievementInfo{}, &godestone.AllAchievementInfo{Private: false}, nil
+	}
+
+	_, err := h.Handle(context.Background(), achievementPayload(300))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !fetched {
+		t.Error("FetchAchievements was not called when data is stale")
+	}
+}
+
+func TestAchievementCensus_ScrapesWhenMilestonesMissing(t *testing.T) {
+	h, ls, chars, ach := newTestAchievementCensus(t)
+	now := time.Now()
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID:                  400,
+		Name:                "Partial",
+		FirstSeenAt:         now,
+		LatestAchievementAt: &now,
+	}, nil)
+
+	// Pre-seed only 3 of 7 milestones.
+	partialMilestones := []contract.CharacterMilestone{
+		{CharacterID: 400, AchievementID: 590, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 400, AchievementID: 1129, AchievedAt: now.Add(-48 * time.Hour)},
+		{CharacterID: 400, AchievementID: 1139, AchievedAt: now.Add(-48 * time.Hour)},
+	}
+	if err := ach.UpsertCharacterMilestones(context.Background(), 400, partialMilestones); err != nil {
+		t.Fatalf("seed milestones: %v", err)
+	}
+
+	var fetched bool
+	ls.FetchAchievementsFunc = func(id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error) {
+		fetched = true
+		return []*godestone.AchievementInfo{
+			{NamedEntity: &models.NamedEntity{ID: 1794}, Date: now.Add(-time.Hour)},
+			{NamedEntity: &models.NamedEntity{ID: 2298}, Date: now.Add(-time.Hour)},
+			{NamedEntity: &models.NamedEntity{ID: 2958}, Date: now.Add(-time.Hour)},
+			{NamedEntity: &models.NamedEntity{ID: 3496}, Date: now},
+		}, &godestone.AllAchievementInfo{Private: false}, nil
+	}
+
+	_, err := h.Handle(context.Background(), achievementPayload(400))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !fetched {
+		t.Error("FetchAchievements was not called when milestones are missing")
+	}
+}

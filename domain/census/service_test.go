@@ -987,3 +987,61 @@ func TestService_MilestoneIDs(t *testing.T) {
 		t.Error("MilestoneIDs should contain 590 (Chocobo milestone)")
 	}
 }
+
+func TestService_ListCharacterMilestones(t *testing.T) {
+	svc, _, ach := newTestServiceAll(t)
+	ctx := context.Background()
+
+	// Seed milestones for character 1.
+	now := time.Now()
+	milestones := []contract.CharacterMilestone{
+		{CharacterID: 1, AchievementID: 590, AchievedAt: now.Add(-time.Hour)},
+		{CharacterID: 1, AchievementID: 1129, AchievedAt: now},
+	}
+	if err := ach.UpsertCharacterMilestones(ctx, 1, milestones); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := svc.ListCharacterMilestones(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListCharacterMilestones: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d milestones, want 2", len(got))
+	}
+	// Verify IDs present.
+	ids := map[uint32]bool{}
+	for _, m := range got {
+		ids[m.AchievementID] = true
+	}
+	if !ids[590] || !ids[1129] {
+		t.Errorf("unexpected milestones: %+v", got)
+	}
+}
+
+func TestService_GetCharacter(t *testing.T) {
+	svc, chars, _ := newTestServiceAll(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	if err := chars.Upsert(ctx, contract.CharacterRecord{ID: 42, Name: "Test", FirstSeenAt: now}, nil); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := svc.GetCharacter(ctx, 42)
+	if err != nil {
+		t.Fatalf("GetCharacter: %v", err)
+	}
+	if got == nil || got.ID != 42 {
+		t.Errorf("got %+v, want ID 42", got)
+	}
+
+	// Non-existent character returns nil, nil.
+	missing, err := svc.GetCharacter(ctx, 99999)
+	if err != nil {
+		t.Fatalf("GetCharacter missing: %v", err)
+	}
+	if missing != nil {
+		t.Errorf("expected nil for missing character, got %+v", missing)
+	}
+}
