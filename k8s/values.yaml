@@ -314,7 +314,7 @@ cronjobs:
         - "400"
 
     - name: refresh-ui-stats
-      schedule: "17 */6 * * *"
+      schedule: "17 * * * *"
       concurrencyPolicy: Forbid
       successfulJobsHistoryLimit: 2
       failedJobsHistoryLimit: 3

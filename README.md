@@ -128,7 +128,7 @@ Exports census data for characters or achievements directly to disk.
 
 ### 5. `refresh ui-stats` — Rebuild Aggregate Read Model
 
-Builds and atomically publishes the bounded statistics snapshot consumed by all aggregate UI pages and statistics APIs. Run it after the initial migration and whenever an immediate refresh is needed; Kubernetes also schedules it every six hours.
+Builds and atomically publishes the bounded statistics snapshot consumed by all aggregate UI pages and statistics APIs. Run it after the initial migration and whenever an immediate refresh is needed; Kubernetes also schedules it hourly at minute 17.
 
 ```bash
 ./bin/ffxiv-census refresh ui-stats

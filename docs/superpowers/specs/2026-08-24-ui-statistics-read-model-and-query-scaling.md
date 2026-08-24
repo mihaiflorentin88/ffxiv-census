@@ -125,9 +125,10 @@ schedule, acquires a PostgreSQL advisory lock, computes the next snapshot, and s
 atomically. Overlapping refreshes exit successfully after reporting that another
 refresh owns the lock.
 
-The initial schedule is every six hours. This deliberately trades sub-hour freshness
-for predictable database load. The schedule is configurable and can be shortened only
-after production refresh-duration and database-load measurements support it.
+The initial schedule was every six hours to establish predictable database load.
+Production measurements at roughly 208,000 characters showed a 6.9-second refresh,
+so the deployed schedule is now hourly at minute 17. Continue to shorten the configurable
+schedule only when production refresh-duration and database-load measurements support it.
 
 The refresh uses a read-only, repeatable-read transaction so character and milestone
 sections describe one database snapshot. A configurable statement timeout bounds the

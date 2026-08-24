@@ -562,7 +562,7 @@ Add a CronJob entry with low concurrency and predictable resource limits:
 
 ```yaml
 - name: refresh-ui-stats
-  schedule: "17 */6 * * *"
+  schedule: "17 * * * *"
   concurrencyPolicy: Forbid
   command:
     - /app/ffxiv-census
@@ -573,6 +573,11 @@ Add a CronJob entry with low concurrency and predictable resource limits:
 Set `successfulJobsHistoryLimit`, `failedJobsHistoryLimit`, and an appropriate
 `activeDeadlineSeconds` longer than `refresh_timeout`. The database advisory lock remains
 the authoritative cross-release lock.
+
+The original six-hour interval established a production baseline. After deployment,
+the refresh completed in 6.9 seconds at roughly 208,000 characters with ample database
+headroom, so run it hourly at minute 17. Keep the schedule regression-covered and retain
+`concurrencyPolicy: Forbid` as the dataset grows.
 
 Add a documented one-shot bootstrap command using a unique job name:
 

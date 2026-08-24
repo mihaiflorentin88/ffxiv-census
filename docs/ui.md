@@ -35,7 +35,7 @@
 ./bin/ffxiv-census refresh ui-stats
 ```
 
-The Helm chart runs this command every six hours with `concurrencyPolicy: Forbid`. Each server process reloads the database row no more frequently than `cache_ttl`; concurrent cold loads are coalesced. If a reload fails after a successful load, the last good snapshot remains available. A cold process with no snapshot returns `503 Service Unavailable` with `Retry-After`; there is deliberately no fallback to unbounded aggregate queries.
+The Helm chart runs this command hourly at minute 17 with `concurrencyPolicy: Forbid`. Production measurements at roughly 208,000 characters showed a 6.9-second refresh, supporting the shorter interval with substantial headroom. Each server process reloads the database row no more frequently than `cache_ttl`; concurrent cold loads are coalesced. If a reload fails after a successful load, the last good snapshot remains available. A cold process with no snapshot returns `503 Service Unavailable` with `Retry-After`; there is deliberately no fallback to unbounded aggregate queries.
 
 ```toml
 [census.ui_stats]
