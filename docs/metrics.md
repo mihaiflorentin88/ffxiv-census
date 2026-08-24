@@ -23,7 +23,10 @@ Prometheus metrics are exposed at `http://<host>:8080/metrics` and scraped autom
 | `ui_stats_refresh_total` | Counter | Snapshot refresh outcomes (`result`: `success`, `skipped`, or `error`). |
 | `ui_stats_refresh_duration_seconds` | Histogram | End-to-end snapshot refresh duration. |
 | `ui_stats_snapshot_age_seconds` | Gauge | Age of the snapshot most recently served by this process. |
-| `ui_stats_payload_bytes` | Gauge | Serialized size of the most recently refreshed snapshot. |
+| `ui_stats_payload_bytes` | Gauge | Serialized size of the snapshot most recently loaded or refreshed by this process. |
+| `ui_stats_last_refresh_duration_seconds` | Gauge | Refresh duration stored in the snapshot currently served by this process. |
+
+`ui_stats_refresh_total` and `ui_stats_refresh_duration_seconds` are emitted by the process that executes a refresh. In the default short-lived Kubernetes CronJob, the completion log is the durable refresh outcome; the web Grafana dashboard therefore uses snapshot age, last refresh duration, and `ui_stats_cache_total`, which are continuously scrapeable from web pods.
 
 ---
 

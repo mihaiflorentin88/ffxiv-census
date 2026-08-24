@@ -9,7 +9,7 @@ This directory contains production-grade Grafana dashboard exports monitoring al
 | Dashboard File | Title | UID | Target Layer & Key Telemetry |
 |---|---|---|---|
 | [`ffxiv-census-overview.json`](./ffxiv-census-overview.json) | **FFXIV Census — System Overview** | `ffxiv-census-overview` | System KPIs, total HTTP req/s, P95 latency, queue depth, SQLite in-use connections, uptime, status code breakdown, resource usage. |
-| [`ffxiv-census-webapp.json`](./ffxiv-census-webapp.json) | **FFXIV Census — Web Application & UI** | `ffxiv-census-webapp` | Web UI pageviews, route volume (`/ui/*`), HTMX partial requests, StatsD mean/P95 latencies, static asset hits, active web pods, statistics snapshot age, and refresh outcomes. |
+| [`ffxiv-census-webapp.json`](./ffxiv-census-webapp.json) | **FFXIV Census — Web Application & UI** | `ffxiv-census-webapp` | Web UI pageviews, route volume (`/ui/*`), HTMX partial requests, StatsD mean/P95 latencies, static asset hits, active web pods, statistics snapshot age, and cache outcomes. |
 | [`ffxiv-census-api.json`](./ffxiv-census-api.json) | **FFXIV Census — REST APIs & Swagger** | `ffxiv-census-api` | Endpoint throughput (`/api/v1/*`), latency heatmap, 4xx/5xx error tracking, Swagger docs access (`/docs/*`), StatsD API timers. |
 | [`ffxiv-census-workers.json`](./ffxiv-census-workers.json) | **FFXIV Census — Consumers, Workers & CronJobs** | `ffxiv-census-workers` | Multi-queue depths, consumer worker state, worker pod CPU/Memory usage, restarts, SQLite connection pool telemetry. |
 

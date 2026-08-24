@@ -535,7 +535,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Success, skipped-lock, and error outcomes from scheduled statistics refreshes.",
+      "description": "Snapshot cache hits, database-row reloads, stale-while-revalidate serves, and load errors observed by web pods.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -554,13 +554,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "editorMode": "code",
-          "expr": "sum by (result) (increase(ui_stats_refresh_total{job=~\"ffxiv-census.*\"}[6h]))",
+          "expr": "sum by (result) (increase(ui_stats_cache_total{job=~\"ffxiv-census.*\"}[6h]))",
           "legendFormat": "{{result}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Statistics Refresh Outcomes (6h)",
+      "title": "Statistics Cache Outcomes (6h)",
       "type": "timeseries"
     }
   ],

@@ -28,3 +28,24 @@ func TestUIStatsMetricsObserver(t *testing.T) {
 		}
 	}
 }
+
+func TestUIStatsCacheObserverPublishesPersistedSnapshotMetadata(t *testing.T) {
+	registry := NewRegistry()
+	observer := NewUIStatsObserver(registry)
+	snapshot := &contract.UIStatsSnapshot{
+		GeneratedAt:     time.Now().UTC().Add(-time.Minute),
+		RefreshDuration: 7 * time.Second,
+		Groups:          []contract.ScopedGroupCount{{Dimension: "race", Key: "Hyur", Total: 1}},
+	}
+	observer.ObserveUIStatsCache("reload", snapshot)
+
+	out := registry.Gather()
+	for _, want := range []string{
+		`ui_stats_payload_bytes `,
+		`ui_stats_last_refresh_duration_seconds 7`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics missing %q:\n%s", want, out)
+		}
+	}
+}

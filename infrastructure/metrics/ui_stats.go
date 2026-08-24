@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -12,6 +13,7 @@ type UIStatsObserver struct {
 	refreshDuration *Histogram
 	snapshotAge     *Gauge
 	payloadBytes    *Gauge
+	lastRefresh     *Gauge
 }
 
 func NewUIStatsObserver(registry *Registry) *UIStatsObserver {
@@ -21,6 +23,7 @@ func NewUIStatsObserver(registry *Registry) *UIStatsObserver {
 		refreshDuration: registry.NewHistogram("ui_stats_refresh_duration_seconds", "UI statistics refresh duration in seconds", []float64{1, 5, 15, 60, 300, 900, 3600, 7200}),
 		snapshotAge:     registry.NewGauge("ui_stats_snapshot_age_seconds", "Age of the UI statistics snapshot currently served"),
 		payloadBytes:    registry.NewGauge("ui_stats_payload_bytes", "Serialized UI statistics snapshot size in bytes"),
+		lastRefresh:     registry.NewGauge("ui_stats_last_refresh_duration_seconds", "Duration recorded by the currently served UI statistics snapshot"),
 	}
 }
 
@@ -32,6 +35,10 @@ func (o *UIStatsObserver) ObserveUIStatsCache(result string, snapshot *contract.
 			age = 0
 		}
 		o.snapshotAge.Set(nil, age)
+		o.lastRefresh.Set(nil, snapshot.RefreshDuration.Seconds())
+		if payload, err := json.Marshal(snapshot); err == nil {
+			o.payloadBytes.Set(nil, float64(len(payload)))
+		}
 	}
 }
 
