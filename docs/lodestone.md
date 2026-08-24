@@ -1,15 +1,21 @@
 # Lodestone Client
 
-The Lodestone client reads character and achievement data from **The Lodestone** (FFXIV's official community site) via [godestone v2](https://github.com/xivapi/godestone), backed by the [bingode](https://github.com/karashiiro/bingode) game-data provider and the **EN** locale.
+The Lodestone client reads character and achievement data from **The Lodestone** (FFXIV's official community site) with `CustomClient`, a direct HTTP/HTML scraper using the EN site.
 
 ## Contract
 
-`port/contract.LodestoneClient` (see `port/contract/lodestone.go`) is implemented by `infrastructure/lodestone` (real godestone adapter) and `mock/lodestone` (in-memory fake for tests). Returned types are godestone's model types — the adapter wraps godestone directly, mirroring how `DatabaseDriver` exposes `*sql.DB`.
+`port/contract.LodestoneClient` is implemented by `infrastructure/lodestone` (`CustomClient`) and `mock/lodestone` (an in-memory fake). It returns repository-owned contract types.
 
 | Method | Signature | Notes |
 | ------ | --------- | ----- |
-| `FetchCharacter` | `(ctx, id uint32) (*godestone.Character, error)` | Character ID is the numeric Lodestone ID. |
-| `FetchAchievements` | `(ctx, id uint32) ([]*godestone.AchievementInfo, *godestone.AllAchievementInfo, error)` | List of unlocked achievements + aggregate info. A private profile comes back as `AllAchievementInfo.Private = true` with no error. |
+| `FetchCharacter` | `(ctx, id uint32) (*contract.CharacterProfile, error)` | Character ID is the numeric Lodestone ID. |
+| `FetchAchievements` | `(ctx, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error)` | Sequential tracked-milestone detail check. |
+
+## Achievement milestone checks
+
+Achievement census requests are incremental: only missing milestones are requested, in chronological order. Persisted checkpoints are skipped, and the client stops at the first public unearned missing milestone. A complete tracked history makes **zero** Lodestone requests; no milestones known starts at Chocobo; a known prefix starts at its first missing checkpoint; and a historical gap requests only that gap rather than rechecking later stored milestones. Privacy is inferred from HTTP 403 on the first necessary detail request and costs no separate `/achievement/` request. HTTP 200 without the completed marker is public but unearned.
+
+Earned timestamps are extracted only from the completed achievement row, so new writes use the achievement-specific date. Historical incorrectly stored dates are not backfilled. `latest_achievement_*` reflects the latest checked tracked milestone, not arbitrary activity from the complete achievement history.
 
 ## Primary Provider & Fallback Integration
 
@@ -37,7 +43,7 @@ Environment overrides work like the other sections: `LODESTONE_RATE_LIMIT=0.5`, 
 
 **Process-wide vs per-proxy buckets:** The non-proxy consumer shares a single process-wide token bucket at `rate_limit` req/s. In proxy mode, each owner-locked proxy goroutine gets its own independent token bucket at `[proxy.consumer].lodestone_rate_limit` req/s (default 1.0). This means N proxy goroutines can collectively make up to N requests/second to Lodestone, each through a different IP.
 
-**Limitation:** throttling is per *method call*, not per HTTP request. `FetchCharacter` is a single scraper call that internally performs 2 HTTP requests (profile page + class/job page) behind one token. Retries consume new tokens, but each `FetchCharacter` invocation charges one token regardless of its internal request count. A per-request throttle would require deeper godestone changes — accepted for now.
+Tokens are charged per HTTP attempt, including every achievement detail request and retry.
 
 ## Error handling & Retry policy
 
@@ -61,29 +67,19 @@ The token bucket (1 req/s, burst 1) remains the primary rate defense. The backof
 - The backoff sleep is a `select` on `ctx.Done()` and can be aborted early.
 - `ctx.Err()` is checked before each attempt.
 
-godestone's methods take no `ctx` and its colly collectors expose no HTTP timeout, so an **in-flight request cannot be cancelled** — cancellation only prevents *starting* the next attempt.
+The HTTP client has a timeout and each request is created with the supplied context, so cancellation also reaches in-flight requests.
 
 ## Why no `user_agent` / `timeout` config keys
 
-godestone hardcodes its user-agent (colly's `UserAgent(s.meta.UserAgentDesktop)` from the embedded `meta.json`) and exposes no HTTP timeout through its public API. Neither key is implementable without a godestone fork/patch, so `rate_limit` and `max_retries` are the only cleanly configurable knobs.
+`CustomClient` uses a fixed census user agent and a fixed request timeout. `rate_limit` and `max_retries` are the supported Lodestone knobs; proxy consumers have a separate request timeout setting.
 
 ### Proxy-Aware Client
 
-`NewClientWithProxy(cfg, proxyURL, logger, rateLimiter...)` creates a LodestoneClient that routes ALL requests (including godestone scraper calls) through the given proxy URL. The proxyURL must include the protocol (`http://`, `socks4://`, `socks5://`). Uses the forked godestone with protocol-aware proxy support (`godestone.WithProxy`).
+`NewCustomClient(cfg, logger, rateLimiter, WithProxy(proxyURL))` creates a `LodestoneClient` that routes all direct HTTP requests through the proxy. The proxy URL must include `http://`, `https://`, `socks4://`, or `socks5://`.
 
 Used by `consume --proxy` — each worker goroutine creates its own proxy-aware client instance.
 
-### Godestone Fork
-
-The upstream godestone library doesn't support proxies. Our fork (`github.com/mihaiflorentin88/godestone/v2`) adds:
-
-- **`WithProxy(proxyURL)`** — functional option on `NewScraper` that stores the proxy URL
-- **`setCollectorProxy(c, proxyURL)`** — protocol-aware proxy injection:
-  - HTTP/HTTPS: uses colly's `SetProxy(proxyURL)`
-  - SOCKS4/SOCKS5: creates a dialer via `golang.org/x/net/proxy.FromURL()` and sets `http.Transport.DialContext`
-- **`AllowURLRevisit()`** on achievement, character, and classjob collectors — fixes a colly race condition where `URL already visited` errors occur when a scraper call times out and the caller retries with a fresh collector. Each `FetchCharacterAchievements` call creates a new collector, but colly's async mode can cause the first collector's goroutine to still be running when the retry starts, leading to URL hash collisions in the store.
-
-**Why AllowURLRevisit:** Colly tracks visited URLs in a per-collector store. When a request times out (10s), the caller creates a new collector for the retry. But the first collector's async goroutine may still be running — if it visits the same URL after the retry's collector has already visited it, colly returns `ErrAlreadyVisited`. Since each `FetchCharacterAchievements` call creates a fresh collector with no shared state, `AllowURLRevisit` is safe and prevents this race.
+`newProxyTransport` configures HTTP/HTTPS proxies with `http.Transport.Proxy` and SOCKS4/SOCKS5 proxies with `golang.org/x/net/proxy`; no scraper-specific proxy adapter is involved.
 
 ## HTML Sanitization (`stripTags`)
 

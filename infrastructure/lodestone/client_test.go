@@ -1,40 +1,115 @@
 package lodestone
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
-func TestExtractTimestamp(t *testing.T) {
-	tests := []struct {
-		name string
-		html string
-		want time.Time
-	}{
-		{
-			name: "single ldst_strftime",
-			html: `<script>ldst_strftime(1690531200, 'datetime')</script>`,
-			want: time.Unix(1690531200, 0),
-		},
-		{
-			name: "multiple ldst_strftime uses last",
-			html: `<script>ldst_strftime(1690000000, 'datetime')</script>
-			       <script>ldst_strftime(1690531200, 'datetime')</script>`,
-			want: time.Unix(1690531200, 0),
-		},
-		{
-			name: "no ldst_strftime returns zero",
-			html: `<div>no timestamp here</div>`,
-			want: time.Time{},
-		},
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func testCustomClient(rt http.RoundTripper) *CustomClient {
+	return &CustomClient{httpClient: &http.Client{Transport: rt}, limiter: rate.NewLimiter(rate.Inf, 1), logger: loggerOrDiscard(nil)}
+}
+
+func TestCustomClient_FetchAchievements_403MarksPrivateWithOneRequest(t *testing.T) {
+	requests := 0
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+	}))
+	summary, err := c.FetchAchievements(context.Background(), 1, []uint32{590, 1129})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractTimestamp(tt.html)
-			if !got.Equal(tt.want) {
-				t.Errorf("extractTimestamp() = %v, want %v", got, tt.want)
-			}
-		})
+	if requests != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", requests)
+	}
+	if summary == nil || !summary.Private {
+		t.Fatalf("summary = %+v, want private", summary)
+	}
+}
+
+func TestCustomClient_FetchAchievements_200IncompleteMeansUnearned(t *testing.T) {
+	requests := 0
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<div class="entry__achievement__view"><p class="entry__activity__txt">Not yet</p></div>`)), Header: make(http.Header)}, nil
+	}))
+	summary, err := c.FetchAchievements(context.Background(), 1, []uint32{590, 1129})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", requests)
+	}
+	if summary == nil || summary.Private || len(summary.Milestones) != 0 {
+		t.Fatalf("summary = %+v, want public unearned", summary)
+	}
+}
+
+func TestCheckSingleAchievement_CompleteWithoutDateReturnsError(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<div class="entry__achievement__view entry__achievement__view--complete"><time class="entry__activity__time"></time></div>`)), Header: make(http.Header)}, nil
+	}))
+	if _, err := c.checkSingleAchievement(context.Background(), 1, 590); err == nil {
+		t.Fatal("expected missing timestamp error")
+	}
+}
+
+func TestCheckSingleAchievement_CompleteDoesNotUseLaterPageTimestamp(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		html := `<div class="entry__achievement__view entry__achievement__view--complete"></div><time class="entry__activity__time"><script>ldst_strftime(1486702764, 'YMD')</script></time>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(html)), Header: make(http.Header)}, nil
+	}))
+	if _, err := c.checkSingleAchievement(context.Background(), 1, 590); err == nil {
+		t.Fatal("expected missing row timestamp error")
+	}
+}
+
+func TestCheckSingleAchievement_OverflowEpochReturnsError(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		html := `<div class="entry__achievement__view entry__achievement__view--complete"><time class="entry__activity__time"><script>ldst_strftime(999999999999999999999, 'YMD')</script></time></div>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(html)), Header: make(http.Header)}, nil
+	}))
+	if _, err := c.checkSingleAchievement(context.Background(), 1, 590); err == nil {
+		t.Fatal("expected overflow timestamp error")
+	}
+}
+
+func TestExtractAchievementTimestamp_IgnoresGlobalPageDates(t *testing.T) {
+	html := `<script>ldst_strftime(1785225600, 'YMD')</script><div class="entry__achievement__view entry__achievement__view--complete"><time class="entry__activity__time"><script>ldst_strftime(1486702764, 'YMD')</script></time></div><script>ldst_strftime(1777363200, 'YMD')</script>`
+	got, err := extractAchievementTimestamp(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Unix(1486702764, 0).UTC(); !got.Equal(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestExtractAchievementTimestamp_HandlesNestedCompletedRow(t *testing.T) {
+	html := `<script>ldst_strftime(1785225600, 'YMD')</script>
+		<div class="entry__achievement__view entry__achievement__view--complete">
+			<div class="entry__achievement__item"><div class="entry__achievement__frame"><img></div></div>
+			<div class="entry__achievement--list entry__achievement--history">
+				<p class="entry__activity__txt">My Little Chocobo</p>
+				<time class="entry__activity__time"><span>-</span><script>ldst_strftime(1486702764, 'YMD')</script></time>
+			</div>
+		</div>`
+	got, err := extractAchievementTimestamp(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Unix(1486702764, 0).UTC(); !got.Equal(want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 

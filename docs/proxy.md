@@ -255,17 +255,14 @@ On SIGTERM, the shutdown sequence is:
 
 All proxy protocols are supported end-to-end:
 
-| Protocol | Checker | Tomestone Client | Lodestone (Godestone) |
+| Protocol | Checker | Tomestone Client | Lodestone (`CustomClient`) |
 |----------|---------|------------------|----------------------|
-| HTTP | `http.Transport.Proxy` | `http.Transport.Proxy` | colly `SetProxy` |
-| HTTPS | `http.Transport.Proxy` | `http.Transport.Proxy` | colly `SetProxy` |
-| SOCKS4 | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` via `WithTransport` |
-| SOCKS5 | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` via `WithTransport` |
+| HTTP | `http.Transport.Proxy` | `http.Transport.Proxy` | `newProxyTransport` → `http.Transport.Proxy` |
+| HTTPS | `http.Transport.Proxy` | `http.Transport.Proxy` | `newProxyTransport` → `http.Transport.Proxy` |
+| SOCKS4 | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` | `newProxyTransport` → `golang.org/x/net/proxy` |
+| SOCKS5 | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` | `newProxyTransport` → `golang.org/x/net/proxy` |
 
-**Godestone fork** (`github.com/mihaiflorentin88/godestone/v2`): The upstream godestone library doesn't support proxies. Our fork adds:
-- `WithProxy(proxyURL)` option on `NewScraper`
-- `setCollectorProxy()` helper that routes HTTP/HTTPS via colly's `SetProxy` and SOCKS via `golang.org/x/net/proxy` with a custom `http.Transport`
-- `AllowURLRevisit()` on achievement, character, and classjob collectors — fixes a colly race condition where `URL already visited` errors occur when a scraper call times out and the caller retries with a fresh collector
+`CustomClient` receives `WithProxy(proxyURL)` and uses `newProxyTransport` to configure its direct HTTP transport. Each proxy worker owns its client and transport.
 
 ### Container Accessors
 
@@ -321,7 +318,7 @@ The `census-proxy` workers run with `--proxy` flag — each goroutine acquires i
 When troubleshooting proxy issues, the following diagnostic fields are logged:
 
 - **`proxy`** — the proxy URL being used (e.g. `socks5://1.2.3.4:1080`)
-- **`scraper`** — godestone scraper instance pointer (e.g. `0x1fd97eeaf9d0`) — useful for verifying that each goroutine has its own scraper
+- **`client`** — `CustomClient` instance pointer — useful for verifying that each goroutine has its own direct HTTP client
 - **`lodestone_client`** — LodestoneClient pointer — useful for verifying client isolation
 - **`worker_id`** — worker goroutine index
 - **`handler`** — handler instance pointer

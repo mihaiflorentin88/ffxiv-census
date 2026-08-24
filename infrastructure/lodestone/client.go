@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 
@@ -350,14 +351,19 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 	for _, id := range milestoneIDs {
 		result, err := c.checkSingleAchievement(ctx, charID, id)
 		if errors.Is(err, contract.ErrAchievementsPrivate) {
-			c.logger.DebugContext(ctx, "lodestone.fetch_achievements.private",
-				slog.Uint64("character_id", uint64(charID)))
 			return &contract.AchievementSummary{Private: true}, nil
 		}
 		if err != nil {
 			return nil, fmt.Errorf("check achievement %d for character %d: %w", id, charID, err)
 		}
 		requestsMade++
+
+		c.logger.DebugContext(ctx, "lodestone.fetch_achievements.checked",
+			slog.Uint64("character_id", uint64(charID)),
+			slog.Uint64("achievement_id", uint64(id)),
+			slog.String("achievement_name", result.Name),
+			slog.Bool("earned", result.Earned),
+			slog.String("earned_at", result.EarnedAt.Format(time.RFC3339)))
 
 		if result.Earned {
 			results = append(results, result)
@@ -429,8 +435,12 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 
 	// Check for earned indicator.
 	if strings.Contains(html, "entry__achievement__view--complete") {
+		earnedAt, err := extractAchievementTimestamp(html)
+		if err != nil {
+			return contract.AchievementResult{}, fmt.Errorf("parse earned timestamp for achievement %d: %w", achievementID, err)
+		}
 		result.Earned = true
-		result.EarnedAt = extractTimestamp(html)
+		result.EarnedAt = earnedAt.UTC()
 		c.logger.DebugContext(ctx, "lodestone.check_achievement.earned",
 			slog.Uint64("character_id", uint64(charID)),
 			slog.Uint64("achievement_id", uint64(achievementID)),
@@ -450,27 +460,80 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 // HTML parsing helpers.
 
 var (
-	timestampRe = regexp.MustCompile(`ldst_strftime\((\d+),`)
-	nameRe      = regexp.MustCompile(`entry__activity__txt">([^<]+)</p>`)
-	worldDCRe   = regexp.MustCompile(`^([^\s]+)\s+\[([^\]]+)\]$`)
-	fcIDRe      = regexp.MustCompile(`/lodestone/freecompany/(\d+)/`)
+	timestampEpochRe = regexp.MustCompile(`ldst_strftime\((\d+),`)
+	nameRe           = regexp.MustCompile(`entry__activity__txt">([^<]+)</p>`)
+	worldDCRe        = regexp.MustCompile(`^([^\s]+)\s+\[([^\]]+)\]$`)
+	fcIDRe           = regexp.MustCompile(`/lodestone/freecompany/(\d+)/`)
 )
 
-// extractTimestamp extracts the earned-at timestamp from a Lodestone achievement detail page.
-// The page contains multiple ldst_strftime calls; the last one is the achievement date.
-func extractTimestamp(html string) time.Time {
-	matches := timestampRe.FindAllStringSubmatch(html, -1)
-	if len(matches) == 0 {
-		return time.Time{}
-	}
-	// Use the last match — the achievement-specific timestamp appears after
-	// the page-level timestamp in the HTML.
-	lastMatch := matches[len(matches)-1]
-	epoch, err := strconv.ParseInt(lastMatch[1], 10, 64)
+// extractAchievementTimestamp extracts the epoch only from the completed
+// achievement row, never from page-global navigation timestamps.
+func extractAchievementTimestamp(html string) (time.Time, error) {
+	doc, err := xhtml.Parse(strings.NewReader(html))
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, fmt.Errorf("parse achievement HTML: %w", err)
 	}
-	return time.Unix(epoch, 0)
+	completeRow := findHTMLNode(doc, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.ElementNode && node.Data == "div" && hasHTMLClass(node, "entry__achievement__view--complete")
+	})
+	if completeRow == nil {
+		return time.Time{}, fmt.Errorf("completed achievement row not found")
+	}
+	timeNode := findHTMLNode(completeRow, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.ElementNode && node.Data == "time" && hasHTMLClass(node, "entry__activity__time")
+	})
+	if timeNode == nil {
+		return time.Time{}, fmt.Errorf("completed achievement timestamp not found")
+	}
+	match := timestampEpochRe.FindStringSubmatch(htmlNodeText(timeNode))
+	if len(match) < 2 {
+		return time.Time{}, fmt.Errorf("completed achievement timestamp not found")
+	}
+	epoch, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse epoch: %w", err)
+	}
+	return time.Unix(epoch, 0).UTC(), nil
+}
+
+func findHTMLNode(root *xhtml.Node, match func(*xhtml.Node) bool) *xhtml.Node {
+	if match(root) {
+		return root
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if found := findHTMLNode(child, match); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func hasHTMLClass(node *xhtml.Node, want string) bool {
+	for _, attr := range node.Attr {
+		if attr.Key == "class" {
+			for _, className := range strings.Fields(attr.Val) {
+				if className == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func htmlNodeText(root *xhtml.Node) string {
+	var text strings.Builder
+	var walk func(*xhtml.Node)
+	walk = func(node *xhtml.Node) {
+		if node.Type == xhtml.TextNode {
+			text.WriteString(node.Data)
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(root)
+	return text.String()
 }
 
 // extractAchievementName extracts the achievement name from the detail page HTML.

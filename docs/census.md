@@ -19,12 +19,12 @@ One row per Lodestone character. `id` is the Lodestone character ID (externally 
 | `gender` | INTEGER | 0 = none, 1 = male, 2 = female |
 | `fc_id`, `fc_name` | TEXT (nullable) | NULL = not in a free company |
 | `achievements_private` | INTEGER | 1 when the character hides achievements |
-| `latest_achievement_id`, `latest_achievement_at` | nullable | most recent earned achievement and when |
+| `latest_achievement_id`, `latest_achievement_at` | nullable | latest earned tracked milestone checked and when; not the player's globally latest achievement |
 | `first_seen_at` | TEXT NOT NULL | first discovery time |
 | `last_census_at` | TEXT (nullable) | NULL until a full census has run |
 | `deleted_at` | TEXT (nullable) | set when Lodestone returns 404 (character gone) |
 
-**Discovery:** the `id-sweep` handler ingests a discovered character fully (profile + jobs) in one `UpsertCharacter` call, since godestone's `FetchCharacter` already returns the complete profile. `last_census_at` is set by the upsert; `latest_achievement_at` stays NULL until the achievement census runs.
+**Discovery:** the `id-sweep` handler ingests a discovered character fully (profile + jobs) in one `UpsertCharacter` call. `last_census_at` is set by the upsert; `latest_achievement_at` stays NULL until the achievement census runs.
 
 **`ListStale` behaviour:** returns up to `limit` characters ordered by `last_census_at ASC NULLS FIRST, id ASC`. A zero `cutoff` disables the age predicate — all non-deleted characters are eligible, ordered oldest `last_census_at` first (NULL first). A positive `cutoff` filters to rows whose `last_census_at` is before the cutoff (NULL `last_census_at` counts as stale in both modes).
 
@@ -37,7 +37,7 @@ One row per equipped gear slot: `(character_id, slot)` primary key, `item_id`, `
 
 ### `milestone_achievements`
 
-The registry of achievements the census tracks (data-driven — add a row to track a new milestone). `achievement_id` is the game achievement ID (the same `uint32` value godestone returns in `AchievementInfo.ID`). `kind` is one of `expansion_msq`, `job_level`, `chocobo`. `expansion` is non-null only for `expansion_msq` milestones. `detail` is a human-readable description.
+The registry of achievements the census tracks is data-driven — add a row to track a new milestone. `achievement_id` is the game achievement ID, not a Lodestone playguide URL slug. `kind` is one of `expansion_msq`, `job_level`, `chocobo`. `expansion` is non-null only for `expansion_msq` milestones. `detail` is a human-readable description.
 
 ### `character_milestones`
 
@@ -49,7 +49,7 @@ Operational tracking of census sweeps: `started_at`, `finished_at`, `characters_
 
 ## Milestone achievement IDs
 
-Achievement IDs are the **game** achievement IDs (small sequential integers), verified against the XIVAPI Achievement sheet (`/api/sheet/Achievement/{id}`) and ffxivcollect's achievement data — NOT the hex slugs used in Lodestone `playguide/db/achievement/...` URLs. godestone's `AchievementInfo.ID` is populated from the character achievement-list HTML and is this same game ID.
+Achievement IDs are the **game** achievement IDs (small sequential integers), verified against the XIVAPI Achievement sheet (`/api/sheet/Achievement/{id}`) and ffxivcollect's achievement data — not the hex slugs used in Lodestone `playguide/db/achievement/...` URLs.
 
 The milestone registry is driven dynamically by `config.toml` (`[census.expansions]`) alongside the foundational Chocobo milestone and is synced to the `milestone_achievements` table via `CensusService.SyncMilestones` (idempotent `INSERT OR IGNORE`).
 
@@ -64,6 +64,8 @@ Default entries:
 | expansion_msq | 2298 | Shadowbringers | Shadowbringers |
 | expansion_msq | 2958 | Endwalker | That Its Chorus Might Ring for All |
 | expansion_msq | 3496 | Dawntrail | In the Glow of a New Dawn |
+
+Achievement census requests only missing entries from this ordered chain and preserves prior rows during upsert. It stops at the first missing entry that is not complete, skips already stored checkpoints even across historical gaps, and makes no Lodestone request once all tracked rows exist. Dates on historical rows are not backfilled; newly discovered earned rows use the date parsed from the completed achievement HTML row.
 ## Repositories
 
 Three contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
@@ -92,17 +94,17 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 
 ## CensusService
 
-`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the three repositories; the ingest handlers call it. The service caches the milestone registry in memory (5-minute TTL) to avoid re-querying the DB on every `ProcessAchievements` call; `SyncMilestones` invalidates the cache.
+`domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the three repositories; the ingest handlers call it. The service caches the milestone registry in memory (5-minute TTL) to avoid re-querying the DB on every achievement census; `SyncMilestones` invalidates the cache.
 
 - `SyncMilestones(ctx)` — seeds configured expansion milestones and chocobo achievement into the DB (idempotent). Invalidates the in-memory milestone cache so the next `ProcessAchievements` picks up the fresh registry.
-- `UpsertCharacter(ctx, *godestone.Character)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
+- `UpsertCharacter(ctx, *contract.CharacterProfile)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
 - `UpsertTomestoneCharacter(ctx, *contract.TomestoneCharacter)` — converts a Tomestone character + jobs into records and persists them atomically.
-- `ProcessAchievements(ctx, charID, earned, all)` — filters earned achievements against the registry, persists only matching milestones, and updates the character's `achievements_private` flag and latest achievement (any achievement, not just milestones). Uses the in-memory milestone cache (5-minute TTL) to avoid re-querying the DB on every call.
+- `ProcessMilestoneResults(ctx, charID, summary)` — additively persists earned tracked milestones and updates achievement privacy plus the latest checked tracked milestone. Uses the in-memory milestone cache (5-minute TTL) to avoid re-querying the DB on every call.
 - `MaxCharacterID(ctx)` — returns the highest known character ID in the repository (excluding deleted characters), used for auto-discovery sweeps.
 - `MilestoneIDs(ctx)` — returns the set of tracked milestone achievement IDs from the cached registry. Useful for handler-level pre-filtering.
-- `IsActive(latestAt)` — true when the latest achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`).
+- `IsActive(latestAt)` — true when the latest checked tracked milestone is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`). This is a conservative progression signal, not complete activity tracking.
 - `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
-- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the latest achievement is within the activity window and max-level means having at least one job at or above `max_level`. Fans out three database queries concurrently (`Count`, `CountActive`, `Count` with `MinLevel`) and joins results with deterministic error precedence (total → active → max-level).
+- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the latest checked tracked milestone is within the activity window and max-level means having at least one job at or above `max_level`. Fans out three database queries concurrently (`Count`, `CountActive`, `Count` with `MinLevel`) and joins results with deterministic error precedence (total → active → max-level).
 - `ListCharacters(ctx, filter, limit, offset)` — one page of characters matching `filter` plus the matching count (the HTTP pagination/filtering source).
 - `CharacterDetail(ctx, id)` — character plus jobs and milestones, with the free company when the character is in one; `nil` when the id is unknown.
 - `WorldDetail(ctx, worldName)` — full census stats for a specific world, returned as `WorldDetailStats` (total population, active players, new characters in last 30 days, race breakdown, MSQ completions, 30-day new-character timeline, and a sample character). Fans out seven database queries concurrently and joins results with deterministic error precedence.
@@ -118,4 +120,3 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 | EU | Chaos, Light |
 | JP | Elemental, Gaia, Mana, Meteor |
 | OCE | Materia |
-

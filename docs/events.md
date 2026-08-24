@@ -8,7 +8,7 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 |---|---|---|
 | `id-sweep` | Probe a range of character IDs; ingest any that exist | ✅ implemented |
 | `character-census` | Re-census a known character's profile + jobs | ✅ implemented |
-| `achievement-census` | Fetch achievements, filter milestones, track latest | ✅ implemented |
+| `achievement-census` | Incrementally fetch tracked milestones and track the latest checked milestone | ✅ implemented |
 | `new-proxy` | Register and test a newly discovered proxy | ✅ implemented |
 
 Recurring proxy scans are performed directly by the `proxy scan` database worker, not via queue events. See `docs/proxy.md`.
@@ -58,6 +58,8 @@ Both `id-sweep` and `character-census` are dual-source events, but they use diff
 - **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting CPU cycles.
 
 ### Lodestone-Only Event Rate-Limit Handling
+
+Achievement checks request only missing milestones in chain order and stop at the first public unearned result; already stored checkpoints are not rechecked. HTTP 403 on that first required detail request marks achievements private, with no separate achievement-list privacy probe. A complete tracked history does not call Lodestone.
 
 `achievement-census` is a Lodestone-exclusive event (no Tomestone fallback). When Lodestone is rate-limited or paused, the handler calls `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retries the fetch inline. This is more efficient than returning an error immediately (which triggers queue retry + backoff).
 

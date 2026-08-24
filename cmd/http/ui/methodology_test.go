@@ -18,7 +18,7 @@ func TestMethodologyHandler(t *testing.T) {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	body := rec.Body.String()
+	body := strings.Join(strings.Fields(rec.Body.String()), " ")
 	if !strings.Contains(body, "Census Methodology &amp; Metrics") {
 		t.Errorf("expected body to contain 'Census Methodology &amp; Metrics', got:\n%s", body)
 	}
@@ -30,6 +30,9 @@ func TestMethodologyHandler(t *testing.T) {
 	}
 	if !strings.Contains(body, "Active Player Criteria") {
 		t.Errorf("expected body to contain 'Active Player Criteria', got:\n%s", body)
+	}
+	if !strings.Contains(body, "conservative progression signal") {
+		t.Errorf("expected body to describe the conservative progression signal, got:\n%s", body)
 	}
 	if !strings.Contains(body, "Main Scenario Quest (MSQ) Progression") {
 		t.Errorf("expected body to contain 'Main Scenario Quest (MSQ) Progression', got:\n%s", body)

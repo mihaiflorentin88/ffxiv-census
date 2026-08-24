@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
@@ -56,37 +57,10 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		return nil, fmt.Errorf("achievement-census %d: get milestone IDs: %w", p.CharacterID, err)
 	}
 
-	// Check if we can skip scraping entirely: all milestones known + fresh data.
-	if len(milestoneIDSet) > 0 {
-		found := make(map[uint32]bool, len(milestoneIDSet))
-		for _, m := range knownMilestones {
-			if milestoneIDSet[m.AchievementID] {
-				found[m.AchievementID] = true
-			}
-		}
-
-		allMilestonesKnown := len(found) == len(milestoneIDSet)
-		freshEnough := false
-		if allMilestonesKnown {
-			char, getErr := h.census.GetCharacter(ctx, p.CharacterID)
-			if getErr == nil && char.LatestAchievementAt != nil {
-				staleness := time.Since(*char.LatestAchievementAt)
-				freshEnough = staleness < time.Duration(h.census.AchievementStalenessDays())*24*time.Hour
-			}
-		}
-
-		if allMilestonesKnown && freshEnough {
-			h.logger.DebugContext(ctx, "handler.achievement_census.skipped",
-				slog.Uint64("character_id", uint64(p.CharacterID)),
-				slog.String("reason", "all_milestones_known_and_fresh"))
-			return nil, nil
-		}
-	}
-
-	// Build ordered milestone IDs slice for sequential checking.
-	milestoneIDs := make([]uint32, 0, len(milestoneIDSet))
-	for id := range milestoneIDSet {
-		milestoneIDs = append(milestoneIDs, id)
+	milestoneIDs := missingMilestoneIDs(milestoneIDSet, knownMilestones)
+	if milestoneIDs == nil {
+		h.logger.InfoContext(ctx, "handler.achievement_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "all_milestones_known"))
+		return nil, nil
 	}
 
 	start := time.Now()
@@ -95,9 +69,20 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 		h.logger.WarnContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 		return nil, fmt.Errorf("achievement-census fetch %d: %w", p.CharacterID, err)
 	}
+	if summary != nil {
+		summary.LatestAchievement = latestKnownMilestone(summary.LatestAchievement, knownMilestones)
+	}
 
 	if summary != nil && summary.Private {
-		h.logger.DebugContext(ctx, "handler.achievement_census.private", slog.Uint64("character_id", uint64(p.CharacterID)))
+		h.logger.InfoContext(ctx, "handler.achievement_census.private",
+			slog.Uint64("character_id", uint64(p.CharacterID)))
+	}
+	if summary != nil {
+		h.logger.InfoContext(ctx, "handler.achievement_census.summary",
+			slog.Uint64("character_id", uint64(p.CharacterID)),
+			slog.Bool("private", summary.Private),
+			slog.Int("milestones_found", len(summary.Milestones)),
+			slog.Bool("has_latest", summary.LatestAchievement != nil))
 	}
 
 	milestones, err := h.census.ProcessMilestoneResults(ctx, p.CharacterID, summary)
@@ -108,19 +93,46 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 
 	duration := time.Since(start)
 	private := summary != nil && summary.Private
-	requests := 0
-	if summary != nil {
-		requests += len(summary.Milestones)
-		if !summary.Private && len(summary.Milestones) < len(milestoneIDs) {
-			requests++ // the missing milestone request
-		}
-	}
-
 	h.logger.DebugContext(ctx, "handler.achievement_census.complete",
 		slog.Uint64("character_id", uint64(p.CharacterID)),
 		slog.Int("milestones", len(milestones)),
-		slog.Int("requests", requests),
 		slog.Bool("private", private),
 		slog.Duration("duration", duration))
 	return nil, nil
+}
+
+// missingMilestoneIDs returns only absent tracked milestones in canonical order.
+// Persisted checkpoints need not be requested again: the sequential client stops
+// at the first public unearned checkpoint it receives.
+func missingMilestoneIDs(ids map[uint32]bool, known []contract.CharacterMilestone) []uint32 {
+	ordered := make([]uint32, 0, len(ids))
+	for id := range ids {
+		ordered = append(ordered, id)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	persisted := make(map[uint32]bool, len(known))
+	for _, milestone := range known {
+		if ids[milestone.AchievementID] {
+			persisted[milestone.AchievementID] = true
+		}
+	}
+	missing := make([]uint32, 0, len(ordered))
+	for _, id := range ordered {
+		if !persisted[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return missing
+}
+
+func latestKnownMilestone(latest *contract.AchievementResult, known []contract.CharacterMilestone) *contract.AchievementResult {
+	for _, milestone := range known {
+		if latest == nil || milestone.AchievedAt.After(latest.EarnedAt) {
+			latest = &contract.AchievementResult{AchievementID: milestone.AchievementID, Earned: true, EarnedAt: milestone.AchievedAt}
+		}
+	}
+	return latest
 }

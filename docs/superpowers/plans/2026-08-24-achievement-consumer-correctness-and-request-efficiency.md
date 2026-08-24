@@ -120,9 +120,9 @@ For each character:
 2. Load already-persisted character milestones and index them by achievement ID.
 3. Find the earliest milestone that is missing.
 4. If none needs work, skip Lodestone entirely.
-5. Pass only the suffix beginning at that earliest required milestone to
-   `FetchAchievements`.
-6. The client checks the suffix sequentially and stops after the first public,
+5. Pass only missing milestone IDs, in canonical order, to `FetchAchievements`;
+   already persisted checkpoints are omitted even when an earlier gap exists.
+6. The client checks those missing checkpoints sequentially and stops after the first public,
    unearned milestone or the first 403.
 7. Upsert returned earned milestones without deleting previously stored rows.
 
@@ -166,7 +166,7 @@ page-global timestamp based solely on first/last position.
 Preserve additive/idempotent milestone persistence:
 
 - Newly returned earned milestones are batch-upserted.
-- Existing milestones not included in an incremental suffix response remain.
+- Existing milestones omitted from an incremental response remain.
 - A private response changes only `achievements_private`; it does not erase
   prior milestone or latest-achievement data.
 - A public response clears `achievements_private`.
@@ -205,7 +205,7 @@ func TestAchievementCensus_RequestsOrderedSuffix(t *testing.T) {
             wantCalls:     1,
         },
         {
-            name: "known prefix starts at first missing",
+            name: "known prefix requests remaining missing checkpoints",
             known: []contract.CharacterMilestone{
                 {AchievementID: 590, AchievedAt: validTime},
                 {AchievementID: 1129, AchievedAt: validTime},
@@ -213,6 +213,19 @@ func TestAchievementCensus_RequestsOrderedSuffix(t *testing.T) {
             },
             wantRequested: []uint32{1794, 2298, 2958, 3496},
             wantCalls:     1,
+        },
+        {
+            name: "later known checkpoints leave only early hole",
+            known: []contract.CharacterMilestone{
+                {AchievementID: 1129, AchievedAt: validTime},
+                {AchievementID: 1139, AchievedAt: validTime},
+                {AchievementID: 1794, AchievedAt: validTime},
+                {AchievementID: 2298, AchievedAt: validTime},
+                {AchievementID: 2958, AchievedAt: validTime},
+                {AchievementID: 3496, AchievedAt: validTime},
+            },
+            wantRequested: []uint32{590},
+            wantCalls: 1,
         },
         {
             name: "complete correct history makes no request",
@@ -240,11 +253,11 @@ func TestAchievementCensus_AllKnownOldAchievementsDoNotRefetch(t *testing.T)
 
 #### Green
 
-Build the canonical slice and locate the first required index. The exact helper
+Build the canonical slice and return only missing IDs. The exact helper
 name is flexible, but keep the logic independently testable:
 
 ```go
-func milestoneRequestSuffix(
+func missingMilestoneIDs(
     ids map[uint32]bool,
     known []contract.CharacterMilestone,
 ) []uint32 {
@@ -259,12 +272,16 @@ func milestoneRequestSuffix(
         persisted[milestone.AchievementID] = true
     }
 
-    for i, id := range ordered {
+    missing := make([]uint32, 0, len(ordered))
+    for _, id := range ordered {
         if !persisted[id] {
-            return ordered[i:]
+            missing = append(missing, id)
         }
     }
-    return nil
+    if len(missing) == 0 {
+        return nil
+    }
+    return missing
 }
 ```
 
@@ -605,7 +622,7 @@ Acceptance for the live smoke:
 - Its `achieved_at` is the achievement-specific date and is not
   `2026-07-28 08:00:00+00`.
 - Logs show chronological milestone checks and no `/achievement/` privacy probe.
-- A second job for the same now-complete known prefix starts at the next missing
+- A second job for the same now-complete known prefix requests the next missing
   milestone (or makes zero requests when all tracked milestones are known).
 - The aggregate historical bad-row count is unchanged except for incidental
   conflict updates caused by the single candidate; no backfill is performed.

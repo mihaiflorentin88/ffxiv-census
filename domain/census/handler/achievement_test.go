@@ -107,7 +107,7 @@ func TestAchievementCensus_WaitsForRateLimitedLodestone(t *testing.T) {
 	}
 }
 
-func TestAchievementCensus_SkipsWhenAllMilestonesKnownAndFresh(t *testing.T) {
+func TestAchievementCensus_SkipsWhenAllMilestonesKnown(t *testing.T) {
 	h, ls, chars, ach := newTestAchievementCensus(t)
 	now := time.Now()
 	_ = chars.Upsert(context.Background(), contract.CharacterRecord{
@@ -149,7 +149,7 @@ func TestAchievementCensus_SkipsWhenAllMilestonesKnownAndFresh(t *testing.T) {
 	}
 }
 
-func TestAchievementCensus_ScrapesWhenDataStale(t *testing.T) {
+func TestAchievementCensus_AllKnownOldAchievementsDoNotRefetch(t *testing.T) {
 	h, ls, chars, ach := newTestAchievementCensus(t)
 	now := time.Now()
 	stale := now.Add(-10 * 24 * time.Hour) // 10 days old > 7-day threshold
@@ -184,8 +184,102 @@ func TestAchievementCensus_ScrapesWhenDataStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if !fetched {
-		t.Error("FetchAchievements was not called when data is stale")
+	if fetched {
+		t.Error("FetchAchievements was called when all milestones are known")
+	}
+}
+
+func TestAchievementCensus_RequestsOnlyMissingMilestonesInOrder(t *testing.T) {
+	tests := []struct {
+		name          string
+		characterID   uint32
+		known         []contract.CharacterMilestone
+		wantRequested []uint32
+		wantCalls     int
+	}{
+		{"nothing known starts from chocobo", 501, nil, []uint32{590, 1129, 1139, 1794, 2298, 2958, 3496}, 1},
+		{"known prefix requests missing checkpoints", 502, []contract.CharacterMilestone{{AchievementID: 590}, {AchievementID: 1129}, {AchievementID: 1139}}, []uint32{1794, 2298, 2958, 3496}, 1},
+		{"later known checkpoints leave only early hole", 504, []contract.CharacterMilestone{{AchievementID: 1129}, {AchievementID: 1139}, {AchievementID: 1794}, {AchievementID: 2298}, {AchievementID: 2958}, {AchievementID: 3496}}, []uint32{590}, 1},
+		{"complete history makes no request", 503, []contract.CharacterMilestone{{AchievementID: 590}, {AchievementID: 1129}, {AchievementID: 1139}, {AchievementID: 1794}, {AchievementID: 2298}, {AchievementID: 2958}, {AchievementID: 3496}}, nil, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, ls, chars, ach := newTestAchievementCensus(t)
+			now := time.Now()
+			if err := chars.Upsert(context.Background(), contract.CharacterRecord{ID: tt.characterID, Name: "X", FirstSeenAt: now}, nil); err != nil {
+				t.Fatal(err)
+			}
+			for i := range tt.known {
+				tt.known[i].CharacterID = tt.characterID
+				tt.known[i].AchievedAt = now
+			}
+			if err := ach.UpsertCharacterMilestones(context.Background(), tt.characterID, tt.known); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			var got []uint32
+			ls.FetchAchievementsFunc = func(_ context.Context, _ uint32, ids []uint32) (*contract.AchievementSummary, error) {
+				calls++
+				got = append([]uint32(nil), ids...)
+				return &contract.AchievementSummary{}, nil
+			}
+			if _, err := h.Handle(context.Background(), achievementPayload(tt.characterID)); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tt.wantCalls {
+				t.Fatalf("calls = %d, want %d", calls, tt.wantCalls)
+			}
+			if len(got) != len(tt.wantRequested) {
+				t.Fatalf("requested = %v, want %v", got, tt.wantRequested)
+			}
+			for i := range got {
+				if got[i] != tt.wantRequested[i] {
+					t.Fatalf("requested = %v, want %v", got, tt.wantRequested)
+				}
+			}
+		})
+	}
+}
+
+func TestAchievementCensus_PreservesLaterKnownLatestAchievement(t *testing.T) {
+	h, ls, chars, ach := newTestAchievementCensus(t)
+	older, later := time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour)
+	if err := chars.Upsert(context.Background(), contract.CharacterRecord{ID: 505, Name: "X", FirstSeenAt: older}, nil); err != nil {
+		t.Fatal(err)
+	}
+	known := []contract.CharacterMilestone{{CharacterID: 505, AchievementID: 3496, AchievedAt: later}}
+	if err := ach.UpsertCharacterMilestones(context.Background(), 505, known); err != nil {
+		t.Fatal(err)
+	}
+	ls.FetchAchievementsFunc = func(_ context.Context, _ uint32, ids []uint32) (*contract.AchievementSummary, error) {
+		if len(ids) != 6 || ids[0] != 590 {
+			t.Fatalf("requested = %v, want missing IDs", ids)
+		}
+		return &contract.AchievementSummary{Milestones: []contract.AchievementResult{{AchievementID: 590, Earned: true, EarnedAt: older}}, LatestAchievement: &contract.AchievementResult{AchievementID: 590, Earned: true, EarnedAt: older}}, nil
+	}
+	if _, err := h.Handle(context.Background(), achievementPayload(505)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := chars.Get(context.Background(), 505)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LatestAchievementID == nil || *got.LatestAchievementID != 3496 {
+		t.Fatalf("latest ID = %v, want 3496", got.LatestAchievementID)
+	}
+	if got.LatestAchievementAt == nil || !got.LatestAchievementAt.Equal(later) {
+		t.Fatalf("latest at = %v, want %v", got.LatestAchievementAt, later)
+	}
+	milestones, err := ach.ListCharacterMilestones(context.Background(), 505)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := make(map[uint32]bool, len(milestones))
+	for _, milestone := range milestones {
+		persisted[milestone.AchievementID] = true
+	}
+	if len(persisted) != 2 || !persisted[590] || !persisted[3496] {
+		t.Fatalf("persisted milestones = %v, want 590 and 3496", persisted)
 	}
 }
 

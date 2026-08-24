@@ -68,8 +68,8 @@ func (r *AchievementRepository) ListMilestones(ctx context.Context) ([]contract.
 	return out, rows.Err()
 }
 
-// UpsertCharacterMilestones replaces a character's earned milestones in a
-// single batch INSERT. The ON CONFLICT clause makes it idempotent.
+// UpsertCharacterMilestones additively inserts or updates a character's earned
+// milestones in one batch. The ON CONFLICT clause makes it idempotent.
 func (r *AchievementRepository) UpsertCharacterMilestones(ctx context.Context, characterID uint32, milestones []contract.CharacterMilestone) error {
 	if len(milestones) == 0 {
 		return nil

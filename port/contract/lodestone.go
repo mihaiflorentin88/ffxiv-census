@@ -49,7 +49,7 @@ type AchievementSummary struct {
 	TotalAchievements uint32
 	TotalPoints       uint32
 	Milestones        []AchievementResult // only milestones that were checked
-	LatestAchievement *AchievementResult  // most recent across all milestones (for activity tracking)
+	LatestAchievement *AchievementResult  // latest earned tracked milestone checked in this request
 }
 
 // LodestoneClient reads character and achievement data from The Lodestone.

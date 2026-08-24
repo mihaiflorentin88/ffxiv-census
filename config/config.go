@@ -149,7 +149,6 @@ type ExpansionConfig struct {
 
 type CensusConfig struct {
 	ActivityWindowDays int               `mapstructure:"activity_window_days"`
-	AchievementStalenessDays int            `mapstructure:"achievement_staleness_days"`
 	MaxLevel           uint32            `mapstructure:"max_level"`
 	Expansions         []ExpansionConfig `mapstructure:"expansions"`
 }

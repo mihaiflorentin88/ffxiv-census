@@ -15,14 +15,13 @@ import (
 // persisted records and computes milestone/activity facts. It depends only on
 // contracts, never on SQL or HTTP.
 type Service struct {
-	characters               contract.CharacterRepository
-	achievements             contract.AchievementRepository
-	censusRuns               contract.CensusRunRepository
-	mu                       sync.RWMutex
-	activityWindow           time.Duration
-	maxLevel                 uint32
-	achievementStalenessDays int
-	expansions               []ExpansionConfig
+	characters     contract.CharacterRepository
+	achievements   contract.AchievementRepository
+	censusRuns     contract.CensusRunRepository
+	mu             sync.RWMutex
+	activityWindow time.Duration
+	maxLevel       uint32
+	expansions     []ExpansionConfig
 	// milestoneCache holds the last-fetched milestone registry to avoid
 	// re-querying the DB on every ProcessAchievements call.
 	milestoneCache    []contract.MilestoneAchievement
@@ -36,19 +35,18 @@ func NewService(
 	censusRuns contract.CensusRunRepository,
 ) *Service {
 	return &Service{
-		characters:               characters,
-		achievements:             achievements,
-		censusRuns:               censusRuns,
-		activityWindow:           defaultActivityWindow,
-		maxLevel:                 100,
-		achievementStalenessDays: 7,
-		expansions:               DefaultExpansions,
-		milestoneCacheTTL:        5 * time.Minute,
+		characters:        characters,
+		achievements:      achievements,
+		censusRuns:        censusRuns,
+		activityWindow:    defaultActivityWindow,
+		maxLevel:          100,
+		expansions:        DefaultExpansions,
+		milestoneCacheTTL: 5 * time.Minute,
 	}
 }
 
-// SetConfig configures max level, expansion milestones, and achievement staleness.
-func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig, stalenessDays ...int) {
+// SetConfig configures max level and expansion milestones.
+func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if maxLevel > 0 {
@@ -58,9 +56,6 @@ func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig, stale
 		s.expansions = make([]ExpansionConfig, len(expansions))
 		copy(s.expansions, expansions)
 	}
-	if len(stalenessDays) > 0 && stalenessDays[0] > 0 {
-		s.achievementStalenessDays = stalenessDays[0]
-	}
 }
 
 // MaxLevel returns the configured max level cap.
@@ -68,13 +63,6 @@ func (s *Service) MaxLevel() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxLevel
-}
-
-// AchievementStalenessDays returns the configured staleness threshold in days.
-func (s *Service) AchievementStalenessDays() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.achievementStalenessDays
 }
 
 // Expansions returns a copy of the configured expansions.

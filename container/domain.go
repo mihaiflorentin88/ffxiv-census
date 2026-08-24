@@ -49,7 +49,7 @@ func (s *ServiceContainer) CensusService() *census.Service {
 				AchievementID: exp.AchievementID,
 			})
 		}
-		svc.SetConfig(c.MaxLevel, expansions, c.AchievementStalenessDays)
+		svc.SetConfig(c.MaxLevel, expansions)
 	}
 	// Seed the milestone registry (idempotent) so achievement processing never
 	// runs against an empty registry.

@@ -73,7 +73,21 @@ func (f *AchievementRepository) UpsertCharacterMilestones(ctx context.Context, c
 	if f.UpsertErr != nil {
 		return f.UpsertErr
 	}
-	f.milestones[characterID] = append([]contract.CharacterMilestone(nil), milestones...)
+	existing := append([]contract.CharacterMilestone(nil), f.milestones[characterID]...)
+	byID := make(map[uint32]int, len(existing))
+	for i, milestone := range existing {
+		byID[milestone.AchievementID] = i
+	}
+	for _, milestone := range milestones {
+		if i, ok := byID[milestone.AchievementID]; ok {
+			existing[i] = milestone
+			continue
+		}
+		byID[milestone.AchievementID] = len(existing)
+		existing = append(existing, milestone)
+	}
+	sort.Slice(existing, func(i, j int) bool { return existing[i].AchievedAt.After(existing[j].AchievedAt) })
+	f.milestones[characterID] = existing
 	return nil
 }
 

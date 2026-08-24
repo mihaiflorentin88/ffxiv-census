@@ -12,7 +12,7 @@ type AchievementRepository interface {
 	SyncMilestones(ctx context.Context, registry []MilestoneAchievement) error
 	// ListMilestones returns the full registry.
 	ListMilestones(ctx context.Context) ([]MilestoneAchievement, error)
-	// UpsertCharacterMilestones replaces a character's earned milestones.
+	// UpsertCharacterMilestones additively inserts or updates earned milestones.
 	UpsertCharacterMilestones(ctx context.Context, characterID uint32, milestones []CharacterMilestone) error
 	// ListCharacterMilestones returns a character's earned milestones.
 	ListCharacterMilestones(ctx context.Context, characterID uint32) ([]CharacterMilestone, error)
