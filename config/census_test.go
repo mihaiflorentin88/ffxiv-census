@@ -12,6 +12,23 @@ func TestCensusConfig_Defaults(t *testing.T) {
 	}
 }
 
+func TestCensusConfig_UIStatsDefaultsAndEnv(t *testing.T) {
+	t.Setenv("CENSUS_UI_STATS_CACHE_TTL", "2m")
+	cfg, err := NewConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Census == nil || cfg.Census.UIStats == nil {
+		t.Fatal("census.ui_stats config is nil")
+	}
+	if cfg.Census.UIStats.CacheTTL != "2m" {
+		t.Fatalf("cache_ttl = %q, want 2m", cfg.Census.UIStats.CacheTTL)
+	}
+	if cfg.Census.UIStats.StaleWarning != "12h" || cfg.Census.UIStats.RefreshTimeout != "2h" {
+		t.Fatalf("unexpected UI stats defaults: %#v", cfg.Census.UIStats)
+	}
+}
+
 func TestCensusConfig_EnvOverride(t *testing.T) {
 	t.Setenv("CENSUS_ACTIVITY_WINDOW_DAYS", "45")
 	cfg, _ := NewConfig()

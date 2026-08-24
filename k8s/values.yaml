@@ -312,3 +312,14 @@ cronjobs:
         - discover
         - --limit
         - "400"
+
+    - name: refresh-ui-stats
+      schedule: "17 */6 * * *"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 2
+      failedJobsHistoryLimit: 3
+      activeDeadlineSeconds: 7500
+      command:
+        - /app/ffxiv-census
+        - refresh
+        - ui-stats

@@ -14,16 +14,46 @@ import (
 // CensusController exposes the read-only census REST API. It depends only on
 // the domain census service; all DTO mapping happens here.
 type CensusController struct {
-	svc *census.Service
+	svc   *census.Service
+	stats *census.UIStatsService
 }
 
-func NewCensusController(svc *census.Service) *CensusController {
-	return &CensusController{svc: svc}
+func NewCensusController(svc *census.Service, stats ...*census.UIStatsService) *CensusController {
+	controller := &CensusController{svc: svc}
+	if len(stats) > 0 {
+		controller.stats = stats[0]
+	}
+	return controller
+}
+
+func (c *CensusController) currentStats(w http.ResponseWriter, r *http.Request) (*contract.UIStatsSnapshot, bool) {
+	if c.stats == nil {
+		return nil, false
+	}
+	snapshot, _, err := c.stats.Current(r.Context())
+	if err != nil {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusServiceUnavailable, "statistics temporarily unavailable")
+		return nil, true
+	}
+	return snapshot, true
 }
 
 // Latest serves GET /api/v1/census/latest: totals plus the active ratio
 // (active = latest achievement within the activity window).
 func (c *CensusController) Latest(w http.ResponseWriter, r *http.Request) {
+	if snapshot, handled := c.currentStats(w, r); handled {
+		if snapshot == nil {
+			return
+		}
+		total, active, maxLevelCount := snapshot.Summary.Total, snapshot.Summary.Active, snapshot.Summary.MaxLevel
+		ratio := 0.0
+		if total > 0 {
+			ratio = float64(active) / float64(total)
+		}
+		writeJSON(w, http.StatusOK, response.CensusSummary{TotalCharacters: total, ActiveCharacters: active, ActiveRatio: ratio, MaxLevelCharacters: maxLevelCount})
+		return
+	}
 	if c.svc == nil {
 		writeError(w, http.StatusInternalServerError, "census service unavailable")
 		return
@@ -150,6 +180,22 @@ func (c *CensusController) Breakdown(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing by parameter")
 		return
 	}
+	if by != "race" && by != "world" && by != "datacenter" && by != "region" {
+		writeError(w, http.StatusBadRequest, census.ErrInvalidDimension.Error())
+		return
+	}
+	if snapshot, handled := c.currentStats(w, r); handled {
+		if snapshot == nil {
+			return
+		}
+		groups := census.SnapshotGroups(snapshot, by, contract.StatsScope{})
+		items := make([]response.BreakdownGroup, 0, len(groups))
+		for _, group := range groups {
+			items = append(items, response.BreakdownGroup{Key: group.Key, Total: group.Total, Active: group.Active})
+		}
+		writeJSON(w, http.StatusOK, items)
+		return
+	}
 	groups, err := c.svc.Breakdown(r.Context(), by)
 	if errors.Is(err, census.ErrInvalidDimension) {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -196,6 +242,26 @@ func (c *CensusController) NewCharacters(w http.ResponseWriter, r *http.Request)
 		}
 		until = u
 	}
+	if snapshot, handled := c.currentStats(w, r); handled {
+		if snapshot == nil {
+			return
+		}
+		maxUntil := snapshot.GeneratedAt.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+		if since.Before(snapshot.ActivitySince.UTC().Truncate(24*time.Hour)) || until.After(maxUntil) || !until.After(since) {
+			writeError(w, http.StatusBadRequest, "requested range is outside the available statistics snapshot")
+			return
+		}
+		days := census.SnapshotDaily(snapshot, contract.StatsScope{})
+		items := make([]response.NewCharactersDay, 0, len(days))
+		for _, day := range days {
+			parsed, parseErr := time.Parse("2006-01-02", day.Day)
+			if parseErr == nil && !parsed.Before(since) && parsed.Before(until) {
+				items = append(items, response.NewCharactersDay{Day: day.Day, Count: day.Count})
+			}
+		}
+		writeJSON(w, http.StatusOK, items)
+		return
+	}
 
 	days, err := c.svc.NewCharacters(r.Context(), since, until)
 	if err != nil {
@@ -218,6 +284,20 @@ func (c *CensusController) Expansion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.URL.Query().Get("name")
+	if snapshot, handled := c.currentStats(w, r); handled {
+		if snapshot == nil {
+			return
+		}
+		stats := census.SnapshotExpansions(snapshot, contract.StatsScope{})
+		items := make([]response.ExpansionStat, 0, len(stats))
+		for _, stat := range stats {
+			if name == "" || stat.Expansion == name {
+				items = append(items, response.ExpansionStat{Expansion: stat.Expansion, Count: stat.Count})
+			}
+		}
+		writeJSON(w, http.StatusOK, items)
+		return
+	}
 	stats, err := c.svc.ExpansionCompletions(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

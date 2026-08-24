@@ -35,12 +35,13 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	maxLevel := maxJobLevel(jobs)
 	query := `INSERT INTO characters (
 			id, name, world, datacenter, region, race, tribe, gender, grand_company,
 			fc_id, fc_name, bio, active_job, item_level,
 			achievements_private, latest_achievement_id, latest_achievement_at,
-			first_seen_at, last_census_at, deleted_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			first_seen_at, last_census_at, deleted_at, max_job_level
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name,
 			world = excluded.world,
@@ -59,14 +60,15 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 			latest_achievement_id = COALESCE(excluded.latest_achievement_id, characters.latest_achievement_id),
 			latest_achievement_at = COALESCE(excluded.latest_achievement_at, characters.latest_achievement_at),
 			last_census_at = excluded.last_census_at,
-			deleted_at = NULL`
+			deleted_at = NULL,
+			max_job_level = excluded.max_job_level`
 
 	if _, err := tx.ExecContext(ctx, query,
 		rec.ID, rec.Name, rec.World, rec.Datacenter, rec.Region, rec.Race, rec.Tribe,
 		rec.Gender, rec.GrandCompany, nullableString(rec.FreeCompanyID), nullableString(rec.FreeCompanyName),
 		rec.Bio, rec.ActiveJob, rec.ItemLevel,
 		boolInt(rec.AchievementsPrivate), nullableUint32(rec.LatestAchievementID), nullableTime(rec.LatestAchievementAt),
-		rec.FirstSeenAt, nullableTime(rec.LastCensusAt), nullableTime(rec.DeletedAt)); err != nil {
+		rec.FirstSeenAt, nullableTime(rec.LastCensusAt), nullableTime(rec.DeletedAt), maxLevel); err != nil {
 		return fmt.Errorf("character upsert: %w", err)
 	}
 
@@ -87,6 +89,16 @@ func (r *CharacterRepository) Upsert(ctx context.Context, rec contract.Character
 		}
 	}
 	return tx.Commit()
+}
+
+func maxJobLevel(jobs []contract.ClassJobRecord) uint8 {
+	var maxLevel uint8
+	for _, job := range jobs {
+		if job.Level > maxLevel {
+			maxLevel = job.Level
+		}
+	}
+	return maxLevel
 }
 
 func (r *CharacterRepository) UpsertGear(ctx context.Context, charID uint32, gear []contract.CharacterGearRecord) error {
@@ -299,6 +311,13 @@ func (r *CharacterRepository) ListStale(ctx context.Context, cutoff time.Time, l
 
 var breakdownColumns = map[string]bool{"race": true, "world": true, "datacenter": true, "region": true}
 
+const summaryCountsQuery = `SELECT
+	COUNT(*) AS total,
+	COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active,
+	COUNT(*) FILTER (WHERE max_job_level >= $2) AS max_level
+FROM characters
+WHERE deleted_at IS NULL`
+
 func characterFilterWhere(f contract.CharacterFilter) (string, []any) {
 	return characterFilterWhereWithStart(f, 1)
 }
@@ -453,13 +472,7 @@ func (r *CharacterRepository) CountActive(ctx context.Context, since time.Time) 
 }
 
 func (r *CharacterRepository) SummaryCounts(ctx context.Context, since time.Time, maxLevel uint32) (total, active, maxLevelCount int64, err error) {
-	row, err := r.driver.FetchOne(ctx,
-		`SELECT
-			COUNT(*) AS total,
-			COUNT(*) FILTER (WHERE latest_achievement_at >= $1) AS active,
-			COUNT(*) FILTER (WHERE id IN (SELECT character_id FROM character_jobs WHERE level >= $2)) AS max_level
-		FROM characters
-		WHERE deleted_at IS NULL`, since, maxLevel)
+	row, err := r.driver.FetchOne(ctx, summaryCountsQuery, since, maxLevel)
 	if err != nil {
 		return 0, 0, 0, err
 	}

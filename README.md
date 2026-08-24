@@ -126,7 +126,17 @@ Exports census data for characters or achievements directly to disk.
 ./bin/ffxiv-census export achievements --format csv --output ./exports/achievements.csv
 ```
 
-### 5. `migrate` — Manual Schema Migrations
+### 5. `refresh ui-stats` — Rebuild Aggregate Read Model
+
+Builds and atomically publishes the bounded statistics snapshot consumed by all aggregate UI pages and statistics APIs. Run it after the initial migration and whenever an immediate refresh is needed; Kubernetes also schedules it every six hours.
+
+```bash
+./bin/ffxiv-census refresh ui-stats
+```
+
+Web requests never fall back to census-wide aggregate queries. Until the first successful refresh, aggregate routes return `503 Service Unavailable`; a failed later refresh leaves the previous complete snapshot available.
+
+### 6. `migrate` — Manual Schema Migrations
 
 Manage database schema versions manually with Goose.
 
@@ -138,7 +148,7 @@ Manage database schema versions manually with Goose.
 ./bin/ffxiv-census migrate --direction down
 ```
 
-### 6. `tomestone` — Direct Character Inspection
+### 7. `tomestone` — Direct Character Inspection
 
 Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 
@@ -163,6 +173,9 @@ Queries Tomestone.gg directly to inspect character profiles and verify API keys.
 | `TOMESTONE_API_TOKEN` | Bearer API token for Tomestone.gg | `""` |
 | `TOMESTONE_RATE_LIMIT` | Tomestone API rate limit (requests/sec, max 20.0) | `5.0` |
 | `RABBITMQ_URL` | RabbitMQ connection URL | `amqp://guest:guest@localhost:5672/ffxiv-census` |
+| `CENSUS_UI_STATS_CACHE_TTL` | Per-process statistics snapshot cache TTL | `1m` |
+| `CENSUS_UI_STATS_STALE_WARNING` | Age at which the UI marks statistics stale | `12h` |
+| `CENSUS_UI_STATS_REFRESH_TIMEOUT` | Maximum duration of a snapshot refresh | `2h` |
 
 ---
 
@@ -264,6 +277,14 @@ make -C k8s deploy TAG=v1.0.1
 
 # Verify rollout status
 make -C k8s post-deploy-check
+```
+
+After a release that introduces the snapshot table, or whenever an immediate data refresh is required, create a one-off refresh from the scheduled CronJob and wait for it before validating aggregate routes:
+
+```bash
+kubectl create job --from=cronjob/ffxiv-census-cron-refresh-ui-stats ffxiv-census-refresh-ui-stats-manual
+kubectl wait --for=condition=complete --timeout=2h job/ffxiv-census-refresh-ui-stats-manual
+curl -fsS https://census.ffxivbard.com/ui/dashboard >/dev/null
 ```
 ### 5. Internal Cluster Services & Monitoring Endpoints
 The Kubernetes cluster provides internal monitoring and metrics services accessible to components within the cluster network:

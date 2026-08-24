@@ -64,6 +64,82 @@ func TestCharacterRepository_UpsertAndGet(t *testing.T) {
 	}
 }
 
+func TestCharacterRepository_UpsertPersistsMaxJobLevel(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	rec := contract.CharacterRecord{ID: 2001, Name: "Maximus", World: "Balmung", FirstSeenAt: now}
+	if err := repo.Upsert(ctx, rec, []contract.ClassJobRecord{
+		{CharacterID: 2001, ClassJobID: 19, Name: "Paladin", Level: 90},
+		{CharacterID: 2001, ClassJobID: 21, Name: "Warrior", Level: 100},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var maxLevel int
+	row, err := driver.FetchOne(ctx, `SELECT max_job_level FROM characters WHERE id = $1`, 2001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := row.Scan(&maxLevel); err != nil {
+		t.Fatal(err)
+	}
+	if maxLevel != 100 {
+		t.Fatalf("max_job_level = %d, want 100", maxLevel)
+	}
+
+	if err := repo.Upsert(ctx, rec, []contract.ClassJobRecord{
+		{CharacterID: 2001, ClassJobID: 19, Name: "Paladin", Level: 80},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err = driver.FetchOne(ctx, `SELECT max_job_level FROM characters WHERE id = $1`, 2001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := row.Scan(&maxLevel); err != nil {
+		t.Fatal(err)
+	}
+	if maxLevel != 80 {
+		t.Fatalf("updated max_job_level = %d, want 80", maxLevel)
+	}
+}
+
+func TestCharacterRepository_SummaryCountsUsesStoredMaxLevel(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	recent := now.Add(-time.Hour)
+
+	for id, level := range []uint8{100, 90, 0} {
+		charID := uint32(id + 1)
+		rec := contract.CharacterRecord{ID: charID, Name: "Summary", World: "Balmung", FirstSeenAt: now}
+		var jobs []contract.ClassJobRecord
+		if level > 0 {
+			jobs = []contract.ClassJobRecord{{CharacterID: charID, ClassJobID: 19, Name: "Paladin", Level: level}}
+		}
+		if err := repo.Upsert(ctx, rec, jobs); err != nil {
+			t.Fatal(err)
+		}
+		if id < 2 {
+			if err := repo.UpdateAchievementSummary(ctx, charID, false, nil, &recent); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	total, active, maxLevel, err := repo.SummaryCounts(ctx, now.Add(-24*time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || active != 2 || maxLevel != 1 {
+		t.Fatalf("SummaryCounts = (%d, %d, %d), want (3, 2, 1)", total, active, maxLevel)
+	}
+}
+
 func TestCharacterRepository_IDSweepCursorInitializesAndAdvances(t *testing.T) {
 	driver := newTestDriver(t)
 	repo := repository.NewCharacterRepository(driver)

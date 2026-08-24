@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 // WorldDetailViewData holds statistics and chart payloads for a single world view.
@@ -46,23 +46,41 @@ type DailyRow struct {
 
 // WorldDetail handles GET /ui/worlds/{world}.
 func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	worldName := strings.TrimSpace(r.PathValue("world"))
 	if worldName == "" {
 		http.Redirect(w, r, "/ui/worlds", http.StatusFound)
 		return
 	}
 
-	if c.svc == nil {
-		http.Error(w, "Census service unavailable", http.StatusInternalServerError)
+	snapshot, state, ok := c.currentStats(w, r)
+	if !ok {
 		return
 	}
 
-	stats, err := c.svc.WorldDetail(ctx, worldName)
-	if err != nil {
-		logging.Error("ui.world_detail", fmt.Sprintf("world=%s err=%v", worldName, err))
-		http.Error(w, "Failed to load world details", http.StatusInternalServerError)
-		return
+	var total, active int64
+	for _, world := range census.SnapshotGroups(snapshot, "world", contract.StatsScope{}) {
+		if strings.EqualFold(world.Key, worldName) {
+			total, active = world.Total, world.Active
+			break
+		}
+	}
+	scope := contract.StatsScope{World: worldName}
+	timeline := census.SnapshotDaily(snapshot, scope)
+	var newCharacters int64
+	for _, day := range timeline {
+		newCharacters += day.Count
+	}
+	dcName := WorldToDC(worldName)
+	stats := &census.WorldDetailStats{
+		World:                 worldName,
+		Datacenter:            dcName,
+		Region:                census.RegionForDatacenter(dcName),
+		TotalCharacters:       total,
+		ActiveCharacters:      active,
+		NewCharacters30d:      newCharacters,
+		Races:                 census.SnapshotGroups(snapshot, "race", scope),
+		MSQCompletions:        census.SnapshotExpansions(snapshot, scope),
+		NewCharactersTimeline: timeline,
 	}
 
 	dc := stats.Datacenter
@@ -151,27 +169,23 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 		timelineData = append(timelineData, row.Count)
 	}
 
-	c.render(w, "templates/world_detail.html", PageData{
-		Title:     fmt.Sprintf("%s - World Demographics", worldName),
-		ActiveNav: "worlds",
-		Data: WorldDetailViewData{
-			World:                 worldName,
-			Datacenter:            dc,
-			Region:                region,
-			TotalCharacters:       stats.TotalCharacters,
-			ActiveCharacters:      stats.ActiveCharacters,
-			ActiveRatio:           formatPercent(stats.ActiveCharacters, stats.TotalCharacters),
-			ActivePercentVal:      activePctVal,
-			NewCharacters30d:      stats.NewCharacters30d,
-			Races:                 raceRows,
-			MSQCompletions:        msqRows,
-			NewCharactersTimeline: timelineRows,
-			RaceChartLabels:       raceLabels,
-			RaceChartData:         raceData,
-			MSQChartLabels:        msqLabels,
-			MSQChartData:          msqData,
-			TimelineChartLabels:   timelineLabels,
-			TimelineChartData:     timelineData,
-		},
-	})
+	c.render(w, "templates/world_detail.html", statsPageData(fmt.Sprintf("%s - World Demographics", worldName), "worlds", state, WorldDetailViewData{
+		World:                 worldName,
+		Datacenter:            dc,
+		Region:                region,
+		TotalCharacters:       stats.TotalCharacters,
+		ActiveCharacters:      stats.ActiveCharacters,
+		ActiveRatio:           formatPercent(stats.ActiveCharacters, stats.TotalCharacters),
+		ActivePercentVal:      activePctVal,
+		NewCharacters30d:      stats.NewCharacters30d,
+		Races:                 raceRows,
+		MSQCompletions:        msqRows,
+		NewCharactersTimeline: timelineRows,
+		RaceChartLabels:       raceLabels,
+		RaceChartData:         raceData,
+		MSQChartLabels:        msqLabels,
+		MSQChartData:          msqData,
+		TimelineChartLabels:   timelineLabels,
+		TimelineChartData:     timelineData,
+	}))
 }

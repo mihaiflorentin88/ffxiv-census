@@ -10,13 +10,15 @@ import (
 	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	proxyhandler "github.com/mihaiflorentin88/ffxiv-census/domain/proxy/handler"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/metrics"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 // DomainContainer wires domain services.
 type DomainContainer struct {
-	censusService *census.Service
-	proxyService  *proxydomain.Service
+	censusService  *census.Service
+	uiStatsService *census.UIStatsService
+	proxyService   *proxydomain.Service
 }
 
 func (s *ServiceContainer) CensusService() *census.Service {
@@ -58,6 +60,30 @@ func (s *ServiceContainer) CensusService() *census.Service {
 	}
 	s.domain.censusService = svc
 	return svc
+}
+
+func (s *ServiceContainer) UIStatsService() *census.UIStatsService {
+	if s.domain.uiStatsService != nil {
+		return s.domain.uiStatsService
+	}
+	repo := s.UIStatsRepository()
+	if repo == nil {
+		logging.Warn("container.ui_stats", "database driver unavailable, UI statistics disabled")
+		return nil
+	}
+	cacheTTL := time.Minute
+	staleWarning := 12 * time.Hour
+	if cfg := s.Config().Census; cfg != nil && cfg.UIStats != nil {
+		if parsed, err := time.ParseDuration(cfg.UIStats.CacheTTL); err == nil && parsed > 0 {
+			cacheTTL = parsed
+		}
+		if parsed, err := time.ParseDuration(cfg.UIStats.StaleWarning); err == nil && parsed > 0 {
+			staleWarning = parsed
+		}
+	}
+	s.domain.uiStatsService = census.NewUIStatsService(repo, cacheTTL, staleWarning)
+	s.domain.uiStatsService.SetObserver(metrics.NewUIStatsObserver(s.PrometheusRegistry()))
+	return s.domain.uiStatsService
 }
 
 // Handlers returns a registry of ingest handlers, each wired to its

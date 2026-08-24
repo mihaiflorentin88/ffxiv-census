@@ -43,6 +43,11 @@
             </div>
         </div>
         {{end}}
+        {{if .StatsUpdated}}
+        <p class="stats-freshness{{if .StatsStale}} stats-freshness-stale{{end}}">
+            Statistics updated {{.StatsUpdated}}{{if .StatsStale}} · refresh delayed; showing the last available snapshot{{end}}
+        </p>
+        {{end}}
     </main>
 
 </body>

@@ -27,7 +27,7 @@ func Register(mux *http.ServeMux) {
 	}
 
 	svc := container.Load.CensusService()
-	c := handler.NewCensusController(svc)
+	c := handler.NewCensusController(svc, container.Load.UIStatsService())
 
 	handle("GET /api/v1/census/latest", c.Latest)
 	handle("GET /api/v1/census/characters", c.List)

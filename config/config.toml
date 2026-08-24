@@ -92,6 +92,11 @@ request_timeout       = "30s"
 activity_window_days = 30
 max_level = 100
 
+[census.ui_stats]
+cache_ttl = "1m"
+stale_warning = "12h"
+refresh_timeout = "2h"
+
 [[census.expansions]]
 name = "A Realm Reborn"
 version = "Patch 2.55"

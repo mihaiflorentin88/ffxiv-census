@@ -72,7 +72,7 @@ const docTemplate = `{
     "/api/v1/census/latest": {
       "get": {
         "summary": "Census summary",
-        "description": "Total and active character counts with the active ratio over the configured activity window.",
+        "description": "Total and active character counts from the periodically refreshed statistics snapshot.",
         "produces": [
           "application/json"
         ],
@@ -85,6 +85,12 @@ const docTemplate = `{
           },
           "500": {
             "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Statistics snapshot is not yet available",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -396,7 +402,7 @@ const docTemplate = `{
     "/api/v1/stats/breakdown": {
       "get": {
         "summary": "Population breakdown",
-        "description": "Total and active character counts grouped by a census dimension.",
+        "description": "Total and active character counts grouped by a census dimension from the periodically refreshed statistics snapshot.",
         "produces": [
           "application/json"
         ],
@@ -437,6 +443,12 @@ const docTemplate = `{
               "$ref": "#/definitions/Error"
             }
           },
+          "503": {
+            "description": "Statistics snapshot is not yet available",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
           "401": {
             "description": "Unauthorized",
             "schema": {
@@ -454,7 +466,7 @@ const docTemplate = `{
     "/api/v1/stats/new-characters": {
       "get": {
         "summary": "New characters per day",
-        "description": "Daily counts of characters who earned the Chocobo milestone (achievement 590) in the given range.",
+        "description": "Daily counts of characters who earned the Chocobo milestone (achievement 590) within the bounded statistics snapshot window.",
         "produces": [
           "application/json"
         ],
@@ -487,13 +499,19 @@ const docTemplate = `{
             }
           },
           "400": {
-            "description": "Missing or invalid since date",
+            "description": "Missing, invalid, or out-of-snapshot date range",
             "schema": {
               "$ref": "#/definitions/Error"
             }
           },
           "500": {
             "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Statistics snapshot is not yet available",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -515,7 +533,7 @@ const docTemplate = `{
     "/api/v1/stats/expansion": {
       "get": {
         "summary": "Expansion completions",
-        "description": "Number of characters who completed each expansion's main scenario quest, optionally filtered by name.",
+        "description": "Number of characters who completed each expansion's main scenario quest from the periodically refreshed statistics snapshot, optionally filtered by name.",
         "produces": [
           "application/json"
         ],
@@ -540,6 +558,12 @@ const docTemplate = `{
           },
           "500": {
             "description": "Internal server error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Statistics snapshot is not yet available",
             "schema": {
               "$ref": "#/definitions/Error"
             }

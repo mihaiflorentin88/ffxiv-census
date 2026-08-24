@@ -5,9 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -44,15 +43,21 @@ type RacesViewData struct {
 
 // Races handles GET /ui/races.
 func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	snapshot, state, ok := c.currentStats(w, r)
+	if !ok {
+		return
+	}
 	selectedRegion := strings.TrimSpace(r.URL.Query().Get("region"))
 	selectedDC := strings.TrimSpace(r.URL.Query().Get("dc"))
 	selectedWorld := strings.TrimSpace(r.URL.Query().Get("world"))
 
-	filter := contract.CharacterFilter{
-		Region:     selectedRegion,
-		Datacenter: selectedDC,
-		World:      selectedWorld,
+	scope := contract.StatsScope{}
+	if selectedWorld != "" {
+		scope.World = selectedWorld
+	} else if selectedDC != "" {
+		scope.Datacenter = selectedDC
+	} else if selectedRegion != "" {
+		scope.Region = selectedRegion
 	}
 
 	var totalChars, activeChars int64
@@ -66,105 +71,39 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 	var raceGenderLabels []string
 	var raceGenderData []int64
 
-	if c.svc != nil {
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-
-		// Goroutine 1: Race breakdown
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cnt, err := c.svc.Breakdown(ctx, "race", filter)
-			if err != nil {
-				logging.Error("ui.races.breakdown", err.Error())
-				return
-			}
-			var rows []RaceRow
-			var tChars, aChars int64
-			for _, row := range cnt {
-				tChars += row.Total
-				aChars += row.Active
-			}
-			for _, row := range cnt {
-				rName := row.Key
-				if rName == "" {
-					rName = "Unknown"
-				}
-				var sharePctVal float64
-				if tChars > 0 {
-					sharePctVal = (float64(row.Total) / float64(tChars)) * 100
-				}
-				rows = append(rows, RaceRow{
-					Race:            rName,
-					Total:           row.Total,
-					Active:          row.Active,
-					ActiveRatio:     formatPercent(row.Active, row.Total),
-					ShareOfTotal:    formatPercent(row.Total, tChars),
-					SharePercentVal: sharePctVal,
-				})
-			}
-			sort.Slice(rows, func(i, j int) bool {
-				return rows[i].Total > rows[j].Total
-			})
-			var labels []string
-			var data []int64
-			for _, rc := range rows {
-				labels = append(labels, rc.Race)
-				data = append(data, rc.Total)
-			}
-			mu.Lock()
-			totalChars = tChars
-			activeChars = aChars
-			raceRows = rows
-			chartLabels = labels
-			chartData = data
-			mu.Unlock()
-		}()
-
-		// Goroutine 2: Demographics (tribe + gender + race×gender, single query)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			demo, err := c.svc.DemographicBreakdown(ctx, filter)
-			if err != nil {
-				logging.Error("ui.races.demographics", err.Error())
-				return
-			}
-			var tLabels []string
-			var tData []int64
-			for _, t := range demo.Tribes {
-				if t.Key == "" {
-					continue
-				}
-				tLabels = append(tLabels, t.Key)
-				tData = append(tData, t.Total)
-			}
-			var gLabels []string
-			var gData []int64
-			for _, g := range demo.Genders {
-				if g.Key == "" {
-					continue
-				}
-				gLabels = append(gLabels, g.Key)
-				gData = append(gData, g.Total)
-			}
-			var rgLabels []string
-			var rgData []int64
-			for _, rg := range demo.RaceGenders {
-				if rg.Key == "" {
-					continue
-				}
-				rgLabels = append(rgLabels, rg.Key)
-				rgData = append(rgData, rg.Total)
-			}
-			mu.Lock()
-			tribeLabels, tribeData = tLabels, tData
-			genderLabels, genderData = gLabels, gData
-			raceGenderLabels, raceGenderData = rgLabels, rgData
-			mu.Unlock()
-		}()
-
-		wg.Wait()
+	races := census.SnapshotGroups(snapshot, "race", scope)
+	for _, row := range races {
+		totalChars += row.Total
+		activeChars += row.Active
+	}
+	for _, row := range races {
+		name := row.Key
+		if name == "" {
+			name = "Unknown"
+		}
+		share := 0.0
+		if totalChars > 0 {
+			share = float64(row.Total) / float64(totalChars) * 100
+		}
+		raceRows = append(raceRows, RaceRow{Race: name, Total: row.Total, Active: row.Active, ActiveRatio: formatPercent(row.Active, row.Total), ShareOfTotal: formatPercent(row.Total, totalChars), SharePercentVal: share})
+		chartLabels = append(chartLabels, name)
+		chartData = append(chartData, row.Total)
+	}
+	for _, row := range census.SnapshotGroups(snapshot, "tribe", scope) {
+		if row.Key != "" {
+			tribeLabels = append(tribeLabels, row.Key)
+			tribeData = append(tribeData, row.Total)
+		}
+	}
+	for _, row := range census.SnapshotGroups(snapshot, "gender", scope) {
+		genderLabels = append(genderLabels, row.Key)
+		genderData = append(genderData, row.Total)
+	}
+	for _, row := range census.SnapshotGroups(snapshot, "race_gender", scope) {
+		if row.Key != "" {
+			raceGenderLabels = append(raceGenderLabels, row.Key)
+			raceGenderData = append(raceGenderData, row.Total)
+		}
 	}
 
 	// Build cascading filter lists: Region narrows DCs, DC narrows Worlds.
@@ -214,27 +153,23 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 
 	regionList := []string{"NA", "EU", "JP", "OCE"}
 
-	c.render(w, "templates/races.html", PageData{
-		Title:     title,
-		ActiveNav: "races",
-		Data: RacesViewData{
-			TotalCharacters:  totalChars,
-			ActiveCharacters: activeChars,
-			SelectedRegion:   selectedRegion,
-			SelectedDC:       selectedDC,
-			SelectedWorld:    selectedWorld,
-			Regions:          regionList,
-			Datacenters:      dcList,
-			Worlds:           worldList,
-			Races:            raceRows,
-			ChartLabels:      chartLabels,
-			ChartData:        chartData,
-			TribeLabels:      tribeLabels,
-			TribeData:        tribeData,
-			GenderLabels:     genderLabels,
-			GenderData:       genderData,
-			RaceGenderLabels: raceGenderLabels,
-			RaceGenderData:   raceGenderData,
-		},
-	})
+	c.render(w, "templates/races.html", statsPageData(title, "races", state, RacesViewData{
+		TotalCharacters:  totalChars,
+		ActiveCharacters: activeChars,
+		SelectedRegion:   selectedRegion,
+		SelectedDC:       selectedDC,
+		SelectedWorld:    selectedWorld,
+		Regions:          regionList,
+		Datacenters:      dcList,
+		Worlds:           worldList,
+		Races:            raceRows,
+		ChartLabels:      chartLabels,
+		ChartData:        chartData,
+		TribeLabels:      tribeLabels,
+		TribeData:        tribeData,
+		GenderLabels:     genderLabels,
+		GenderData:       genderData,
+		RaceGenderLabels: raceGenderLabels,
+		RaceGenderData:   raceGenderData,
+	}))
 }

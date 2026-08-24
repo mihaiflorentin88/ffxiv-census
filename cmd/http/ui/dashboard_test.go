@@ -22,6 +22,117 @@ type testRig struct {
 	ctrl  *UIController
 }
 
+type testStatsRepository struct {
+	svc *census.Service
+}
+
+func (r *testStatsRepository) LoadCurrent(ctx context.Context) (*contract.UIStatsSnapshot, error) {
+	generated := time.Now().UTC()
+	total, active, maxLevel, err := r.svc.SummaryCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &contract.UIStatsSnapshot{
+		SchemaVersion:    contract.UIStatsSchemaVersion,
+		GeneratedAt:      generated,
+		ActivitySince:    r.svc.ActivitySince(),
+		MaxLevel:         r.svc.MaxLevel(),
+		SourceCharacters: total,
+		Summary:          contract.StatsSummary{Total: total, Active: active, MaxLevel: maxLevel},
+	}
+	for _, dimension := range []string{"region", "world", "race"} {
+		groups, groupErr := r.svc.Breakdown(ctx, dimension)
+		if groupErr != nil {
+			return nil, groupErr
+		}
+		for _, group := range groups {
+			snapshot.Groups = append(snapshot.Groups, contract.ScopedGroupCount{Dimension: dimension, Key: group.Key, Total: group.Total, Active: group.Active})
+		}
+	}
+
+	filters := []struct {
+		scope  contract.StatsScope
+		filter contract.CharacterFilter
+	}{{}}
+	for _, region := range []string{"NA", "EU", "JP", "OCE"} {
+		filters = append(filters, struct {
+			scope  contract.StatsScope
+			filter contract.CharacterFilter
+		}{scope: contract.StatsScope{Region: region}, filter: contract.CharacterFilter{Region: region}})
+	}
+	dcs := make(map[string]bool)
+	for _, dc := range worldDatacenter {
+		dcs[dc] = true
+	}
+	for dc := range dcs {
+		filters = append(filters, struct {
+			scope  contract.StatsScope
+			filter contract.CharacterFilter
+		}{scope: contract.StatsScope{Datacenter: dc}, filter: contract.CharacterFilter{Datacenter: dc}})
+	}
+	for world := range worldDatacenter {
+		filters = append(filters, struct {
+			scope  contract.StatsScope
+			filter contract.CharacterFilter
+		}{scope: contract.StatsScope{World: world}, filter: contract.CharacterFilter{World: world}})
+	}
+	for _, item := range filters {
+		races, groupErr := r.svc.Breakdown(ctx, "race", item.filter)
+		if groupErr != nil {
+			return nil, groupErr
+		}
+		for _, group := range races {
+			if item.scope == (contract.StatsScope{}) {
+				continue // global race rows were added above
+			}
+			snapshot.Groups = append(snapshot.Groups, contract.ScopedGroupCount{Scope: item.scope, Dimension: "race", Key: group.Key, Total: group.Total, Active: group.Active})
+		}
+		demo, demoErr := r.svc.DemographicBreakdown(ctx, item.filter)
+		if demoErr != nil {
+			return nil, demoErr
+		}
+		for dimension, groups := range map[string][]contract.GroupCount{"tribe": demo.Tribes, "gender": demo.Genders, "race_gender": demo.RaceGenders} {
+			for _, group := range groups {
+				snapshot.Groups = append(snapshot.Groups, contract.ScopedGroupCount{Scope: item.scope, Dimension: dimension, Key: group.Key, Total: group.Total, Active: group.Active})
+			}
+		}
+	}
+	for _, expansion := range mustExpansions(ctx, r.svc) {
+		snapshot.Expansions = append(snapshot.Expansions, contract.ScopedExpansionCount{Expansion: expansion.Expansion, Count: expansion.Count})
+	}
+	days, err := r.svc.NewCharacters(ctx, snapshot.ActivitySince, generated.AddDate(0, 0, 1))
+	if err != nil {
+		return nil, err
+	}
+	for _, day := range days {
+		snapshot.NewCharacters = append(snapshot.NewCharacters, contract.ScopedDailyCount{Day: day.Day, Count: day.Count})
+	}
+	for world := range worldDatacenter {
+		detail, detailErr := r.svc.WorldDetail(ctx, world)
+		if detailErr != nil {
+			return nil, detailErr
+		}
+		scope := contract.StatsScope{World: world}
+		for _, expansion := range detail.MSQCompletions {
+			snapshot.Expansions = append(snapshot.Expansions, contract.ScopedExpansionCount{Scope: scope, Expansion: expansion.Expansion, Count: expansion.Count})
+		}
+		for _, day := range detail.NewCharactersTimeline {
+			snapshot.NewCharacters = append(snapshot.NewCharacters, contract.ScopedDailyCount{Scope: scope, Day: day.Day, Count: day.Count})
+		}
+	}
+	return snapshot, nil
+}
+
+func mustExpansions(ctx context.Context, svc *census.Service) []contract.ExpansionCount {
+	items, _ := svc.ExpansionCompletions(ctx)
+	return items
+}
+
+func (r *testStatsRepository) Refresh(context.Context, contract.UIStatsRefreshOptions) (*contract.UIStatsRefreshResult, error) {
+	snapshot, err := r.LoadCurrent(context.Background())
+	return &contract.UIStatsRefreshResult{Snapshot: snapshot}, err
+}
+
 func newTestRig(t *testing.T) *testRig {
 	t.Helper()
 	chars := mockrepo.NewCharacterFake()
@@ -29,7 +140,8 @@ func newTestRig(t *testing.T) *testRig {
 	runs := mockrepo.NewCensusRunFake()
 	svc := census.NewService(chars, ach, runs)
 	q := mockqueue.NewFake()
-	ctrl := NewUIController(svc, q)
+	stats := census.NewUIStatsService(&testStatsRepository{svc: svc}, time.Nanosecond, time.Hour)
+	ctrl := NewUIController(svc, q, stats)
 	return &testRig{
 		svc:   svc,
 		chars: chars,

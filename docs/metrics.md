@@ -19,6 +19,11 @@ Prometheus metrics are exposed at `http://<host>:8080/metrics` and scraped autom
 | `sqlite_in_use_connections` | Gauge | Database connections currently in use. |
 | `sqlite_idle_connections` | Gauge | Idle database connections in the pool. |
 | `queue_jobs_depth` | Gauge | Current count of pending/claimed queue jobs. |
+| `ui_stats_cache_total` | Counter | Snapshot cache outcomes (`result`: `hit`, `reload`, `stale_served`, or `error`). |
+| `ui_stats_refresh_total` | Counter | Snapshot refresh outcomes (`result`: `success`, `skipped`, or `error`). |
+| `ui_stats_refresh_duration_seconds` | Histogram | End-to-end snapshot refresh duration. |
+| `ui_stats_snapshot_age_seconds` | Gauge | Age of the snapshot most recently served by this process. |
+| `ui_stats_payload_bytes` | Gauge | Serialized size of the most recently refreshed snapshot. |
 
 ---
 

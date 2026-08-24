@@ -37,6 +37,7 @@ type InfrastructureContainer struct {
 	characterRepository   contract.CharacterRepository
 	achievementRepository contract.AchievementRepository
 	censusRunRepository   contract.CensusRunRepository
+	uiStatsRepository     contract.UIStatsRepository
 	providerRateLimiter   contract.ProviderRateLimiter
 	proxyRepository       contract.ProxyRepository
 	proxyChecker          *proxyinfra.Checker
@@ -317,6 +318,21 @@ func (s *ServiceContainer) CensusRunRepository() contract.CensusRunRepository {
 	}
 	s.infrastructure.censusRunRepository = repository.NewCensusRunRepository(driver)
 	return s.infrastructure.censusRunRepository
+}
+
+func (s *ServiceContainer) UIStatsRepository() contract.UIStatsRepository {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.infrastructure.uiStatsRepository != nil {
+		return s.infrastructure.uiStatsRepository
+	}
+	driver := s.databaseUnlocked()
+	if driver == nil {
+		logging.Warn("container.ui_stats_repository", "database driver unavailable")
+		return nil
+	}
+	s.infrastructure.uiStatsRepository = repository.NewUIStatsRepository(driver)
+	return s.infrastructure.uiStatsRepository
 }
 
 func (s *ServiceContainer) ProxyRepository() contract.ProxyRepository {

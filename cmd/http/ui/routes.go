@@ -14,8 +14,9 @@ var content embed.FS
 // Register mounts the UI routes and static assets on mux.
 func Register(mux *http.ServeMux) {
 	svc := container.Load.CensusService()
+	stats := container.Load.UIStatsService()
 	q := container.Load.Queue()
-	ctrl := NewUIController(svc, q)
+	ctrl := NewUIController(svc, q, stats)
 	ctrl.RegisterRoutes(mux)
 
 	assets, err := fs.Sub(content, "assets")

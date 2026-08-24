@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 // WorldsViewData holds world demographics, filter state, and lists for /ui/worlds.
@@ -33,7 +33,10 @@ type WorldDetailRow struct {
 
 // Worlds handles GET /ui/worlds.
 func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	snapshot, state, ok := c.currentStats(w, r)
+	if !ok {
+		return
+	}
 	selectedRegion := strings.TrimSpace(r.URL.Query().Get("region"))
 	selectedDC := strings.TrimSpace(r.URL.Query().Get("dc"))
 
@@ -43,41 +46,34 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 	regionSet := make(map[string]bool)
 	dcSet := make(map[string]bool)
 
-	if c.svc != nil {
-		breakdown, err := c.svc.Breakdown(ctx, "world")
-		if err != nil {
-			logging.Error("ui.worlds.breakdown", err.Error())
-		} else {
-			for _, row := range breakdown {
-				wName := row.Key
-				if wName == "" {
-					continue // skip characters with no world assigned
-				}
-				wDC := WorldToDC(wName)
-				wReg := census.RegionForDatacenter(wDC)
-				if wReg == "" {
-					continue // skip worlds not mapped to a known region
-				}
-
-				regionSet[wReg] = true
-				dcSet[wDC] = true
-
-				var actPctVal float64
-				if row.Total > 0 {
-					actPctVal = (float64(row.Active) / float64(row.Total)) * 100
-				}
-
-				allWorlds = append(allWorlds, WorldDetailRow{
-					World:        wName,
-					Datacenter:   wDC,
-					Region:       wReg,
-					Total:        row.Total,
-					Active:       row.Active,
-					ActiveRatio:  formatPercent(row.Active, row.Total),
-					ActivePctVal: actPctVal,
-				})
-			}
+	for _, row := range census.SnapshotGroups(snapshot, "world", contract.StatsScope{}) {
+		wName := row.Key
+		if wName == "" {
+			continue // skip characters with no world assigned
 		}
+		wDC := WorldToDC(wName)
+		wReg := census.RegionForDatacenter(wDC)
+		if wReg == "" {
+			continue // skip worlds not mapped to a known region
+		}
+
+		regionSet[wReg] = true
+		dcSet[wDC] = true
+
+		var actPctVal float64
+		if row.Total > 0 {
+			actPctVal = (float64(row.Active) / float64(row.Total)) * 100
+		}
+
+		allWorlds = append(allWorlds, WorldDetailRow{
+			World:        wName,
+			Datacenter:   wDC,
+			Region:       wReg,
+			Total:        row.Total,
+			Active:       row.Active,
+			ActiveRatio:  formatPercent(row.Active, row.Total),
+			ActivePctVal: actPctVal,
+		})
 	}
 
 	// Filter
@@ -114,17 +110,13 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(dcList)
 	}
 
-	c.render(w, "templates/worlds.html", PageData{
-		Title:     "Worlds Census",
-		ActiveNav: "worlds",
-		Data: WorldsViewData{
-			TotalCharacters:  totalChars,
-			ActiveCharacters: activeChars,
-			SelectedRegion:   selectedRegion,
-			SelectedDC:       selectedDC,
-			Regions:          regionList,
-			Datacenters:      dcList,
-			Worlds:           filteredWorlds,
-		},
-	})
+	c.render(w, "templates/worlds.html", statsPageData("Worlds Census", "worlds", state, WorldsViewData{
+		TotalCharacters:  totalChars,
+		ActiveCharacters: activeChars,
+		SelectedRegion:   selectedRegion,
+		SelectedDC:       selectedDC,
+		Regions:          regionList,
+		Datacenters:      dcList,
+		Worlds:           filteredWorlds,
+	}))
 }

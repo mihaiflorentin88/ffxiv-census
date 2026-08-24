@@ -209,6 +209,17 @@ a:hover {
     margin-top: 0.35rem;
 }
 
+.stats-freshness {
+    margin: 1.5rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: right;
+}
+
+.stats-freshness-stale {
+    color: var(--gold-light);
+}
+
 /* Stat Cards Grid */
 .stat-grid {
     display: grid;

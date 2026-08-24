@@ -151,6 +151,13 @@ type CensusConfig struct {
 	ActivityWindowDays int               `mapstructure:"activity_window_days"`
 	MaxLevel           uint32            `mapstructure:"max_level"`
 	Expansions         []ExpansionConfig `mapstructure:"expansions"`
+	UIStats            *UIStatsConfig    `mapstructure:"ui_stats"`
+}
+
+type UIStatsConfig struct {
+	CacheTTL       string `mapstructure:"cache_ttl"`
+	StaleWarning   string `mapstructure:"stale_warning"`
+	RefreshTimeout string `mapstructure:"refresh_timeout"`
 }
 
 type ProxyConfig struct {

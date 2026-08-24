@@ -1,0 +1,89 @@
+package census
+
+import (
+	"testing"
+	"time"
+
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
+)
+
+func validUIStatsSnapshot() *contract.UIStatsSnapshot {
+	generated := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	return &contract.UIStatsSnapshot{
+		SchemaVersion:    contract.UIStatsSchemaVersion,
+		GeneratedAt:      generated,
+		ActivitySince:    generated.Add(-30 * 24 * time.Hour),
+		MaxLevel:         100,
+		SourceCharacters: 3,
+		Summary: contract.StatsSummary{
+			Total:    3,
+			Active:   2,
+			MaxLevel: 1,
+		},
+		Groups: []contract.ScopedGroupCount{
+			{Dimension: "race", Key: "Hyur", Total: 2, Active: 1},
+			{Dimension: "race", Key: "Lalafell", Total: 1, Active: 1},
+			{Scope: contract.StatsScope{Region: "EU"}, Dimension: "race", Key: "Hyur", Total: 1, Active: 1},
+		},
+		Expansions: []contract.ScopedExpansionCount{
+			{Expansion: "A Realm Reborn", Count: 2},
+		},
+		NewCharacters: []contract.ScopedDailyCount{
+			{Day: "2026-08-23", Count: 1},
+		},
+	}
+}
+
+func TestValidateUIStatsSnapshot(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*contract.UIStatsSnapshot)
+		ok     bool
+	}{
+		{name: "valid", ok: true},
+		{name: "nil", mutate: func(s *contract.UIStatsSnapshot) { *s = contract.UIStatsSnapshot{} }},
+		{name: "wrong schema", mutate: func(s *contract.UIStatsSnapshot) { s.SchemaVersion++ }},
+		{name: "zero generated", mutate: func(s *contract.UIStatsSnapshot) { s.GeneratedAt = time.Time{} }},
+		{name: "negative total", mutate: func(s *contract.UIStatsSnapshot) { s.Summary.Total = -1 }},
+		{name: "active over total", mutate: func(s *contract.UIStatsSnapshot) { s.Summary.Active = 4 }},
+		{name: "duplicate group", mutate: func(s *contract.UIStatsSnapshot) { s.Groups = append(s.Groups, s.Groups[0]) }},
+		{name: "bad day", mutate: func(s *contract.UIStatsSnapshot) { s.NewCharacters[0].Day = "08/23/2026" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := validUIStatsSnapshot()
+			if tt.mutate != nil {
+				tt.mutate(snapshot)
+			}
+			err := ValidateUIStatsSnapshot(snapshot)
+			if tt.ok && err != nil {
+				t.Fatalf("ValidateUIStatsSnapshot() error = %v", err)
+			}
+			if !tt.ok && err == nil {
+				t.Fatal("ValidateUIStatsSnapshot() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestUIStatsSnapshotLookups(t *testing.T) {
+	snapshot := validUIStatsSnapshot()
+
+	global := SnapshotGroups(snapshot, "race", contract.StatsScope{})
+	if len(global) != 2 || global[0].Key != "Hyur" || global[1].Key != "Lalafell" {
+		t.Fatalf("global races = %#v", global)
+	}
+
+	eu := SnapshotGroups(snapshot, "race", contract.StatsScope{Region: "EU"})
+	if len(eu) != 1 || eu[0].Total != 1 {
+		t.Fatalf("EU races = %#v", eu)
+	}
+
+	if got := SnapshotExpansions(snapshot, contract.StatsScope{}); len(got) != 1 || got[0].Count != 2 {
+		t.Fatalf("expansions = %#v", got)
+	}
+	if got := SnapshotDaily(snapshot, contract.StatsScope{}); len(got) != 1 || got[0].Day != "2026-08-23" {
+		t.Fatalf("daily = %#v", got)
+	}
+}

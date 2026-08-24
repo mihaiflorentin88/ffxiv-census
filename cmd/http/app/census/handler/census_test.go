@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,6 +104,28 @@ func TestCensusController_Latest(t *testing.T) {
 	}
 	if body.MaxLevelCharacters != 1 {
 		t.Errorf("max_level_characters = %d, want 1", body.MaxLevelCharacters)
+	}
+}
+
+func TestCensusController_LatestUsesStatsSnapshot(t *testing.T) {
+	generated := time.Now().UTC()
+	statsRepo := mockrepo.NewUIStatsFake(&contract.UIStatsSnapshot{
+		SchemaVersion:    contract.UIStatsSchemaVersion,
+		GeneratedAt:      generated,
+		ActivitySince:    generated.Add(-30 * 24 * time.Hour),
+		MaxLevel:         100,
+		SourceCharacters: 80,
+		Summary:          contract.StatsSummary{Total: 80, Active: 20, MaxLevel: 10},
+	})
+	stats := census.NewUIStatsService(statsRepo, time.Minute, time.Hour)
+	chars := mockrepo.NewCharacterFake()
+	chars.CountErr = errors.New("raw aggregate must not run")
+	controller := NewCensusController(census.NewService(chars, mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake()), stats)
+
+	var body response.CensusSummary
+	decodeJSON(t, doGET(t, controller.Latest, "/api/v1/census/latest"), &body)
+	if body.TotalCharacters != 80 || body.ActiveCharacters != 20 || body.MaxLevelCharacters != 10 {
+		t.Fatalf("summary = %#v", body)
 	}
 }
 

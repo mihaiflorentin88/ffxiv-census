@@ -29,8 +29,8 @@ func TestRegister_DevelopmentBypass(t *testing.T) {
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatalf("expected request to bypass auth in development, got 401 Unauthorized")
 	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200 OK, got %d", rec.Code)
+	if rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected authorized snapshot status 200 or cold status 503, got %d", rec.Code)
 	}
 }
 
@@ -76,8 +76,8 @@ func TestRegister_ProductionEnforcement(t *testing.T) {
 
 		mux.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200 OK with valid token, got %d", rec.Code)
+		if rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected authorized snapshot status 200 or cold status 503 with valid token, got %d", rec.Code)
 		}
 	})
 
@@ -88,8 +88,8 @@ func TestRegister_ProductionEnforcement(t *testing.T) {
 
 		mux.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200 OK with valid raw token, got %d", rec.Code)
+		if rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected authorized snapshot status 200 or cold status 503 with valid raw token, got %d", rec.Code)
 		}
 	})
 }

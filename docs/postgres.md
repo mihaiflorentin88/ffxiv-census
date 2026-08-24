@@ -68,6 +68,22 @@ No separate migration step is needed. The schema is always current when the proc
 | Version | Description |
 |---------|-------------|
 | `00013` | Drops `avatar_url` and `portrait_url` columns from `characters`. These fields are no longer extracted from Lodestone or stored. Down migration re-adds both columns as `TEXT`.
+| `00014` | Adds the singleton persistent cursor used by automatic ID sweeps.
+| `00015` | Adds the denormalized `characters.max_job_level` value and the single-row `ui_stats_snapshots` JSONB read model. Existing character job levels are backfilled during migration.
+
+### Aggregate read model
+
+The UI and aggregate REST endpoints load primary key `1` from `ui_stats_snapshots`; request handlers do not run census-wide aggregates. `refresh ui-stats` computes a complete snapshot in a repeatable-read transaction, serializes it, then atomically replaces that row. PostgreSQL advisory locking prevents overlapping refreshes from competing.
+
+`characters.max_job_level` is maintained by every character upsert. This removes the former correlated `character_jobs` membership check from max-level counts: the refresh scans the character row directly with `max_job_level >= $maxLevel`. At tens of millions of characters, refresh cost still grows with the source tables, but web request cost remains bounded by the snapshot payload rather than census cardinality.
+
+The opt-in scale regression test is:
+
+```bash
+UI_STATS_SCALE_ROWS=1000000 go test -run TestUIStatsRefreshScale -count=1 -v ./infrastructure/postgres/repository
+```
+
+On the 2026-08-24 development run, the one-million-character refresh phase completed in 1.49 seconds and produced a 7,168-byte payload (7.44 seconds including data generation and cleanup). This validates bounded request behavior and the query shape at one million rows; it is not a substitute for a full 80–90 million-row staging benchmark. Before scaling production to that size, record refresh duration, PostgreSQL temporary-file use, CPU/I/O, ingest impact, and snapshot size on production-like hardware.
 
 ## The DatabaseDriver Contract
 

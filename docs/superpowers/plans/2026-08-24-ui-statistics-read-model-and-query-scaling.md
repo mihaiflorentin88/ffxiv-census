@@ -678,6 +678,19 @@ Required documentation changes:
 
 ## Task 11 — Commit, push, release, and production verification
 
+### Implementation verification record
+
+Completed on 2026-08-24 before release:
+
+- `make test`, `make lint`, `make fmt`, `make build`, and `helm lint` passed.
+- `go test -race ./domain/census ./cmd/http/ui` passed.
+- `UI_STATS_SCALE_ROWS=1000000 go test -run TestUIStatsRefreshScale -count=1 -v ./infrastructure/postgres/repository` passed; aggregation took 1.49 seconds and produced a 7,168-byte snapshot on the development PostgreSQL instance.
+- `EXPLAIN` showed a single `characters` scan for summary counts and a primary-key index scan for the request-path snapshot load; the former `character_jobs` subplan is absent.
+- Local warm route TTFB was 0.36 ms for dashboard, 0.37 ms for races, 0.31 ms for worlds, and 1.26 ms for expansions.
+- The Impeccable detector reported three pre-existing warnings (methodology side accent, stat-card accent, and width transition); none came from the snapshot/freshness changes, so they were left outside this performance change.
+
+The production 206,741-character initial refresh took 15.98 seconds and produced a 445,614-byte payload. A full 80–90 million-row staging refresh has not been run; the staging acceptance measurements above remain required before claiming refresh-side readiness at that scale. HTTP request cost is already independent of source-table cardinality.
+
 ### Pre-release repository checks
 
 ```bash

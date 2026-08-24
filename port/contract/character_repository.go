@@ -72,7 +72,7 @@ type CharacterRepository interface {
 	// latest_achievement_at is at or after since.
 	CountActive(ctx context.Context, since time.Time) (int64, error)
 	// SummaryCounts returns total, active (latest_achievement_at >= since), and
-	// max-level (character_jobs.level >= maxLevel) counts in a single query.
+	// max-level (denormalized maximum job level >= maxLevel) counts in one query.
 	SummaryCounts(ctx context.Context, since time.Time, maxLevel uint32) (total, active, maxLevelCount int64, err error)
 	// Breakdown groups non-deleted characters by column (one of
 	// race|world|datacenter|region), with total and active counts per group.

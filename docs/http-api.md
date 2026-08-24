@@ -19,6 +19,7 @@ All errors use a single envelope:
 | 400 | Bad request — missing/invalid query or path parameter |
 | 404 | Resource not found — unknown character id (`{"error": "character not found"}`) |
 | 500 | Internal error — database failure or unavailable service; the message is the underlying error |
+| 503 | Aggregate statistics snapshot is not yet available; retry after the refresh command completes |
 
 ### Pagination
 
@@ -50,18 +51,22 @@ Environment override uses the same rule as `[postgres]` (dots become underscores
 
 The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/latest` and the `active` count on `GET /api/v1/stats/breakdown`.
 
+### Aggregate snapshot
+
+`/api/v1/census/latest` and `/api/v1/stats/*` read the same versioned snapshot as the dashboard. These request paths do not scan the census tables. The snapshot is refreshed independently with `ffxiv-census refresh ui-stats`; responses can lag live ingestion by the refresh interval. If no valid snapshot has ever been published, these routes return 503 instead of falling back to expensive queries.
+
 ## Endpoints
 
 | Method | Path | Query / path params | Success shape | Error shape |
 |---|---|---|---|---|
 | GET | `/health` | — | `{"status": "ok"}` | — |
-| GET | `/api/v1/census/latest` | — | `CensusSummary` | 500 |
+| GET | `/api/v1/census/latest` | — | `CensusSummary` | 500, 503 |
 | GET | `/api/v1/census/characters` | `limit` (int, default 100, max 500), `offset` (int, default 0), `world` (string), `datacenter` (string), `region` (string), `race` (string), `name` (string) | `PaginatedCharacters` | 400 (invalid `limit`/`offset`), 500 |
 | GET | `/api/v1/census/characters/{id}` | `id` (path, uint32 Lodestone character id) | `CharacterDetail` | 400 (invalid id), 404 (not found), 500 |
 | GET | `/api/v1/census/export` | Streaming data export (CSV/JSON/NDJSON, optional Gzip) | query: `format`, `gzip`, `world`, `datacenter`, `region`, `race`, `name` | |
-| GET | `/api/v1/stats/breakdown` | `by` (required, `race`\|`world`\|`datacenter`\|`region`) | `[BreakdownGroup]` | 400 (missing/unknown `by`), 500 |
-| GET | `/api/v1/stats/new-characters` | `since` (required, `YYYY-MM-DD`), `until` (optional, `YYYY-MM-DD`, default now) | `[NewCharactersDay]` | 400 (missing/invalid `since`/`until`), 500 |
-| GET | `/api/v1/stats/expansion` | `name` (optional, exact match) | `[ExpansionStat]` | 500 |
+| GET | `/api/v1/stats/breakdown` | `by` (required, `race`\|`world`\|`datacenter`\|`region`) | `[BreakdownGroup]` | 400 (missing/unknown `by`), 500, 503 |
+| GET | `/api/v1/stats/new-characters` | `since` (required, `YYYY-MM-DD`), `until` (optional, `YYYY-MM-DD`, default now) | `[NewCharactersDay]` | 400 (invalid or outside snapshot window), 500, 503 |
+| GET | `/api/v1/stats/expansion` | `name` (optional, exact match) | `[ExpansionStat]` | 500, 503 |
 
 ### GET /health
 
@@ -167,7 +172,7 @@ Population per group, sorted by `total` descending. `by` is required; a missing 
 
 ### GET /api/v1/stats/new-characters?since=YYYY-MM-DD[&until=YYYY-MM-DD]
 
-Characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`, ordered ascending by day. `since` is required and must parse as a date; `until` is optional and defaults to now (UTC). Parse failures are 400s.
+Characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`, ordered ascending by day. `since` is required and must parse as a date; `until` is optional and defaults to now (UTC). The requested range must fit within the snapshot's activity window and generation date; malformed or out-of-window ranges are 400s. This keeps response work bounded.
 
 ```json
 [

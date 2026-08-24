@@ -16,6 +16,7 @@ A PostgreSQL database is required. See [External PostgreSQL](external-postgres.m
 go mod tidy
 cp config/config.toml config/config.local.toml # optional overrides
 make build
+./bin/ffxiv-census refresh ui-stats
 ./bin/ffxiv-census server --start --port 8080
 ```
 
@@ -24,6 +25,7 @@ The CLI ships with a handful of commands:
 ```bash
 ./bin/ffxiv-census --help
 ./bin/ffxiv-census server --help
+./bin/ffxiv-census refresh ui-stats --help
 ```
 
 ## Configuration
@@ -38,6 +40,11 @@ env  = "development"
 [http]
 host = "0.0.0.0"
 port = 8080
+
+[census.ui_stats]
+cache_ttl       = "1m"
+stale_warning   = "12h"
+refresh_timeout = "2h"
 ```
 
 Override via environment variables using Viper's uppercase-dotted syntax:
@@ -55,7 +62,7 @@ When you need infrastructure dependencies, resolve them through the service cont
 
 ```
 ├── cmd
-│   ├── cli          # Cobra commands (server, migrate, export, queue, publish, tomestone, proxy, consume)
+│   ├── cli          # Cobra commands (server, refresh, migrate, export, queue, publish, tomestone, proxy, consume)
 │   └── http         # HTTP server, routes, middleware
 ├── config           # Viper-powered config loader + embedded defaults
 ├── container        # Service locator wiring (infrastructure + domain)

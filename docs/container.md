@@ -9,7 +9,7 @@ container.Load = serviceContainer
 
 ## Structure
 
-- `infrastructure.go` — lazily instantiates outbound adapters such as the PostgreSQL driver, queue, StatsD, outbound HTTP clients, LodestoneClient, TomestoneClient, ProviderRateLimiter, ProxyRepository, ProxyHub behind `port/contract` interfaces.
+- `infrastructure.go` — lazily instantiates outbound adapters such as the PostgreSQL driver, queue, StatsD, outbound HTTP clients, LodestoneClient, TomestoneClient, ProviderRateLimiter, ProxyRepository, ProxyHub, and `UIStatsRepository` behind `port/contract` interfaces.
 - `infrastructure/postgres` — hosts the PostgreSQL driver and embedded goose migrations.
 - `domain.go` — constructs domain services (added as features are built).
 - `main.go` — fetches the embedded config and exposes helper methods.
@@ -20,6 +20,8 @@ container.Load = serviceContainer
 2. Keep constructors pure; inject interfaces from `port/contract`.
 3. Infrastructure accessors are lazy singletons, so the first call constructs the adapter and subsequent calls reuse it.
 4. When adding a new service, update `DomainContainer` and document it here.
+
+Aggregate routes resolve `container.Load.UIStatsService()`. Its repository is a lazy singleton from `UIStatsRepository()`, and its in-process cache settings come from `[census.ui_stats]`. The service is shared by UI controllers, aggregate REST handlers, and the `refresh ui-stats` command.
 
 ## Removed Accessors
 

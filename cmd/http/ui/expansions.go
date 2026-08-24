@@ -3,10 +3,8 @@ package ui
 import (
 	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/logging"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -31,43 +29,15 @@ type ExpansionProgression struct {
 
 // Expansions handles GET /ui/expansions.
 func (c *UIController) Expansions(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	var totalChars int64
-	var countMap map[string]int64
-
-	if c.svc != nil {
-		var wg sync.WaitGroup
-		var completions []contract.ExpansionCount
-		var summaryErr, compErr error
-
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			tot, _, _, err := c.svc.Summary(ctx)
-			if err != nil {
-				summaryErr = err
-				return
-			}
-			totalChars = tot
-		}()
-		go func() {
-			defer wg.Done()
-			completions, compErr = c.svc.ExpansionCompletions(ctx)
-		}()
-		wg.Wait()
-
-		if summaryErr != nil {
-			// totalChars stays zero; partial page renders.
-			logging.Error("ui.expansions.summary", summaryErr.Error())
-		}
-		if compErr != nil {
-			logging.Error("ui.expansions.completions", compErr.Error())
-		} else {
-			countMap = make(map[string]int64, len(completions))
-			for _, ec := range completions {
-				countMap[ec.Expansion] = ec.Count
-			}
-		}
+	snapshot, state, ok := c.currentStats(w, r)
+	if !ok {
+		return
+	}
+	totalChars := snapshot.Summary.Total
+	completions := census.SnapshotExpansions(snapshot, contract.StatsScope{})
+	countMap := make(map[string]int64, len(completions))
+	for _, completion := range completions {
+		countMap[completion.Expansion] = completion.Count
 	}
 
 	var expansionList []census.ExpansionConfig
@@ -118,12 +88,8 @@ func (c *UIController) Expansions(w http.ResponseWriter, r *http.Request) {
 		prevCount = count
 	}
 
-	c.render(w, "templates/expansions.html", PageData{
-		Title:     "Expansion Progression",
-		ActiveNav: "expansions",
-		Data: ExpansionsViewData{
-			TotalCharacters: totalChars,
-			Expansions:      list,
-		},
-	})
+	c.render(w, "templates/expansions.html", statsPageData("Expansion Progression", "expansions", state, ExpansionsViewData{
+		TotalCharacters: totalChars,
+		Expansions:      list,
+	}))
 }

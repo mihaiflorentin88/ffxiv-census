@@ -72,11 +72,12 @@ match `characters.MAX(id)`. Private achievement histories and public characters
 that have not earned the first missing milestone produce no new row.
 ## Repositories
 
-Three contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
+Four contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:
 
 - **`CharacterRepository`** — `Upsert` (character + jobs atomically), `Get`, `GetJobs`, `UpsertGear`, `GetGear`, `FindIDGaps`, `MarkDeleted`, `UpdateAchievementSummary`, `SetAchievementsPrivate`, `ListStale`, `List`, `Count`, `CountActive`, `Breakdown`, `NewPerDay`, `MaxID`. The complete persistence and query contract for character data.
 - **`AchievementRepository`** — `SyncMilestones` (idempotent registry upsert), `ListMilestones`, `UpsertCharacterMilestones` (batch multi-row INSERT, single round-trip), `ListCharacterMilestones`, `CountExpansions`, `CountExpansionsFiltered`, `NewCharactersPerDay`, `CountChocoboMilestones`.
 - **`CensusRunRepository`** — `Start`, `Finish`.
+- **`UIStatsRepository`** — `LoadCurrent` and `Refresh` for the versioned aggregate read model. Refresh uses a bounded number of census-wide queries outside the HTTP request path and publishes the result atomically.
 
 Repositories are resolved via the service locator (`container.Load.CharacterRepository()`, etc.), which builds them from the shared `DatabaseDriver`.
 
@@ -90,7 +91,7 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 | `Name` | `string` | Case-insensitive substring (`ILIKE`) |
 | `ActiveOnly` | `bool` | Adds `deleted_at IS NULL`. Without `Since`, this is redundant with the base query which already excludes deleted characters. |
 | `Since` | `*time.Time` | When non-nil, only characters with `latest_achievement_at >= Since` are returned (activity window filter). This is the proper way to filter by "recently active". |
-| `MinLevel` | `uint32` | When > 0, only characters with at least one job at or above this level are returned (subquery on `character_jobs`). |
+| `MinLevel` | `uint32` | When > 0, only characters with at least one persisted job at or above this level are returned. Aggregate summary refreshes use the denormalized `max_job_level`, which character upserts maintain atomically with `character_jobs`. |
 | `SortBy` | `string` | Column to sort by: `"id"`, `"name"`, `"world"`, `"created_at"`, `"updated_at"`, `"achievement_points"` |
 | `SortOrder` | `string` | `"asc"` (default) or `"desc"` |
 
@@ -108,13 +109,19 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 - `MilestoneIDs(ctx)` — returns the set of tracked milestone achievement IDs from the cached registry. Useful for handler-level pre-filtering.
 - `IsActive(latestAt)` — true when the globally latest public achievement is within the activity window (default 30 days, configurable via `SetActivityWindow` / `[census] activity_window_days`). This is an achievement-based signal, not direct login tracking.
 - `SetActivityWindow(d)` — overrides the activity window; a no-op for `d <= 0`.
-- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`), where active means the globally latest public achievement is within the activity window and max-level means having at least one job at or above `max_level`. Fans out three database queries concurrently (`Count`, `CountActive`, `Count` with `MinLevel`) and joins results with deterministic error precedence (total → active → max-level).
+- `Summary(ctx)` — total, active, and max-level character counts (`total, active, maxLevelCount, err`) for internal/direct callers. Public aggregate routes use `UIStatsService` instead.
 - `ListCharacters(ctx, filter, limit, offset)` — one page of characters matching `filter` plus the matching count (the HTTP pagination/filtering source).
 - `CharacterDetail(ctx, id)` — character plus jobs and milestones, with the free company when the character is in one; `nil` when the id is unknown.
 - `WorldDetail(ctx, worldName)` — full census stats for a specific world, returned as `WorldDetailStats` (total population, active players, new characters in last 30 days, race breakdown, MSQ completions, 30-day new-character timeline, and a sample character). Fans out seven database queries concurrently and joins results with deterministic error precedence.
 - `Breakdown(ctx, by)` — per-`race`/`world`/`datacenter`/`region` totals and active counts; any other dimension returns `ErrInvalidDimension`.
 - `NewCharacters(ctx, since, until)` — characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`. The Chocobo milestone is the canonical definition for "new character" as it indicates the character has started playing.
 - `ExpansionCompletions(ctx)` — distinct characters per expansion that completed that expansion's MSQ.
+
+## UIStatsService
+
+`domain/census/ui_stats_service.go` is the only aggregate-data source wired into production UI and statistics API routes. It validates schema version and metadata, caches an immutable snapshot for the configured TTL, coalesces concurrent reloads, and defensively clones data for callers. A failed warm reload serves the last known-good snapshot; a missing cold snapshot becomes a fast 503 rather than triggering raw fallback queries.
+
+The snapshot contains only the dimensions consumed by routes: global summary; global/region/datacenter/world population groups; scoped race, tribe, gender, and race×gender groups; scoped expansion completions; and global/world daily new-character counts. Adding a new aggregate page requires extending the versioned snapshot and refresh query, not adding census-wide SQL to a request handler.
 
 **DC→region mapping** (`domain/census/region.go`):
 
