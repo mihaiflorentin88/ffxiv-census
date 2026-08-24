@@ -58,19 +58,12 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	}
 
 	milestoneIDs := missingMilestoneIDs(milestoneIDSet, knownMilestones)
-	if milestoneIDs == nil {
-		h.logger.InfoContext(ctx, "handler.achievement_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "all_milestones_known"))
-		return nil, nil
-	}
 
 	start := time.Now()
 	summary, err := h.lodestone.FetchAchievements(ctx, p.CharacterID, milestoneIDs)
 	if err != nil {
 		h.logger.WarnContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 		return nil, fmt.Errorf("achievement-census fetch %d: %w", p.CharacterID, err)
-	}
-	if summary != nil {
-		summary.LatestAchievement = latestKnownMilestone(summary.LatestAchievement, knownMilestones)
 	}
 
 	if summary != nil && summary.Private {
@@ -126,13 +119,4 @@ func missingMilestoneIDs(ids map[uint32]bool, known []contract.CharacterMileston
 		return nil
 	}
 	return missing
-}
-
-func latestKnownMilestone(latest *contract.AchievementResult, known []contract.CharacterMilestone) *contract.AchievementResult {
-	for _, milestone := range known {
-		if latest == nil || milestone.AchievedAt.After(latest.EarnedAt) {
-			latest = &contract.AchievementResult{AchievementID: milestone.AchievementID, Earned: true, EarnedAt: milestone.AchievedAt}
-		}
-	}
-	return latest
 }

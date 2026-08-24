@@ -345,8 +345,24 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 		slog.Uint64("character_id", uint64(charID)),
 		slog.Int("milestones_to_check", len(milestoneIDs)))
 
+	listURL := fmt.Sprintf("https://na.finalfantasyxiv.com/lodestone/character/%d/achievement/", charID)
+	body, statusCode, err := c.doRequest(ctx, listURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch achievement list for character %d: %w", charID, err)
+	}
+	if statusCode == http.StatusForbidden {
+		return &contract.AchievementSummary{Private: true}, nil
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("achievement list %d: HTTP %d", charID, statusCode)
+	}
+	latest, err := extractLatestAchievement(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("parse latest achievement for character %d: %w", charID, err)
+	}
+
 	var results []contract.AchievementResult
-	requestsMade := 0
+	requestsMade := 1
 
 	for _, id := range milestoneIDs {
 		result, err := c.checkSingleAchievement(ctx, charID, id)
@@ -381,7 +397,7 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 
 	summary := &contract.AchievementSummary{
 		Milestones:        results,
-		LatestAchievement: findLatest(results),
+		LatestAchievement: latest,
 	}
 
 	duration := time.Since(start)
@@ -392,6 +408,49 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 		slog.Duration("total_duration", duration))
 
 	return summary, nil
+}
+
+func extractLatestAchievement(html string) (*contract.AchievementResult, error) {
+	doc, err := xhtml.Parse(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parse achievement list HTML: %w", err)
+	}
+	row := findHTMLNode(doc, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.ElementNode && node.Data == "a" && hasHTMLClass(node, "entry__achievement") && achievementDetailIDRe.MatchString(htmlNodeAttr(node, "href"))
+	})
+	if row == nil {
+		return nil, nil
+	}
+	timeNode := findHTMLNode(row, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.ElementNode && node.Data == "time" && hasHTMLClass(node, "entry__activity__time")
+	})
+	if timeNode == nil {
+		return nil, fmt.Errorf("latest completed achievement timestamp not found")
+	}
+	match := timestampEpochRe.FindStringSubmatch(htmlNodeText(timeNode))
+	if len(match) < 2 {
+		return nil, fmt.Errorf("latest completed achievement timestamp not found")
+	}
+	epoch, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse epoch: %w", err)
+	}
+	idMatch := achievementDetailIDRe.FindStringSubmatch(htmlNodeAttr(row, "href"))
+	if len(idMatch) < 2 {
+		return nil, fmt.Errorf("latest completed achievement ID not found")
+	}
+	id, err := strconv.ParseUint(idMatch[1], 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("parse achievement ID: %w", err)
+	}
+	nameNode := findHTMLNode(row, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.ElementNode && hasHTMLClass(node, "entry__activity__txt")
+	})
+	result := &contract.AchievementResult{AchievementID: uint32(id), Earned: true, EarnedAt: time.Unix(epoch, 0).UTC()}
+	if nameNode != nil {
+		result.Name = achievementNameFromActivityText(htmlNodeText(nameNode))
+	}
+	return result, nil
 }
 
 // checkSingleAchievement checks if a character has earned a specific achievement.
@@ -460,10 +519,12 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 // HTML parsing helpers.
 
 var (
-	timestampEpochRe = regexp.MustCompile(`ldst_strftime\((\d+),`)
-	nameRe           = regexp.MustCompile(`entry__activity__txt">([^<]+)</p>`)
-	worldDCRe        = regexp.MustCompile(`^([^\s]+)\s+\[([^\]]+)\]$`)
-	fcIDRe           = regexp.MustCompile(`/lodestone/freecompany/(\d+)/`)
+	timestampEpochRe          = regexp.MustCompile(`ldst_strftime\((\d+),`)
+	achievementDetailIDRe     = regexp.MustCompile(`/achievement/detail/(\d+)/`)
+	achievementActivityNameRe = regexp.MustCompile(`(?i)character achievement\s+"([^"]+)"\s+earned`)
+	nameRe                    = regexp.MustCompile(`entry__activity__txt">([^<]+)</p>`)
+	worldDCRe                 = regexp.MustCompile(`^([^\s]+)\s+\[([^\]]+)\]$`)
+	fcIDRe                    = regexp.MustCompile(`/lodestone/freecompany/(\d+)/`)
 )
 
 // extractAchievementTimestamp extracts the epoch only from the completed
@@ -534,6 +595,22 @@ func htmlNodeText(root *xhtml.Node) string {
 	}
 	walk(root)
 	return text.String()
+}
+
+func htmlNodeAttr(node *xhtml.Node, key string) string {
+	for _, attr := range node.Attr {
+		if attr.Key == key {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func achievementNameFromActivityText(text string) string {
+	if match := achievementActivityNameRe.FindStringSubmatch(strings.TrimSpace(text)); len(match) == 2 {
+		return match[1]
+	}
+	return strings.TrimSpace(text)
 }
 
 // extractAchievementName extracts the achievement name from the detail page HTML.
@@ -814,18 +891,4 @@ func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 	}
 
 	return jobs
-}
-
-func findLatest(results []contract.AchievementResult) *contract.AchievementResult {
-	var latest *contract.AchievementResult
-	for i := range results {
-		r := &results[i]
-		if !r.Earned || r.EarnedAt.IsZero() {
-			continue
-		}
-		if latest == nil || r.EarnedAt.After(latest.EarnedAt) {
-			latest = r
-		}
-	}
-	return latest
 }

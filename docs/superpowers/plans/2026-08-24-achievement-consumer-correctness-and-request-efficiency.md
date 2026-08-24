@@ -2,7 +2,21 @@
 
 Date: 2026-08-24
 
-Status: Proposed — implementation requires explicit user approval
+Status: Implemented, including the approved global-latest amendment
+
+## Approved Design Amendment
+
+After the initial milestone-only implementation, the activity requirement was
+clarified: `latest_achievement_*` must always represent the character's globally
+latest public achievement. Therefore every achievement census makes exactly one
+`/achievement/` list request. That required request both supplies the latest
+achievement and detects HTTP 403 privacy; it is not a separate privacy probe.
+Only after a public list response does the client request missing milestone
+details in chain order, stopping at the first incomplete milestone. Thus a
+private or fully-known character costs one request, while a public character
+with missing milestones costs one list request plus the minimum necessary
+ordered detail requests. Where the original milestone-only plan below conflicts
+with this amendment, this amendment is authoritative.
 
 ## Goal
 
@@ -77,23 +91,22 @@ insert. This is the primary cause of “achievements are no longer being saved.�
 
 When all milestones are already stored, the handler decides whether to rescan by
 comparing `latest_achievement_at` with `achievement_staleness_days`. That field
-means “when the latest checked milestone was earned,” not “when Lodestone was
-last checked.” A character who completed their latest expansion more than seven
+means “when the globally latest public achievement was earned,” not “when
+Lodestone was last checked.” A character whose latest achievement is more than seven
 days ago is therefore permanently stale and can incur all seven detail requests
 on every achievement job.
 
-The custom client checks milestone details only; it no longer scans the full
-achievement history. Rechecking already-correct milestones cannot discover
-unrelated recent activity. Therefore `latest_achievement_at` must not be used as
-a request-cache timestamp.
+The client refreshes the first achievement-history entry to discover recent
+activity. Therefore `latest_achievement_at` must not be used as a request-cache
+timestamp.
 
 ### 4. Privacy needs no second HTTP call
 
-The separate `/achievement/` privacy probe was already removed in `v1.11.8`.
-Keep that optimization. The first required achievement detail request is enough:
+The `/achievement/` request is required to refresh global latest activity, and
+the same response handles privacy without another probe:
 
-- HTTP 403: return `AchievementSummary{Private: true}` and stop after that one
-  request.
+- HTTP 403 from the list: return `AchievementSummary{Private: true}` and stop
+  after that one request.
 - HTTP 200 with no `entry__achievement__view--complete`: the achievement is
   public but unearned; return `Earned: false` and stop sequential discovery.
 - HTTP 200 with the complete class and a valid earned timestamp: return the
@@ -118,30 +131,30 @@ For each character:
 
 1. Load the configured/registered milestone IDs and sort them ascending.
 2. Load already-persisted character milestones and index them by achievement ID.
-3. Find the earliest milestone that is missing.
-4. If none needs work, skip Lodestone entirely.
+3. Find the missing milestones.
+4. Always request the list page to refresh global latest activity and privacy.
 5. Pass only missing milestone IDs, in canonical order, to `FetchAchievements`;
    already persisted checkpoints are omitted even when an earlier gap exists.
-6. The client checks those missing checkpoints sequentially and stops after the first public,
-   unearned milestone or the first 403.
+6. After a public list response, the client checks those missing checkpoints
+   sequentially and stops after the first public, unearned milestone.
 7. Upsert returned earned milestones without deleting previously stored rows.
 
 This gives the following request bounds:
 
-| Character state | Lodestone detail requests |
-|---|---:|
-| All milestones known and correct | 0 |
-| No milestones earned | 1 |
-| First three known, fourth unearned | 1 |
-| First three known, next two newly earned, sixth unearned | 3 |
-| Achievements private | 1 |
+| Character state | List requests | Detail requests | Total |
+|---|---:|---:|---:|
+| All milestones known and correct | 1 | 0 | 1 |
+| No milestones earned | 1 | 1 | 2 |
+| First three known, fourth unearned | 1 | 1 | 2 |
+| First three known, next two newly earned, sixth unearned | 1 | 3 | 4 |
+| Achievements private | 1 | 0 | 1 |
 
 Historical rows containing the old `2026-07-28 08:00:00Z` value are explicitly
 left unchanged. This change guarantees correct timestamps for newly discovered
 milestones and conflict updates that occur naturally; it does not spend
 rate-limited requests on a historical backfill.
 
-Do not add an `/achievement/` request before the detail loop.
+Always make the single required `/achievement/` request before the detail loop.
 
 ### Timestamp parsing must be scoped and fail closed
 
@@ -173,9 +186,9 @@ Preserve additive/idempotent milestone persistence:
 - An earned result with an invalid timestamp returns an error before repository
   writes.
 
-`LatestAchievement` currently means the latest checked milestone, not the latest
-achievement across the full Lodestone history. Update misleading contract and
-documentation language; do not claim that it represents arbitrary activity.
+`LatestAchievement` means the first, globally latest entry on the public
+achievement-history page. Keep this contract and its activity documentation in
+sync with the list parser.
 
 ## Detailed TDD Implementation Tasks
 
@@ -469,11 +482,11 @@ Required corrections:
    godestone model types. Document `CustomClient`, direct HTML requests,
    request-level token charging, timeout/cancellation, and proxy transports.
 2. Document ordered incremental milestone checking and its exact request bounds.
-3. Explicitly state that privacy is inferred from the first necessary detail
-   request's HTTP 403 and costs no additional request.
+3. Explicitly state that privacy is inferred from the required list request's
+   HTTP 403 and costs no additional request.
 4. Document public-unearned as HTTP 200 without the complete marker.
-5. Document that `latest_achievement_*` now reflects the latest checked tracked
-   milestone, not an arbitrary latest achievement from the full history.
+5. Document that `latest_achievement_*` reflects the globally latest public
+   achievement from the first history entry.
 6. State that historical bad timestamps are not backfilled; the parser guarantee
    applies to new writes.
 7. Remove the incorrect freshness description based on earned timestamps.
@@ -483,12 +496,12 @@ Required corrections:
 Suggested documentation text:
 
 ```markdown
-Achievement census requests are incremental. Milestones are checked in canonical
-chronological order, beginning at the earliest missing row, and the
-client stops at the first unearned milestone. A character with a complete
-milestone history makes no Lodestone request. Achievement
-privacy is detected when the first required detail request returns HTTP 403; no
-separate privacy probe is issued.
+Achievement census first refreshes the globally latest public achievement with
+one list request. Missing milestones are then checked in canonical chronological
+order and the client stops at the first unearned milestone. A character with a
+complete milestone history makes one list request and no detail requests.
+Privacy is detected when the required list request returns HTTP 403; no separate
+privacy probe is issued.
 ```
 
 ### Task 6: Full local verification, commit, and push
@@ -621,9 +634,10 @@ Acceptance for the live smoke:
   has one.
 - Its `achieved_at` is the achievement-specific date and is not
   `2026-07-28 08:00:00+00`.
-- Logs show chronological milestone checks and no `/achievement/` privacy probe.
+- Logs show one `/achievement/` latest/privacy request followed by chronological
+  missing-milestone detail checks.
 - A second job for the same now-complete known prefix requests the next missing
-  milestone (or makes zero requests when all tracked milestones are known).
+  milestone (or makes only the list request when all tracked milestones are known).
 - The aggregate historical bad-row count is unchanged except for incidental
   conflict updates caused by the single candidate; no backfill is performed.
 
@@ -637,16 +651,16 @@ unbounded live search that consumes Lodestone capacity.
 - Milestone request IDs are deterministic and chronological on every run.
 - A character's earned earlier milestones are saved even when later milestones
   are unearned.
-- Existing correctly stored complete milestone histories generate zero
-  Lodestone calls.
+- Existing correctly stored complete milestone histories generate one list
+  call and zero detail calls.
 - Existing rows with `achieved_at = 2026-07-28 08:00:00Z` are left untouched;
   new timestamp writes are correct.
 - The stored timestamp comes from the completed achievement row, not global page
   timestamps.
 - An earned row without a parseable date fails and retries without a database
   write.
-- Private achievements require exactly one detail request and no separate
-  privacy request.
+- Private achievements require exactly one list request and no separate privacy
+  or detail request.
 - Public unearned achievements are not classified as private.
 - Incremental processing never deletes previously stored milestones.
 - Focused tests, race tests, full tests, formatting, lint, and build are run and
@@ -663,6 +677,6 @@ unbounded live search that consumes Lodestone capacity.
 
 - Returning to a full paginated achievement-history scrape.
 - Using Tomestone as an achievement fallback.
-- Treating tracked milestone dates as a complete general player-activity signal.
+- Treating achievement dates as a direct login or subscription signal.
 - Deleting historical milestone rows when a later response omits them.
 - Making live Lodestone calls from automated tests.

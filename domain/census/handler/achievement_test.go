@@ -134,7 +134,7 @@ func TestAchievementCensus_SkipsWhenAllMilestonesKnown(t *testing.T) {
 	var fetched bool
 	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
 		fetched = true
-		return nil, nil
+		return &contract.AchievementSummary{}, nil
 	}
 
 	next, err := h.Handle(context.Background(), achievementPayload(200))
@@ -144,8 +144,8 @@ func TestAchievementCensus_SkipsWhenAllMilestonesKnown(t *testing.T) {
 	if len(next) != 0 {
 		t.Fatalf("next jobs = %d, want 0", len(next))
 	}
-	if fetched {
-		t.Error("FetchAchievements was called when all milestones known and data is fresh")
+	if !fetched {
+		t.Error("FetchAchievements was not called to refresh global latest activity")
 	}
 }
 
@@ -184,8 +184,8 @@ func TestAchievementCensus_AllKnownOldAchievementsDoNotRefetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if fetched {
-		t.Error("FetchAchievements was called when all milestones are known")
+	if !fetched {
+		t.Error("FetchAchievements was not called to refresh global latest activity")
 	}
 }
 
@@ -200,7 +200,7 @@ func TestAchievementCensus_RequestsOnlyMissingMilestonesInOrder(t *testing.T) {
 		{"nothing known starts from chocobo", 501, nil, []uint32{590, 1129, 1139, 1794, 2298, 2958, 3496}, 1},
 		{"known prefix requests missing checkpoints", 502, []contract.CharacterMilestone{{AchievementID: 590}, {AchievementID: 1129}, {AchievementID: 1139}}, []uint32{1794, 2298, 2958, 3496}, 1},
 		{"later known checkpoints leave only early hole", 504, []contract.CharacterMilestone{{AchievementID: 1129}, {AchievementID: 1139}, {AchievementID: 1794}, {AchievementID: 2298}, {AchievementID: 2958}, {AchievementID: 3496}}, []uint32{590}, 1},
-		{"complete history makes no request", 503, []contract.CharacterMilestone{{AchievementID: 590}, {AchievementID: 1129}, {AchievementID: 1139}, {AchievementID: 1794}, {AchievementID: 2298}, {AchievementID: 2958}, {AchievementID: 3496}}, nil, 0},
+		{"complete history refreshes list with no details", 503, []contract.CharacterMilestone{{AchievementID: 590}, {AchievementID: 1129}, {AchievementID: 1139}, {AchievementID: 1794}, {AchievementID: 2298}, {AchievementID: 2958}, {AchievementID: 3496}}, nil, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestAchievementCensus_RequestsOnlyMissingMilestonesInOrder(t *testing.T) {
 	}
 }
 
-func TestAchievementCensus_PreservesLaterKnownLatestAchievement(t *testing.T) {
+func TestAchievementCensus_UsesGlobalLatestAchievement(t *testing.T) {
 	h, ls, chars, ach := newTestAchievementCensus(t)
 	older, later := time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour)
 	if err := chars.Upsert(context.Background(), contract.CharacterRecord{ID: 505, Name: "X", FirstSeenAt: older}, nil); err != nil {
@@ -255,7 +255,7 @@ func TestAchievementCensus_PreservesLaterKnownLatestAchievement(t *testing.T) {
 		if len(ids) != 6 || ids[0] != 590 {
 			t.Fatalf("requested = %v, want missing IDs", ids)
 		}
-		return &contract.AchievementSummary{Milestones: []contract.AchievementResult{{AchievementID: 590, Earned: true, EarnedAt: older}}, LatestAchievement: &contract.AchievementResult{AchievementID: 590, Earned: true, EarnedAt: older}}, nil
+		return &contract.AchievementSummary{Milestones: []contract.AchievementResult{{AchievementID: 590, Earned: true, EarnedAt: older}}, LatestAchievement: &contract.AchievementResult{AchievementID: 999, Earned: true, EarnedAt: later}}, nil
 	}
 	if _, err := h.Handle(context.Background(), achievementPayload(505)); err != nil {
 		t.Fatal(err)
@@ -264,8 +264,8 @@ func TestAchievementCensus_PreservesLaterKnownLatestAchievement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.LatestAchievementID == nil || *got.LatestAchievementID != 3496 {
-		t.Fatalf("latest ID = %v, want 3496", got.LatestAchievementID)
+	if got.LatestAchievementID == nil || *got.LatestAchievementID != 999 {
+		t.Fatalf("latest ID = %v, want 999", got.LatestAchievementID)
 	}
 	if got.LatestAchievementAt == nil || !got.LatestAchievementAt.Equal(later) {
 		t.Fatalf("latest at = %v, want %v", got.LatestAchievementAt, later)

@@ -57,23 +57,23 @@
         <div class="panel-body" style="line-height: 1.7; color: var(--text-muted);">
             <p style="margin-bottom: 1rem;">
                 Because Square Enix does not publish real-time login statistics or active subscription counts, the
-                census estimates activity from tracked progression milestones observed within a <strong
+                census estimates activity from the most recent public achievement observed within a <strong
                     style="color: var(--cyan);">rolling 30-day activity window</strong>.
             </p>
             <p style="margin-bottom: 1rem;">
                 A character is designated as <span class="badge badge-active"
                     style="display: inline-block; vertical-align: middle;">Active</span> if their latest observed
-                tracked milestone was earned within the last 30 days. This is a conservative progression signal, not
-                the character's globally latest achievement or a direct login measurement.
+                globally latest public achievement was earned within the last 30 days. This is an achievement-based
+                activity signal, not a direct login or subscription measurement.
             </p>
             <p style="margin-bottom: 1rem;">
-                Completing a tracked milestone confirms the character was played within the window while keeping
-                Lodestone traffic bounded to the small ordered milestone chain.
+                The latest achievement is refreshed from one history-page request. Missing story milestones are then
+                checked separately in order, stopping as soon as the first incomplete milestone is found.
             </p>
             <p style="font-size: 0.92rem; color: var(--text-dim);">
-                Characters may still be playing after their latest tracked milestone. They are categorized as inactive
-                when that milestone is older than 30 days or their Lodestone achievements are private, so this metric
-                intentionally undercounts activity rather than inferring unobserved play.
+                Characters can still be playing without earning achievements. They are categorized as inactive when
+                their latest public achievement is older than 30 days or their Lodestone achievements are private, so
+                this metric does not infer activity that the public achievement history cannot demonstrate.
             </p>
         </div>
     </div>

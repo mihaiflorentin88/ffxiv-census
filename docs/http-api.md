@@ -39,7 +39,7 @@ Times are RFC 3339 UTC (Go `time.Time` marshaling). The exception is `NewCharact
 
 ### Activity window
 
-"Active" means the character's latest checked tracked milestone (`latest_achievement_at`) falls within the activity window; it is a conservative progression signal rather than the character's globally latest achievement. Characters without a checked tracked milestone (`latest_achievement_at` NULL) are never active. The window is configured under `[census]`:
+"Active" means the character's globally latest public achievement (`latest_achievement_at`) falls within the activity window. It is an achievement-based signal rather than a direct login or subscription measurement. Characters without a visible achievement (`latest_achievement_at` NULL) are never active. The window is configured under `[census]`:
 
 ```toml
 [census]

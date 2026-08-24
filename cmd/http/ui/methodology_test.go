@@ -31,8 +31,8 @@ func TestMethodologyHandler(t *testing.T) {
 	if !strings.Contains(body, "Active Player Criteria") {
 		t.Errorf("expected body to contain 'Active Player Criteria', got:\n%s", body)
 	}
-	if !strings.Contains(body, "conservative progression signal") {
-		t.Errorf("expected body to describe the conservative progression signal, got:\n%s", body)
+	if !strings.Contains(body, "globally latest public achievement") {
+		t.Errorf("expected body to describe the global latest-achievement activity signal, got:\n%s", body)
 	}
 	if !strings.Contains(body, "Main Scenario Quest (MSQ) Progression") {
 		t.Errorf("expected body to contain 'Main Scenario Quest (MSQ) Progression', got:\n%s", body)

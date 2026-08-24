@@ -9,13 +9,13 @@ The Lodestone client reads character and achievement data from **The Lodestone**
 | Method | Signature | Notes |
 | ------ | --------- | ----- |
 | `FetchCharacter` | `(ctx, id uint32) (*contract.CharacterProfile, error)` | Character ID is the numeric Lodestone ID. |
-| `FetchAchievements` | `(ctx, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error)` | Sequential tracked-milestone detail check. |
+| `FetchAchievements` | `(ctx, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error)` | One latest-history request, followed by sequential missing-milestone detail checks. |
 
 ## Achievement milestone checks
 
-Achievement census requests are incremental: only missing milestones are requested, in chronological order. Persisted checkpoints are skipped, and the client stops at the first public unearned missing milestone. A complete tracked history makes **zero** Lodestone requests; no milestones known starts at Chocobo; a known prefix starts at its first missing checkpoint; and a historical gap requests only that gap rather than rechecking later stored milestones. Privacy is inferred from HTTP 403 on the first necessary detail request and costs no separate `/achievement/` request. HTTP 200 without the completed marker is public but unearned.
+Every achievement census first requests `/achievement/` once. That list page supplies the true globally latest earned achievement and detects a private profile via HTTP 403. Missing milestones are then requested in chronological order; persisted checkpoints are skipped and the client stops at the first public unearned missing milestone. A complete tracked history therefore makes one list request and no detail requests; a public missing milestone makes one list request plus detail requests through the first incomplete checkpoint.
 
-Earned timestamps are extracted only from the completed achievement row, so new writes use the achievement-specific date. Historical incorrectly stored dates are not backfilled. `latest_achievement_*` reflects the latest checked tracked milestone, not arbitrary activity from the complete achievement history.
+Earned timestamps are extracted only from the completed achievement row, so new writes use the achievement-specific date. Historical incorrectly stored dates are not backfilled. `latest_achievement_*` reflects the global latest achievement from the list page.
 
 ## Primary Provider & Fallback Integration
 

@@ -21,8 +21,11 @@ func testCustomClient(rt http.RoundTripper) *CustomClient {
 
 func TestCustomClient_FetchAchievements_403MarksPrivateWithOneRequest(t *testing.T) {
 	requests := 0
-	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+	c := testCustomClient(roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		requests++
+		if r.URL.Path != "/lodestone/character/1/achievement/" {
+			t.Fatalf("path = %s, want list privacy/latest request", r.URL.Path)
+		}
 		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
 	}))
 	summary, err := c.FetchAchievements(context.Background(), 1, []uint32{590, 1129})
@@ -37,18 +40,58 @@ func TestCustomClient_FetchAchievements_403MarksPrivateWithOneRequest(t *testing
 	}
 }
 
+func TestCustomClient_FetchAchievements_FetchesListBeforeMissingDetails(t *testing.T) {
+	var paths []string
+	c := testCustomClient(roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/lodestone/character/1/achievement/" {
+			html := `<li class="entry"><a href="/lodestone/character/1/achievement/detail/999/" class="entry__achievement"><div class="entry__achievement--list entry__achievement--history"><time class="entry__activity__time"><script>ldst_strftime(1700000000, 'YMD')</script></time><p class="entry__activity__txt">Character achievement "Newest" earned!</p></div></a></li>`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(html)), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<div class="entry__achievement__view"></div>`)), Header: make(http.Header)}, nil
+	}))
+	summary, err := c.FetchAchievements(context.Background(), 1, []uint32{590})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0] != "/lodestone/character/1/achievement/" || paths[1] != "/lodestone/character/1/achievement/detail/590/" {
+		t.Fatalf("paths = %v, want list then one detail", paths)
+	}
+	if summary.LatestAchievement == nil || summary.LatestAchievement.AchievementID != 999 || summary.LatestAchievement.Name != "Newest" || summary.LatestAchievement.EarnedAt.Unix() != 1700000000 {
+		t.Fatalf("latest = %+v, want list item 999", summary.LatestAchievement)
+	}
+}
+
+func TestCustomClient_FetchAchievements_AllKnownStillFetchesList(t *testing.T) {
+	requests := 0
+	c := testCustomClient(roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if r.URL.Path != "/lodestone/character/1/achievement/" {
+			t.Fatalf("path = %s, want list", r.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<div></div>`)), Header: make(http.Header)}, nil
+	}))
+	if _, err := c.FetchAchievements(context.Background(), 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
 func TestCustomClient_FetchAchievements_200IncompleteMeansUnearned(t *testing.T) {
 	requests := 0
 	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		requests++
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`<div class="entry__achievement__view"><p class="entry__activity__txt">Not yet</p></div>`)), Header: make(http.Header)}, nil
+		html := `<div class="entry__achievement__view"><p class="entry__activity__txt">Not yet</p></div>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(html)), Header: make(http.Header)}, nil
 	}))
 	summary, err := c.FetchAchievements(context.Background(), 1, []uint32{590, 1129})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests != 1 {
-		t.Fatalf("HTTP requests = %d, want 1", requests)
+	if requests != 2 {
+		t.Fatalf("HTTP requests = %d, want 2 (list plus first detail)", requests)
 	}
 	if summary == nil || summary.Private || len(summary.Milestones) != 0 {
 		t.Fatalf("summary = %+v, want public unearned", summary)

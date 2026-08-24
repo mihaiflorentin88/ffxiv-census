@@ -8,7 +8,7 @@ The census ingests Lodestone data through a durable, event-driven pipeline. Publ
 |---|---|---|
 | `id-sweep` | Probe a range of character IDs; ingest any that exist | ✅ implemented |
 | `character-census` | Re-census a known character's profile + jobs | ✅ implemented |
-| `achievement-census` | Incrementally fetch tracked milestones and track the latest checked milestone | ✅ implemented |
+| `achievement-census` | Refresh the globally latest achievement and incrementally fetch tracked milestones | ✅ implemented |
 | `new-proxy` | Register and test a newly discovered proxy | ✅ implemented |
 
 Recurring proxy scans are performed directly by the `proxy scan` database worker, not via queue events. See `docs/proxy.md`.
@@ -59,7 +59,7 @@ Both `id-sweep` and `character-census` are dual-source events, but they use diff
 
 ### Lodestone-Only Event Rate-Limit Handling
 
-Achievement checks request only missing milestones in chain order and stop at the first public unearned result; already stored checkpoints are not rechecked. HTTP 403 on that first required detail request marks achievements private, with no separate achievement-list privacy probe. A complete tracked history does not call Lodestone.
+Achievement checks always request the achievement list once to refresh global latest activity and detect HTTP 403 privacy. They then request only missing milestones in chain order and stop at the first public unearned detail result; already stored checkpoints are not rechecked. A complete tracked history makes one list request and no detail requests.
 
 `achievement-census` is a Lodestone-exclusive event (no Tomestone fallback). When Lodestone is rate-limited or paused, the handler calls `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retries the fetch inline. This is more efficient than returning an error immediately (which triggers queue retry + backoff).
 
