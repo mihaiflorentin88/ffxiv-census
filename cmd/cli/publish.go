@@ -89,6 +89,46 @@ func publishAll(q contract.Queue, logger contract.Logger, ctx context.Context, j
 	return len(jobs), nil
 }
 
+type idSweepCursor interface {
+	IDSweepCursor(ctx context.Context) (uint32, error)
+	AdvanceIDSweepCursor(ctx context.Context, expected, next uint32) error
+}
+
+func publishAutoIDSweep(ctx context.Context, cursor idSweepCursor, q contract.Queue, logger contract.Logger, count, chunkSize uint32, source string) error {
+	if count == 0 {
+		return fmt.Errorf("--count / --batch-size must be > 0")
+	}
+	from, err := cursor.IDSweepCursor(ctx)
+	if err != nil {
+		return fmt.Errorf("lookup id sweep cursor: %w", err)
+	}
+	if from == 0 || count > ^uint32(0)-from {
+		return fmt.Errorf("id sweep range overflows uint32: from=%d count=%d", from, count)
+	}
+	to := from + count - 1
+	next := to + 1
+	jobs := buildIDSweepJobs(from, to, chunkSize, source)
+	if _, err := publishAll(q, logger, ctx, jobs); err != nil {
+		return err
+	}
+	if err := cursor.AdvanceIDSweepCursor(ctx, from, next); err != nil {
+		return fmt.Errorf("advance id sweep cursor after publishing [%d,%d]: %w", from, to, err)
+	}
+	logger.InfoContext(
+		ctx,
+		"publish.id_sweep",
+		slog.Bool("auto", true),
+		slog.Bool("fill_gaps", false),
+		slog.Uint64("from_id", uint64(from)),
+		slog.Uint64("to_id", uint64(to)),
+		slog.Uint64("next_id", uint64(next)),
+		slog.Uint64("chunk_size", uint64(chunkSize)),
+		slog.String("source", source),
+		slog.Int("count", len(jobs)),
+	)
+	return nil
+}
+
 var publishIDSweepCmd = &cobra.Command{
 	Use:   "id-sweep",
 	Short: "Publish id-sweep jobs covering an ID range (chunked, auto-discovery, gap-fill, daemon)",
@@ -155,6 +195,8 @@ var publishIDSweepCmd = &cobra.Command{
 					}
 					jobs = buildGapSweepJobs(gaps, chunkSize, source)
 				}
+			} else if auto || (from == 0 && to == 0) {
+				return publishAutoIDSweep(cmd.Context(), repo, q, logger, count, chunkSize, source)
 			} else {
 				maxIDFunc := func() (uint32, error) {
 					return repo.MaxID(cmd.Context())

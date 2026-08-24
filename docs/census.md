@@ -66,6 +66,10 @@ Default entries:
 | expansion_msq | 3496 | Dawntrail | In the Glow of a New Dawn |
 
 Achievement census always requests the achievement list once to refresh the global latest activity timestamp and check privacy. It then requests only missing entries from this ordered chain, preserves prior rows during upsert, and stops at the first missing entry that is not complete. Already stored checkpoints are skipped even across historical gaps. Dates on historical rows are not backfilled; newly discovered earned rows use the date parsed from the completed achievement HTML row.
+
+Milestone rows are sparse by design and their maximum `character_id` need not
+match `characters.MAX(id)`. Private achievement histories and public characters
+that have not earned the first missing milestone produce no new row.
 ## Repositories
 
 Three contracts in `port/contract`, each with a PostgreSQL implementation in `infrastructure/postgres/repository/` and an in-memory fake in `mock/repository/`:

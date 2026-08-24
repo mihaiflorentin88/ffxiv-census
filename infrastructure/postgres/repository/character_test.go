@@ -64,6 +64,57 @@ func TestCharacterRepository_UpsertAndGet(t *testing.T) {
 	}
 }
 
+func TestCharacterRepository_IDSweepCursorInitializesAndAdvances(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := repo.Upsert(ctx, contract.CharacterRecord{ID: 1584838, Name: "Frontier", World: "Aegis", Race: "Hyur", FirstSeenAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.IDSweepCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1584839 {
+		t.Fatalf("initial cursor = %d, want 1584839", got)
+	}
+	if err := repo.AdvanceIDSweepCursor(ctx, 1584839, 1585389); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.IDSweepCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1585389 {
+		t.Fatalf("advanced cursor = %d, want 1585389", got)
+	}
+}
+
+func TestCharacterRepository_IDSweepCursorNeverRewinds(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+
+	if _, err := repo.IDSweepCursor(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AdvanceIDSweepCursor(ctx, 1, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AdvanceIDSweepCursor(ctx, 1, 51); err != nil {
+		t.Fatal("stale advancement to an already-covered range should be idempotent:", err)
+	}
+	got, err := repo.IDSweepCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 101 {
+		t.Fatalf("cursor rewound to %d, want 101", got)
+	}
+}
+
 func TestCharacterRepository_ListAndCount(t *testing.T) {
 	driver := newTestDriver(t)
 	repo := repository.NewCharacterRepository(driver)
@@ -154,20 +205,20 @@ func TestCharacterRepository_Count_MinLevelFilter(t *testing.T) {
 	_ = repo.Upsert(ctx, contract.CharacterRecord{
 		ID: 1, Name: "Max", World: "Balmung", FirstSeenAt: now,
 	}, []contract.ClassJobRecord{
-		{CharacterID: 1, Name: "Paladin", Level: 100},
-		{CharacterID: 1, Name: "Warrior", Level: 90},
+		{CharacterID: 1, ClassJobID: 19, Name: "Paladin", Level: 100},
+		{CharacterID: 1, ClassJobID: 21, Name: "Warrior", Level: 90},
 	})
 
 	_ = repo.Upsert(ctx, contract.CharacterRecord{
 		ID: 2, Name: "Mid", World: "Balmung", FirstSeenAt: now,
 	}, []contract.ClassJobRecord{
-		{CharacterID: 2, Name: "Paladin", Level: 80},
+		{CharacterID: 2, ClassJobID: 19, Name: "Paladin", Level: 80},
 	})
 
 	_ = repo.Upsert(ctx, contract.CharacterRecord{
 		ID: 3, Name: "Low", World: "Balmung", FirstSeenAt: now,
 	}, []contract.ClassJobRecord{
-		{CharacterID: 3, Name: "Paladin", Level: 50},
+		{CharacterID: 3, ClassJobID: 19, Name: "Paladin", Level: 50},
 	})
 
 	count, err := repo.Count(ctx, contract.CharacterFilter{MinLevel: 100})

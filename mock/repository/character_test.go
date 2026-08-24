@@ -8,6 +8,34 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
+func TestMockCharacterRepository_IDSweepCursor(t *testing.T) {
+	repo := NewCharacterFake()
+	ctx := context.Background()
+	if err := repo.Upsert(ctx, contract.CharacterRecord{ID: 42, FirstSeenAt: time.Now()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.IDSweepCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 43 {
+		t.Fatalf("initial cursor = %d, want 43", got)
+	}
+	if err := repo.AdvanceIDSweepCursor(ctx, 43, 143); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AdvanceIDSweepCursor(ctx, 43, 100); err != nil {
+		t.Fatalf("stale covered advance should be idempotent: %v", err)
+	}
+	got, err = repo.IDSweepCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 143 {
+		t.Fatalf("cursor = %d, want 143", got)
+	}
+}
+
 func TestMockCharacterRepository_ListFilter(t *testing.T) {
 	repo := NewCharacterFake()
 	ctx := context.Background()

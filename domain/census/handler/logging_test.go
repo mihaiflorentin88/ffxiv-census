@@ -24,7 +24,7 @@ func newBufLogger(buf *bytes.Buffer) *slog.Logger {
 func TestCharacterCensus_LogsFetchAndStore(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
-		return &contract.CharacterProfile{ID: id, Name: "Tataru Taru", World: "Ultros", Datacenter: "Primal"}, nil
+		return &contract.CharacterProfile{ID: id, Name: "Tataru Taru", World: "Ultros", Datacenter: "Primal", Race: "Lalafell"}, nil
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	var buf bytes.Buffer

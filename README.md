@@ -85,7 +85,8 @@ Enqueues census jobs to be processed asynchronously by worker consumers.
 Probes character ID ranges across Lodestone or Tomestone. Designed for both single-shot scheduled execution (e.g. **Kubernetes CronJob**) and continuous loop mode (`--daemon`). Uses chunking and infinite retries (`max_attempts = 0`).
 
 ```bash
-# Auto-forward mode (recommended for CronJobs): sweeps next 1,000 IDs starting from MaxID + 1
+# Auto-forward mode (recommended for CronJobs): reserves the next 1,000 IDs from
+# a persistent cursor, publishes them, then advances the cursor.
 ./bin/ffxiv-census publish id-sweep --auto --batch-size 1000 --chunk-size 100
 
 # Gap-fill mode: scans unscanned holes between 1 and MaxID
@@ -97,6 +98,11 @@ Probes character ID ranges across Lodestone or Tomestone. Designed for both sing
 # Sweep using Tomestone API instead of Lodestone
 ./bin/ffxiv-census publish id-sweep --auto --source tomestone
 ```
+
+The forward cursor initializes from `MAX(characters.id) + 1` on first use and
+then advances independently of discoveries, so an empty range cannot pin later
+cron runs to the same IDs. It advances only after every queue publish succeeds;
+a partial failure safely retries the full range on the next run.
 
 #### `publish character-census`
 Enqueues the oldest `last_census_at` characters (NULL first) for re-census. By default (`--older-than 0`), all characters are eligible and results are ordered oldest-first; pass a positive `--older-than` to filter by age.

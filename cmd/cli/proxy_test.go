@@ -115,9 +115,11 @@ func TestPublishDiscoveredProxies_QueuePublishFailure(t *testing.T) {
 func TestPublishDiscoveredProxies_SkipsExisting(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	// Seed the repo with http/1.2.3.4/8080.
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Reset counters after seeding so we only count the publish call.
 	repo.ExistsCalls = 0
 
@@ -148,9 +150,11 @@ func TestPublishDiscoveredProxies_SkipsExisting(t *testing.T) {
 func TestPublishDiscoveredProxies_PublishesNew(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	// Seed with http/1.2.3.4/8080.
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	repo.ExistsCalls = 0
 
 	q := &errorQueue{failOn: 0}
@@ -199,9 +203,11 @@ func TestPublishDiscoveredProxies_LookupFailureFailsClosed(t *testing.T) {
 
 func TestPublishDiscoveredProxies_AllExistingSucceeds(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	repo.ExistsCalls = 0
 
 	q := &errorQueue{failOn: 0}
@@ -226,9 +232,11 @@ func TestPublishDiscoveredProxies_AllExistingSucceeds(t *testing.T) {
 func TestPublishDiscoveredProxies_LimitCountsPublishedAfterDeduplication(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	// Seed one existing tuple — it must not consume the limit.
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	repo.ExistsCalls = 0
 
 	q := &errorQueue{failOn: 0}
@@ -322,9 +330,11 @@ func TestPublishDiscoveredProxies_LimitStopsProviderEarly(t *testing.T) {
 func TestPublishDiscoveredProxies_LimitCrossProviderFallback(t *testing.T) {
 	repo := repository.NewFakeProxyRepository()
 	// Seed one existing tuple — it must not consume the limit.
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	repo.ExistsCalls = 0
 
 	q := &errorQueue{failOn: 0}

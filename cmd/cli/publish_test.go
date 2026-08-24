@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -191,6 +192,81 @@ func (q *errorQueue) Consume(context.Context, []string, int, func(context.Contex
 }
 func (q *errorQueue) ConsumeFailed(context.Context, []string, int) error { return nil }
 func (q *errorQueue) Close() error                                       { return nil }
+
+type fakeIDSweepCursor struct {
+	next         uint32
+	advanceCalls [][2]uint32
+}
+
+func (f *fakeIDSweepCursor) IDSweepCursor(context.Context) (uint32, error) {
+	return f.next, nil
+}
+
+func (f *fakeIDSweepCursor) AdvanceIDSweepCursor(_ context.Context, expected, next uint32) error {
+	f.advanceCalls = append(f.advanceCalls, [2]uint32{expected, next})
+	if f.next != expected {
+		return fmt.Errorf("stale cursor: got %d, expected %d", f.next, expected)
+	}
+	f.next = next
+	return nil
+}
+
+func TestPublishAutoIDSweep_AdvancesAcrossEmptyDiscoveryBatches(t *testing.T) {
+	cursor := &fakeIDSweepCursor{next: 1584839}
+	q := &errorQueue{}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	for range 2 {
+		if err := publishAutoIDSweep(context.Background(), cursor, q, logger, 550, 550, "auto"); err != nil {
+			t.Fatalf("publishAutoIDSweep: %v", err)
+		}
+	}
+
+	if cursor.next != 1585939 {
+		t.Fatalf("cursor = %d, want 1585939", cursor.next)
+	}
+	if len(q.jobs) != 2 {
+		t.Fatalf("published jobs = %d, want 2", len(q.jobs))
+	}
+	want := [][2]uint32{{1584839, 1585388}, {1585389, 1585938}}
+	for i, job := range q.jobs {
+		var payload handler.IDSweepPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.From != want[i][0] || payload.To != want[i][1] {
+			t.Errorf("job %d range = [%d,%d], want [%d,%d]", i, payload.From, payload.To, want[i][0], want[i][1])
+		}
+	}
+	for _, field := range []string{"from_id=1585389", "to_id=1585938", "next_id=1585939"} {
+		if !strings.Contains(logs.String(), field) {
+			t.Errorf("completion logs missing %q: %s", field, logs.String())
+		}
+	}
+}
+
+func TestPublishAutoIDSweep_PublishFailureDoesNotAdvanceCursor(t *testing.T) {
+	cursor := &fakeIDSweepCursor{next: 1001}
+	q := &errorQueue{failOn: 2}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	err := publishAutoIDSweep(context.Background(), cursor, q, logger, 300, 100, "auto")
+	if err == nil {
+		t.Fatal("expected publish error")
+	}
+	if cursor.next != 1001 || len(cursor.advanceCalls) != 0 {
+		t.Fatalf("cursor advanced after partial publish: next=%d calls=%v", cursor.next, cursor.advanceCalls)
+	}
+}
+
+func TestPublishAutoIDSweep_RejectsUint32Overflow(t *testing.T) {
+	cursor := &fakeIDSweepCursor{next: ^uint32(0) - 4}
+	err := publishAutoIDSweep(context.Background(), cursor, &errorQueue{}, slog.New(slog.NewTextHandler(io.Discard, nil)), 10, 1, "auto")
+	if err == nil {
+		t.Fatal("expected overflow error")
+	}
+}
 
 func TestPublishAllStopsOnFirstUnconfirmedJob(t *testing.T) {
 	q := &errorQueue{failOn: 3}

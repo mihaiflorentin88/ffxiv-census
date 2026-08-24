@@ -92,4 +92,11 @@ type CharacterRepository interface {
 	// MaxID returns the maximum character ID in the repository (excluding deleted
 	// characters), or 0 if no characters exist.
 	MaxID(ctx context.Context) (uint32, error)
+	// IDSweepCursor returns the next unscanned character ID. On first use it is
+	// initialized to one past the highest stored character ID.
+	IDSweepCursor(ctx context.Context) (uint32, error)
+	// AdvanceIDSweepCursor advances the cursor only when it still equals
+	// expected. A stale advance is idempotent when the stored cursor is already
+	// at or beyond next, and must never move the cursor backward.
+	AdvanceIDSweepCursor(ctx context.Context, expected, next uint32) error
 }

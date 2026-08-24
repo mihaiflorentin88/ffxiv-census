@@ -86,7 +86,7 @@ When `consume --proxy` is used, the event pipeline runs through proxy-aware clie
 # Proxy mode: each goroutine acquires its own proxy
 ./bin/ffxiv-census consume --proxy --concurrency 8
 
-# One-shot auto-discovery publisher (queries MaxID in DB, sweeps next 1000 IDs).
+# One-shot auto-discovery publisher (claims the next 1000 persistent-cursor IDs).
 ./bin/ffxiv-census publish id-sweep --count 1000 --chunk-size 100 --source auto
 
 # Manual ID sweep over explicit range.
@@ -99,7 +99,9 @@ When `consume --proxy` is used, the event pipeline runs through proxy-aware clie
 ./bin/ffxiv-census publish character-census --older-than 720h --limit 1000
 ```
 
-`consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` divides the sweep range into `chunk-size`-sized jobs.
+`consume` handles SIGINT/SIGTERM gracefully. `publish id-sweep` divides the sweep range into `chunk-size`-sized jobs. Automatic ranges come from the persistent `id_sweep_state` cursor, which initializes at `MAX(characters.id) + 1` and advances after all chunks are confirmed by RabbitMQ. Empty discovery batches still advance. Partial publication failures leave the cursor unchanged, favoring safe duplicate retries over skipped IDs. Explicit ranges and gap-fill runs do not change the forward cursor.
+
+`character_milestones` is intentionally not one-to-one with `characters`. A private achievement history, a public character with no earned Chocobo achievement, or a character whose first missing chain milestone is incomplete has no new milestone row. Use the forward cursor and queue metrics to monitor discovery progress; comparing the two tables' maximum character IDs is not a reliable pipeline-health check.
 
 **`publishAll` behaviour:** Each publish call waits for a broker confirmation before returning. If any publish is nacked or the connection drops, the command fails immediately rather than continuing to enqueue jobs that may never be delivered. After all publishes succeed, the queue connection is closed so the process exits cleanly.
 

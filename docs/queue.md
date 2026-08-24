@@ -298,6 +298,12 @@ Proxy scans are performed directly by the `proxy scan` database worker, not via 
 - `id-sweep` → `achievement-census` (per discovered character)
 - `character-census` → `achievement-census` (per re-censused character)
 
+The automatic ID-sweep publisher persists its next unscanned ID in
+`id_sweep_state`. After every chunk in a range receives broker confirmation, the
+cursor advances beyond that range even when no character was found. A partial
+publish failure does not advance it, so the next invocation retries rather than
+leaving an ID hole. Completion logs expose `from_id`, `to_id`, and `next_id`.
+
 ## Contract
 
 `port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/rabbitmq` and `mock/queue` (in-memory fake for tests). The simplified interface has three methods: `Publish`, `Consume`, and `Close`. All retry and dead-letter logic is internal to the adapter — callers only see success or error from the handler.

@@ -38,6 +38,9 @@ type CharacterRepository struct {
 	DemographicBreakdownErr error
 	NewPerDayErr            error
 	MaxIDErr                error
+	IDSweepCursorErr        error
+	AdvanceIDSweepCursorErr error
+	idSweepCursor           uint32
 	UpsertCalls             int
 	UpsertGearCalls         int
 }
@@ -686,6 +689,49 @@ func (f *CharacterRepository) MaxID(ctx context.Context) (uint32, error) {
 		}
 	}
 	return maxID, nil
+}
+
+func (f *CharacterRepository) IDSweepCursor(ctx context.Context) (uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.IDSweepCursorErr != nil {
+		return 0, f.IDSweepCursorErr
+	}
+	if f.idSweepCursor == 0 {
+		var maxID uint32
+		for id := range f.characters {
+			if id > maxID {
+				maxID = id
+			}
+		}
+		if maxID == ^uint32(0) {
+			return 0, fmt.Errorf("id sweep cursor overflow after %d", maxID)
+		}
+		f.idSweepCursor = maxID + 1
+	}
+	return f.idSweepCursor, nil
+}
+
+func (f *CharacterRepository) AdvanceIDSweepCursor(ctx context.Context, expected, next uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AdvanceIDSweepCursorErr != nil {
+		return f.AdvanceIDSweepCursorErr
+	}
+	if expected == 0 || next <= expected {
+		return fmt.Errorf("invalid id sweep cursor advance: %d -> %d", expected, next)
+	}
+	if f.idSweepCursor == 0 {
+		return fmt.Errorf("id sweep cursor not initialized")
+	}
+	if f.idSweepCursor == expected {
+		f.idSweepCursor = next
+		return nil
+	}
+	if f.idSweepCursor >= next {
+		return nil
+	}
+	return fmt.Errorf("id sweep cursor changed concurrently: expected %d, current %d, next %d", expected, f.idSweepCursor, next)
 }
 
 var _ contract.CharacterRepository = (*CharacterRepository)(nil)

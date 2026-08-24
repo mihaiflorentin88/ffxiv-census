@@ -381,6 +381,7 @@ func TestIDSweep_ExplicitTomestoneSource(t *testing.T) {
 		Name:       "Tomestone Only",
 		Server:     "Tonberry",
 		Datacenter: "Elemental",
+		Race:       "Hyur",
 	})
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		t.Fatalf("Lodestone should NEVER be called when source is 'tomestone'")
@@ -415,6 +416,7 @@ func TestIDSweep_ExplicitLodestoneSource(t *testing.T) {
 			Name:       "Lodestone Only",
 			World:      "Shinryu",
 			Datacenter: "Mana",
+			Race:       "Hyur",
 		}, nil
 	}
 

@@ -40,4 +40,5 @@ func cleanTables(driver contract.DatabaseDriver) {
 		         milestone_achievements, census_runs
 		RESTART IDENTITY CASCADE
 	`)
+	_, _ = driver.Execute(context.Background(), `TRUNCATE id_sweep_state`)
 }

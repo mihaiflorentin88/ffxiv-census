@@ -41,7 +41,7 @@ func characterPayload(id uint32) []byte {
 func TestCharacterCensus_UpsertAndChain(t *testing.T) {
 	h, ls, chars := newTestCharacterCensus(t)
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
-		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal", FreeCompanyID: "9234567890123456789"}, nil
+		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal", Race: "Hyur", FreeCompanyID: "9234567890123456789"}, nil
 	}
 	next, err := h.Handle(context.Background(), characterPayload(42))
 	if err != nil {
@@ -61,7 +61,7 @@ func TestCharacterCensus_UpsertAndChain(t *testing.T) {
 func TestCharacterCensus_NoFCChainsOnlyAchievement(t *testing.T) {
 	h, ls, _ := newTestCharacterCensus(t)
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
-		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal"}, nil
+		return &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal", Race: "Hyur"}, nil
 	}
 	next, err := h.Handle(context.Background(), characterPayload(42))
 	if err != nil {
@@ -102,6 +102,7 @@ func TestCharacterCensus_ReturnsDownstreamJobsInNext(t *testing.T) {
 			Name:          "Immediate Character",
 			World:         "Ultros",
 			Datacenter:    "Primal",
+			Race:          "Hyur",
 			FreeCompanyID: "9234567890123456789",
 		}, nil
 	}
@@ -138,6 +139,7 @@ func TestCharacterCensus_LodestonePrimary_Success_ChainsAchievement(t *testing.T
 			Name:          "Primary Warrior",
 			World:         "Balmung",
 			Datacenter:    "Crystal",
+			Race:          "Hyur",
 			FreeCompanyID: "fc-123456",
 		}, nil
 	}
@@ -231,6 +233,7 @@ func TestCharacterCensus_Lodestone404_TomestoneHit(t *testing.T) {
 		ID:     400,
 		Name:   "Alive On Tomestone",
 		Server: "Siren",
+		Race:   "Hyur",
 	})
 
 	next, err := h.Handle(context.Background(), characterPayload(400))

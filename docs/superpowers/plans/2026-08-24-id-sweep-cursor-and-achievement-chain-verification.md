@@ -2,7 +2,7 @@
 
 Date: 2026-08-24
 
-Status: Proposed — implementation requires explicit user approval
+Status: Implemented after explicit user approval
 
 ## Goal
 

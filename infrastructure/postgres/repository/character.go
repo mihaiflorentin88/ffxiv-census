@@ -667,6 +667,55 @@ func (r *CharacterRepository) MaxID(ctx context.Context) (uint32, error) {
 	return uint32(maxID), nil
 }
 
+func (r *CharacterRepository) IDSweepCursor(ctx context.Context) (uint32, error) {
+	if _, err := r.driver.Execute(ctx, `
+		INSERT INTO id_sweep_state (singleton, next_id)
+		SELECT TRUE, COALESCE(MAX(id), 0) + 1 FROM characters
+		ON CONFLICT (singleton) DO NOTHING`); err != nil {
+		return 0, fmt.Errorf("initialize id sweep cursor: %w", err)
+	}
+	row, err := r.driver.FetchOne(ctx, `SELECT next_id FROM id_sweep_state WHERE singleton = TRUE`)
+	if err != nil {
+		return 0, fmt.Errorf("fetch id sweep cursor: %w", err)
+	}
+	var nextID int64
+	if err := row.Scan(&nextID); err != nil {
+		return 0, fmt.Errorf("scan id sweep cursor: %w", err)
+	}
+	if nextID < 1 || nextID > int64(^uint32(0)) {
+		return 0, fmt.Errorf("id sweep cursor out of range: %d", nextID)
+	}
+	return uint32(nextID), nil
+}
+
+func (r *CharacterRepository) AdvanceIDSweepCursor(ctx context.Context, expected, next uint32) error {
+	if expected == 0 || next <= expected {
+		return fmt.Errorf("invalid id sweep cursor advance: %d -> %d", expected, next)
+	}
+	result, err := r.driver.Execute(ctx, `
+		UPDATE id_sweep_state
+		SET next_id = $1, updated_at = NOW()
+		WHERE singleton = TRUE AND next_id = $2`, next, expected)
+	if err != nil {
+		return fmt.Errorf("advance id sweep cursor: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("advance id sweep cursor rows affected: %w", err)
+	}
+	if rows == 1 {
+		return nil
+	}
+	current, err := r.IDSweepCursor(ctx)
+	if err != nil {
+		return err
+	}
+	if current >= next {
+		return nil
+	}
+	return fmt.Errorf("id sweep cursor changed concurrently: expected %d, current %d, next %d", expected, current, next)
+}
+
 func scanCharacter(row rowScanner) (*contract.CharacterRecord, error) {
 	var c contract.CharacterRecord
 	var race, tribe, grandCompany, fcID, fcName sql.NullString
