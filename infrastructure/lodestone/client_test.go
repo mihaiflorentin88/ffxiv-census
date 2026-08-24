@@ -1,6 +1,42 @@
 package lodestone
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestExtractTimestamp(t *testing.T) {
+	tests := []struct {
+		name string
+		html string
+		want time.Time
+	}{
+		{
+			name: "single ldst_strftime",
+			html: `<script>ldst_strftime(1690531200, 'datetime')</script>`,
+			want: time.Unix(1690531200, 0),
+		},
+		{
+			name: "multiple ldst_strftime uses last",
+			html: `<script>ldst_strftime(1690000000, 'datetime')</script>
+			       <script>ldst_strftime(1690531200, 'datetime')</script>`,
+			want: time.Unix(1690531200, 0),
+		},
+		{
+			name: "no ldst_strftime returns zero",
+			html: `<div>no timestamp here</div>`,
+			want: time.Time{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractTimestamp(tt.html)
+			if !got.Equal(tt.want) {
+				t.Errorf("extractTimestamp() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestStripTags(t *testing.T) {
 	tests := []struct {
@@ -185,6 +221,7 @@ func TestStripTags_LodestoneEntities(t *testing.T) {
 		})
 	}
 }
+
 func TestParseClassJobs_SetsClassJobID(t *testing.T) {
 	// Real Lodestone HTML: <li><img ... data-tooltip="JobName">Level</li>
 	html := `<div class="character__level__list"><ul>

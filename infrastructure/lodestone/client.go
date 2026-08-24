@@ -5,6 +5,7 @@ package lodestone
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -343,22 +344,16 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 		slog.Uint64("character_id", uint64(charID)),
 		slog.Int("milestones_to_check", len(milestoneIDs)))
 
-	// Check privacy first.
-	private, err := c.checkPrivacy(ctx, charID)
-	if err != nil {
-		return nil, fmt.Errorf("check privacy %d: %w", charID, err)
-	}
-	if private {
-		c.logger.DebugContext(ctx, "lodestone.fetch_achievements.private",
-			slog.Uint64("character_id", uint64(charID)))
-		return &contract.AchievementSummary{Private: true}, nil
-	}
-
 	var results []contract.AchievementResult
-	requestsMade := 1 // privacy check counts
+	requestsMade := 0
 
 	for _, id := range milestoneIDs {
 		result, err := c.checkSingleAchievement(ctx, charID, id)
+		if errors.Is(err, contract.ErrAchievementsPrivate) {
+			c.logger.DebugContext(ctx, "lodestone.fetch_achievements.private",
+				slog.Uint64("character_id", uint64(charID)))
+			return &contract.AchievementSummary{Private: true}, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("check achievement %d for character %d: %w", id, charID, err)
 		}
@@ -393,26 +388,6 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 	return summary, nil
 }
 
-// checkPrivacy verifies whether a character's achievements are public.
-func (c *CustomClient) checkPrivacy(ctx context.Context, charID uint32) (bool, error) {
-	achURL := fmt.Sprintf("https://na.finalfantasyxiv.com/lodestone/character/%d/achievement/", charID)
-	_, statusCode, err := c.doRequest(ctx, achURL)
-	if err != nil {
-		return false, err
-	}
-	if statusCode == http.StatusForbidden {
-		c.logger.DebugContext(ctx, "lodestone.check_privacy.private",
-			slog.Uint64("character_id", uint64(charID)))
-		return true, nil
-	}
-	if statusCode != http.StatusOK {
-		return false, fmt.Errorf("achievement page for %d: HTTP %d", charID, statusCode)
-	}
-	c.logger.DebugContext(ctx, "lodestone.check_privacy.public",
-		slog.Uint64("character_id", uint64(charID)))
-	return false, nil
-}
-
 // checkSingleAchievement checks if a character has earned a specific achievement.
 func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32, achievementID uint32) (contract.AchievementResult, error) {
 	start := time.Now()
@@ -440,13 +415,12 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 	}
 
 	if statusCode == http.StatusForbidden {
-		// Private or missing — treat as not earned.
-		c.logger.DebugContext(ctx, "lodestone.check_achievement.not_earned",
+		c.logger.DebugContext(ctx, "lodestone.check_achievement.private",
 			slog.Uint64("character_id", uint64(charID)),
 			slog.Uint64("achievement_id", uint64(achievementID)),
 			slog.String("achievement_name", result.Name),
 			slog.Duration("duration", duration))
-		return result, nil
+		return result, contract.ErrAchievementsPrivate
 	}
 
 	if statusCode != http.StatusOK {
@@ -483,12 +457,16 @@ var (
 )
 
 // extractTimestamp extracts the earned-at timestamp from a Lodestone achievement detail page.
+// The page contains multiple ldst_strftime calls; the last one is the achievement date.
 func extractTimestamp(html string) time.Time {
-	match := timestampRe.FindStringSubmatch(html)
-	if len(match) < 2 {
+	matches := timestampRe.FindAllStringSubmatch(html, -1)
+	if len(matches) == 0 {
 		return time.Time{}
 	}
-	epoch, err := strconv.ParseInt(match[1], 10, 64)
+	// Use the last match — the achievement-specific timestamp appears after
+	// the page-level timestamp in the HTML.
+	lastMatch := matches[len(matches)-1]
+	epoch, err := strconv.ParseInt(lastMatch[1], 10, 64)
 	if err != nil {
 		return time.Time{}
 	}
@@ -697,7 +675,6 @@ func extractAttribute(tagHTML, attr string) string {
 	return tagHTML[start : start+end]
 }
 
-
 // parseClassJobs extracts class/job entries from the character profile HTML.
 // The Lodestone renders jobs as <li><img data-tooltip="JobName">Level</li>
 // inside a <div class="character__level__list"><ul>...</ul></div>.
@@ -775,6 +752,7 @@ func parseClassJobs(html string, charID uint32) []contract.ClassJobRecord {
 
 	return jobs
 }
+
 func findLatest(results []contract.AchievementResult) *contract.AchievementResult {
 	var latest *contract.AchievementResult
 	for i := range results {

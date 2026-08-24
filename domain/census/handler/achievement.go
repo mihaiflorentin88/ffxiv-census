@@ -108,7 +108,7 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 
 	duration := time.Since(start)
 	private := summary != nil && summary.Private
-	requests := 1 // privacy check
+	requests := 0
 	if summary != nil {
 		requests += len(summary.Milestones)
 		if !summary.Private && len(summary.Milestones) < len(milestoneIDs) {
