@@ -273,7 +273,7 @@ cronjobs:
     volumes: []
   instances:
     - name: publish-character
-      schedule: "*/5 * * * *"
+      schedule: "*/3 * * * *"
       command:
         - /app/ffxiv-census
         - publish
