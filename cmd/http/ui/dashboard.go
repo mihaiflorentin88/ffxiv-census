@@ -16,6 +16,8 @@ type DashboardViewData struct {
 	ActivePercent        string
 	MaxLevelCharacters   int64
 	MaxLevel             uint32
+	NewCharacters30d     int64
+	NewCharactersTrend   string
 	ChartLabels          []string
 	ChartData            []int64
 	Regions              []RegionSummary
@@ -48,12 +50,13 @@ type WorldDrilldownData struct {
 
 // WorldRow holds stats for an individual world.
 type WorldRow struct {
-	Region      string
-	Datacenter  string
-	World       string
-	Total       int64
-	Active      int64
-	ActiveRatio string
+	Region           string
+	Datacenter       string
+	World            string
+	Total            int64
+	Active           int64
+	NewCharacters30d int64
+	ActiveRatio      string
 }
 
 // Dashboard handles GET /ui/dashboard.
@@ -119,10 +122,14 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 		expansionCards[i].Percent = formatPercent(expansionCards[i].Count, total)
 	}
 
+	newCharactersWindow := census.NewCharactersWindow(snapshot, nil)
+
 	viewData := DashboardViewData{
 		TotalCharacters:      total,
 		ActiveCharacters:     active,
 		ActivePercent:        formatPercent(active, total),
+		NewCharacters30d:     newCharactersWindow.Current,
+		NewCharactersTrend:   formatTrend(newCharactersWindow.Current, newCharactersWindow.Previous),
 		MaxLevelCharacters:   maxLevelCount,
 		MaxLevel:             maxLevel,
 		ChartLabels:          chartLabels,
@@ -157,13 +164,15 @@ func (c *UIController) WorldDrilldown(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if strings.EqualFold(wReg, region) || (region == "Unknown" && wReg == "Unknown") {
+			newCharacters := census.NewCharactersWindow(snapshot, []string{wName})
 			worlds = append(worlds, WorldRow{
-				Region:      wReg,
-				Datacenter:  wDC,
-				World:       wName,
-				Total:       wc.Total,
-				Active:      wc.Active,
-				ActiveRatio: formatPercent(wc.Active, wc.Total),
+				Region:           wReg,
+				Datacenter:       wDC,
+				World:            wName,
+				Total:            wc.Total,
+				Active:           wc.Active,
+				NewCharacters30d: newCharacters.Current,
+				ActiveRatio:      formatPercent(wc.Active, wc.Total),
 			})
 		}
 	}

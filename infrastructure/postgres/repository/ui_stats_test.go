@@ -160,3 +160,101 @@ func TestUIStatsRepositoryRefreshAndLoadCurrent(t *testing.T) {
 		t.Fatalf("daily = %#v", daily)
 	}
 }
+
+func TestUIStatsRefreshEmitsPreviousWindowDailies(t *testing.T) {
+	driver := newTestDriver(t)
+	chars := repository.NewCharacterRepository(driver)
+	achievements := repository.NewAchievementRepository(driver)
+	stats := repository.NewUIStatsRepository(driver)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seen := now.Add(-120 * 24 * time.Hour)
+
+	seed := []struct {
+		rec        contract.CharacterRecord
+		achievedAt time.Time
+	}{
+		{rec: contract.CharacterRecord{ID: 1, Name: "Current", World: "Balmung", Datacenter: "Crystal", Region: "NA", Race: "Hyur", FirstSeenAt: seen}, achievedAt: now.Add(-time.Hour)},
+		{rec: contract.CharacterRecord{ID: 2, Name: "Previous", World: "Balmung", Datacenter: "Crystal", Region: "NA", Race: "Hyur", FirstSeenAt: seen}, achievedAt: now.Add(-40 * 24 * time.Hour)},
+		{rec: contract.CharacterRecord{ID: 3, Name: "Older", World: "Ragnarok", Datacenter: "Chaos", Region: "EU", Race: "Miqo'te", FirstSeenAt: seen}, achievedAt: now.Add(-50 * 24 * time.Hour)},
+	}
+	if err := achievements.SyncMilestones(ctx, []contract.MilestoneAchievement{
+		{AchievementID: 590, Kind: "chocobo", Detail: "My Little Chocobo"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range seed {
+		if err := chars.Upsert(ctx, item.rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := achievements.UpsertCharacterMilestones(ctx, item.rec.ID, []contract.CharacterMilestone{
+			{CharacterID: item.rec.ID, AchievementID: 590, AchievedAt: item.achievedAt},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := stats.Refresh(ctx, contract.UIStatsRefreshOptions{
+		ActivitySince: now.Add(-30 * 24 * time.Hour),
+		MaxLevel:      100,
+		Timeout:       time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	days := map[string]int64{}
+	for _, day := range census.SnapshotDaily(result.Snapshot, contract.StatsScope{}) {
+		days[day.Day] += day.Count
+	}
+	for _, item := range seed {
+		wantDay := item.achievedAt.Format("2006-01-02")
+		if days[wantDay] != 1 {
+			t.Fatalf("daily series missing or wrong for %s (achieved %s): %#v", wantDay, item.achievedAt, days)
+		}
+	}
+}
+
+func TestUIStatsSnapshotSchemaV2RoundTrip(t *testing.T) {
+	driver := newTestDriver(t)
+	chars := repository.NewCharacterRepository(driver)
+	achievements := repository.NewAchievementRepository(driver)
+	stats := repository.NewUIStatsRepository(driver)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seen := now.Add(-120 * 24 * time.Hour)
+	recent := now.Add(-time.Hour)
+
+	rec := contract.CharacterRecord{ID: 1, Name: "One", World: "Balmung", Datacenter: "Crystal", Region: "NA", Race: "Hyur", FirstSeenAt: seen}
+	if err := chars.Upsert(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := achievements.SyncMilestones(ctx, []contract.MilestoneAchievement{
+		{AchievementID: 590, Kind: "chocobo", Detail: "My Little Chocobo"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := achievements.UpsertCharacterMilestones(ctx, 1, []contract.CharacterMilestone{
+		{CharacterID: 1, AchievementID: 590, AchievedAt: recent},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := stats.Refresh(ctx, contract.UIStatsRefreshOptions{
+		ActivitySince: now.Add(-30 * 24 * time.Hour),
+		MaxLevel:      100,
+		Timeout:       time.Minute,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := stats.LoadCurrent(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.SchemaVersion != 2 {
+		t.Fatalf("stored snapshot schema version = %d, want 2", loaded.SchemaVersion)
+	}
+	if _, err := driver.Execute(ctx, `UPDATE ui_stats_snapshots SET schema_version = 1 WHERE snapshot_key = 'current'`); err == nil {
+		t.Fatal("a schema_version = 1 row must violate the v2 check constraint")
+	}
+}

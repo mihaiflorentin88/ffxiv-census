@@ -14,6 +14,10 @@ import (
 
 const uiStatsAdvisoryLockID int64 = 0x4646584956554953
 
+// newCharactersLookbackDays is how far back the daily new-character series
+// reaches: the 30-day headline window plus the 30-day comparison window.
+const newCharactersLookbackDays = 60
+
 type UIStatsRepository struct {
 	driver contract.DatabaseDriver
 }
@@ -274,7 +278,8 @@ func (r *UIStatsRepository) readMilestoneStats(ctx context.Context, tx *sql.Tx, 
 		FROM expansion_stats
 		UNION ALL
 		SELECT 'daily' AS kind, world, day AS value, global_scope, count
-		FROM daily_stats`, snapshot.ActivitySince)
+		FROM daily_stats`,
+		snapshot.GeneratedAt.UTC().Truncate(24*time.Hour).AddDate(0, 0, -(newCharactersLookbackDays-1)))
 	if err != nil {
 		return fmt.Errorf("query UI milestone statistics: %w", err)
 	}

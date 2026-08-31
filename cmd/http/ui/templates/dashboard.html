@@ -24,6 +24,11 @@
         <div class="stat-value" style="color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
         <div class="stat-subtext highlight">{{.Data.ActivePercent}} Active Ratio</div>
     </div>
+    <div class="stat-card">
+        <div class="stat-label">New Characters (30d)</div>
+        <div class="stat-value" style="color: var(--gold);">{{formatNumber .Data.NewCharacters30d}}</div>
+        <div class="stat-subtext">{{if .Data.NewCharactersTrend}}{{.Data.NewCharactersTrend}} vs previous 30d{{else}}No new characters recorded{{end}}</div>
+    </div>
 </div>
 
 <!-- Race Distribution & Expansion Completion -->

@@ -20,6 +20,7 @@ type WorldDetailViewData struct {
 	ActiveRatio           string
 	ActivePercentVal      float64
 	NewCharacters30d      int64
+	NewCharactersTrend    string
 	Races                 []RaceRow
 	MSQCompletions        []MSQRow
 	NewCharactersTimeline []DailyRow
@@ -66,9 +67,15 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	scope := contract.StatsScope{World: worldName}
 	timeline := census.SnapshotDaily(snapshot, scope)
-	var newCharacters int64
-	for _, day := range timeline {
-		newCharacters += day.Count
+	window := census.NewCharactersWindow(snapshot, []string{worldName})
+	var windowDays []contract.DailyCount
+	if snapshot != nil {
+		cutoff := snapshot.GeneratedAt.UTC().AddDate(0, 0, -29).Format("2006-01-02")
+		for _, day := range timeline {
+			if day.Day >= cutoff {
+				windowDays = append(windowDays, day)
+			}
+		}
 	}
 	dcName := WorldToDC(worldName)
 	stats := &census.WorldDetailStats{
@@ -77,10 +84,10 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 		Region:                census.RegionForDatacenter(dcName),
 		TotalCharacters:       total,
 		ActiveCharacters:      active,
-		NewCharacters30d:      newCharacters,
+		NewCharacters30d:      window.Current,
 		Races:                 census.SnapshotGroups(snapshot, "race", scope),
 		MSQCompletions:        census.SnapshotExpansions(snapshot, scope),
-		NewCharactersTimeline: timeline,
+		NewCharactersTimeline: windowDays,
 	}
 
 	dc := stats.Datacenter
@@ -178,6 +185,7 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 		ActiveRatio:           formatPercent(stats.ActiveCharacters, stats.TotalCharacters),
 		ActivePercentVal:      activePctVal,
 		NewCharacters30d:      stats.NewCharacters30d,
+		NewCharactersTrend:    formatTrend(window.Current, window.Previous),
 		Races:                 raceRows,
 		MSQCompletions:        msqRows,
 		NewCharactersTimeline: timelineRows,

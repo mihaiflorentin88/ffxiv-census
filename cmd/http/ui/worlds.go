@@ -11,24 +11,27 @@ import (
 
 // WorldsViewData holds world demographics, filter state, and lists for /ui/worlds.
 type WorldsViewData struct {
-	TotalCharacters  int64
-	ActiveCharacters int64
-	SelectedRegion   string
-	SelectedDC       string
-	Regions          []string
-	Datacenters      []string
-	Worlds           []WorldDetailRow
+	TotalCharacters    int64
+	ActiveCharacters   int64
+	NewCharacters30d   int64
+	NewCharactersTrend string
+	SelectedRegion     string
+	SelectedDC         string
+	Regions            []string
+	Datacenters        []string
+	Worlds             []WorldDetailRow
 }
 
 // WorldDetailRow represents one row in the global worlds table.
 type WorldDetailRow struct {
-	World        string
-	Datacenter   string
-	Region       string
-	Total        int64
-	Active       int64
-	ActiveRatio  string
-	ActivePctVal float64
+	World            string
+	Datacenter       string
+	Region           string
+	Total            int64
+	Active           int64
+	ActiveRatio      string
+	ActivePctVal     float64
+	NewCharacters30d int64
 }
 
 // Worlds handles GET /ui/worlds.
@@ -63,13 +66,14 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 		}
 
 		allWorlds = append(allWorlds, WorldDetailRow{
-			World:        wName,
-			Datacenter:   wDC,
-			Region:       wReg,
-			Total:        row.Total,
-			Active:       row.Active,
-			ActiveRatio:  formatPercent(row.Active, row.Total),
-			ActivePctVal: actPctVal,
+			World:            wName,
+			Datacenter:       wDC,
+			Region:           wReg,
+			Total:            row.Total,
+			Active:           row.Active,
+			ActiveRatio:      formatPercent(row.Active, row.Total),
+			ActivePctVal:     actPctVal,
+			NewCharacters30d: census.NewCharactersWindow(snapshot, []string{wName}).Current,
 		})
 	}
 
@@ -107,13 +111,29 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(dcList)
 	}
 
+	var trendWorlds []string
+	switch {
+	case selectedDC != "":
+		trendWorlds = WorldsForDC(selectedDC)
+	case selectedRegion != "":
+		for world := range worldDatacenter {
+			if strings.EqualFold(census.RegionForDatacenter(WorldToDC(world)), selectedRegion) {
+				trendWorlds = append(trendWorlds, world)
+			}
+		}
+		sort.Strings(trendWorlds)
+	}
+	newWindow := census.NewCharactersWindow(snapshot, trendWorlds)
+
 	c.render(w, "templates/worlds.html", statsPageData("Worlds Census", "worlds", "/ui/worlds", "Final Fantasy XIV world rankings: total and active character counts for every world and datacenter, with region filters and 30-day activity ratios.", state, WorldsViewData{
-		TotalCharacters:  totalChars,
-		ActiveCharacters: activeChars,
-		SelectedRegion:   selectedRegion,
-		SelectedDC:       selectedDC,
-		Regions:          regionList,
-		Datacenters:      dcList,
-		Worlds:           filteredWorlds,
+		TotalCharacters:    totalChars,
+		ActiveCharacters:   activeChars,
+		NewCharacters30d:   newWindow.Current,
+		NewCharactersTrend: formatTrend(newWindow.Current, newWindow.Previous),
+		SelectedRegion:     selectedRegion,
+		SelectedDC:         selectedDC,
+		Regions:            regionList,
+		Datacenters:        dcList,
+		Worlds:             filteredWorlds,
 	}))
 }

@@ -29,7 +29,7 @@
     <div class="stat-card">
         <div class="stat-label">New Characters (30d)</div>
         <div class="stat-value" style="color: var(--gold);">{{formatNumber .Data.NewCharacters30d}}</div>
-        <div class="stat-subtext">Earned Chocobo / Seen</div>
+        <div class="stat-subtext">{{if .Data.NewCharactersTrend}}{{.Data.NewCharactersTrend}} vs previous 30d{{else}}Earned Chocobo / Seen{{end}}</div>
     </div>
 </div>
 

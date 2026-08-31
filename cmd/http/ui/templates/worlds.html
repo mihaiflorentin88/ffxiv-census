@@ -53,6 +53,11 @@
         <div class="stat-value" style="color: var(--cyan);">{{formatNumber .Data.ActiveCharacters}}</div>
         <div class="stat-subtext highlight">{{formatPercent .Data.ActiveCharacters .Data.TotalCharacters}} Active</div>
     </div>
+    <div class="stat-card">
+        <div class="stat-label">New Characters (30d)</div>
+        <div class="stat-value" style="color: var(--gold);">{{formatNumber .Data.NewCharacters30d}}</div>
+        <div class="stat-subtext highlight">{{if .Data.NewCharactersTrend}}{{.Data.NewCharactersTrend}} vs previous 30d{{else}}No new characters recorded{{end}}</div>
+    </div>
 </div>
 
 <!-- Worlds Table Panel -->
@@ -75,6 +80,7 @@
                         <th>Region</th>
                         <th class="text-right">Total Population</th>
                         <th class="text-right">Active Players (30d)</th>
+                        <th class="text-right">New (30d)</th>
                         <th class="text-right">Active Ratio</th>
                     </tr>
                 </thead>
@@ -87,6 +93,7 @@
                         <td><span class="badge badge-gold">{{$w.Region}}</span></td>
                         <td class="text-right font-mono">{{formatNumber $w.Total}}</td>
                         <td class="text-right font-mono" style="color: var(--cyan);">{{formatNumber $w.Active}}</td>
+                        <td class="text-right font-mono">{{formatNumber $w.NewCharacters30d}}</td>
                         <td class="text-right">
                             <span class="badge {{if ge $w.ActivePctVal 30.0}}badge-active{{else}}badge-inactive{{end}}">
                                 {{$w.ActiveRatio}}

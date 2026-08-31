@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const UIStatsSchemaVersion = 1
+const UIStatsSchemaVersion = 2
 
 // StatsScope identifies the aggregation scope. Empty fields mean global.
 // At most one field is normally populated.

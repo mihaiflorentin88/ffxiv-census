@@ -94,6 +94,11 @@
                     <div class="stat-value" style="font-size: 1.5rem; color: var(--cyan);">{{formatNumber
                         .Data.ActiveCharacters}}</div>
                 </div>
+                <div class="stat-card">
+                    <div class="stat-label">New Characters (30d)</div>
+                    <div class="stat-value" style="font-size: 1.5rem; color: var(--gold);">{{formatNumber .Data.NewCharacters30d}}</div>
+                    <div class="stat-subtext">{{if .Data.NewCharactersTrend}}{{.Data.NewCharactersTrend}} vs previous 30d{{else}}No new characters recorded{{end}}</div>
+                </div>
             </div>
             <p class="text-dim" style="font-size: 0.9rem; line-height: 1.6;">
                 Race choices reflect character creation and Fantasia usage{{if .Data.SelectedWorld}} on

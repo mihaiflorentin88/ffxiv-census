@@ -22,23 +22,25 @@ type RaceRow struct {
 
 // RacesViewData holds race demographics, filter state, and chart data for /ui/races.
 type RacesViewData struct {
-	TotalCharacters  int64
-	ActiveCharacters int64
-	SelectedRegion   string
-	SelectedDC       string
-	SelectedWorld    string
-	Regions          []string
-	Datacenters      []string
-	Worlds           []string
-	Races            []RaceRow
-	ChartLabels      []string
-	ChartData        []int64
-	TribeLabels      []string
-	TribeData        []int64
-	GenderLabels     []string
-	GenderData       []int64
-	RaceGenderLabels []string
-	RaceGenderData   []int64
+	TotalCharacters    int64
+	ActiveCharacters   int64
+	NewCharacters30d   int64
+	NewCharactersTrend string
+	SelectedRegion     string
+	SelectedDC         string
+	SelectedWorld      string
+	Regions            []string
+	Datacenters        []string
+	Worlds             []string
+	Races              []RaceRow
+	ChartLabels        []string
+	ChartData          []int64
+	TribeLabels        []string
+	TribeData          []int64
+	GenderLabels       []string
+	GenderData         []int64
+	RaceGenderLabels   []string
+	RaceGenderData     []int64
 }
 
 // Races handles GET /ui/races.
@@ -59,6 +61,21 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 	} else if selectedRegion != "" {
 		scope.Region = selectedRegion
 	}
+
+	var newCharactersWorlds []string
+	if selectedWorld != "" {
+		newCharactersWorlds = []string{selectedWorld}
+	} else if selectedDC != "" {
+		newCharactersWorlds = WorldsForDC(selectedDC)
+	} else if selectedRegion != "" {
+		for world := range worldDatacenter {
+			if census.RegionForDatacenter(WorldToDC(world)) == selectedRegion {
+				newCharactersWorlds = append(newCharactersWorlds, world)
+			}
+		}
+		sort.Strings(newCharactersWorlds)
+	}
+	newWindow := census.NewCharactersWindow(snapshot, newCharactersWorlds)
 
 	var totalChars, activeChars int64
 	var raceRows []RaceRow
@@ -154,22 +171,24 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 	regionList := []string{"NA", "EU", "JP", "OCE"}
 
 	c.render(w, "templates/races.html", statsPageData(title, "races", "/ui/races", "Race and clan demographics for Final Fantasy XIV: population shares, active ratios, and tribe and gender breakdowns filterable by region, datacenter, and world.", state, RacesViewData{
-		TotalCharacters:  totalChars,
-		ActiveCharacters: activeChars,
-		SelectedRegion:   selectedRegion,
-		SelectedDC:       selectedDC,
-		SelectedWorld:    selectedWorld,
-		Regions:          regionList,
-		Datacenters:      dcList,
-		Worlds:           worldList,
-		Races:            raceRows,
-		ChartLabels:      chartLabels,
-		ChartData:        chartData,
-		TribeLabels:      tribeLabels,
-		TribeData:        tribeData,
-		GenderLabels:     genderLabels,
-		GenderData:       genderData,
-		RaceGenderLabels: raceGenderLabels,
-		RaceGenderData:   raceGenderData,
+		TotalCharacters:    totalChars,
+		ActiveCharacters:   activeChars,
+		NewCharacters30d:   newWindow.Current,
+		NewCharactersTrend: formatTrend(newWindow.Current, newWindow.Previous),
+		SelectedRegion:     selectedRegion,
+		SelectedDC:         selectedDC,
+		SelectedWorld:      selectedWorld,
+		Regions:            regionList,
+		Datacenters:        dcList,
+		Worlds:             worldList,
+		Races:              raceRows,
+		ChartLabels:        chartLabels,
+		ChartData:          chartData,
+		TribeLabels:        tribeLabels,
+		TribeData:          tribeData,
+		GenderLabels:       genderLabels,
+		GenderData:         genderData,
+		RaceGenderLabels:   raceGenderLabels,
+		RaceGenderData:     raceGenderData,
 	}))
 }

@@ -8,6 +8,7 @@
                 <th>World</th>
                 <th class="text-right">Total</th>
                 <th class="text-right">Active (30d)</th>
+                <th class="text-right">New (30d)</th>
                 <th class="text-right">Active Ratio</th>
             </tr>
         </thead>
@@ -18,6 +19,7 @@
                 <td><strong>{{.World}}</strong></td>
                 <td class="text-right">{{formatNumber .Total}}</td>
                 <td class="text-right">{{formatNumber .Active}}</td>
+                <td class="text-right">{{formatNumber .NewCharacters30d}}</td>
                 <td class="text-right">
                     <span class="badge {{if ge .Active 1000}}badge-active{{else}}badge-inactive{{end}}">
                         {{formatPercent .Active .Total}}

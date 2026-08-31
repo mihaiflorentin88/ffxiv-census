@@ -100,7 +100,7 @@ func (r *testStatsRepository) LoadCurrent(ctx context.Context) (*contract.UIStat
 	for _, expansion := range mustExpansions(ctx, r.svc) {
 		snapshot.Expansions = append(snapshot.Expansions, contract.ScopedExpansionCount{Expansion: expansion.Expansion, Count: expansion.Count})
 	}
-	days, err := r.svc.NewCharacters(ctx, snapshot.ActivitySince, generated.AddDate(0, 0, 1))
+	days, err := r.svc.NewCharacters(ctx, snapshot.ActivitySince.AddDate(0, 0, -30), generated.AddDate(0, 0, 1))
 	if err != nil {
 		return nil, err
 	}
@@ -345,5 +345,109 @@ func TestDashboardHandler_ExpansionSortOrder(t *testing.T) {
 	}
 	if arIdx > dtIdx {
 		t.Errorf("expansion sort order wrong: A Realm Reborn (idx %d) should appear before Dawntrail (idx %d)", arIdx, dtIdx)
+	}
+}
+
+func TestDashboardHandler_NewCharactersCard(t *testing.T) {
+	tests := []struct {
+		name        string
+		days        map[int]int64
+		wantTrend   string
+		wantNoTrend bool
+	}{
+		{
+			name:      "growth vs previous window",
+			days:      map[int]int64{1: 20, 5: 10, 40: 4, 50: 6},
+			wantTrend: "▲ 20 (200.0%) vs previous 30d",
+		},
+		{
+			name:      "zero previous window",
+			days:      map[int]int64{3: 12},
+			wantTrend: "▲ 12 vs previous 30d",
+		},
+		{
+			name:        "both windows zero",
+			days:        nil,
+			wantTrend:   "",
+			wantNoTrend: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			now := time.Now().UTC()
+			recent := now.Add(-1 * time.Hour)
+
+			_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+				ID: 7001, Name: "Card Tester", World: "Balmung", Datacenter: "Crystal", Region: "NA",
+				Race: "Hyur", FirstSeenAt: recent, LatestAchievementAt: &recent,
+			}, nil)
+
+			if tt.days != nil {
+				series := make([]contract.DailyCount, 0, len(tt.days))
+				for offset, count := range tt.days {
+					series = append(series, contract.DailyCount{Day: now.AddDate(0, 0, -offset).Format("2006-01-02"), Count: count})
+				}
+				rig.ach.NewCharactersResponse = series
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil)
+			rec := httptest.NewRecorder()
+			rig.ctrl.Dashboard(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+
+			body := rec.Body.String()
+			if !strings.Contains(body, "New Characters (30d)") {
+				t.Errorf("expected card label 'New Characters (30d)' in body:\n%s", body)
+			}
+			if tt.wantNoTrend {
+				if !strings.Contains(body, "No new characters recorded") {
+					t.Errorf("expected fallback subtext 'No new characters recorded' in body:\n%s", body)
+				}
+				if strings.Contains(body, "vs previous 30d") {
+					t.Errorf("did not expect 'vs previous 30d' when both windows are zero:\n%s", body)
+				}
+				return
+			}
+			if !strings.Contains(body, tt.wantTrend) {
+				t.Errorf("expected trend %q in body:\n%s", tt.wantTrend, body)
+			}
+		})
+	}
+}
+
+func TestDashboardWorldDrilldown_NewColumn(t *testing.T) {
+	rig := newTestRig(t)
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour)
+
+	_ = rig.chars.Upsert(context.Background(), contract.CharacterRecord{
+		ID: 7101, Name: "Drill Tester", World: "Balmung", Datacenter: "Crystal", Region: "NA",
+		Race: "Hyur", FirstSeenAt: recent, LatestAchievementAt: &recent,
+	}, nil)
+
+	rig.ach.NewCharactersResponse = []contract.DailyCount{
+		{Day: now.AddDate(0, 0, -2).Format("2006-01-02"), Count: 7},
+		{Day: now.AddDate(0, 0, -6).Format("2006-01-02"), Count: 5},
+		{Day: now.AddDate(0, 0, -35).Format("2006-01-02"), Count: 3},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/partials/world-breakdown?region=NA", nil)
+	rec := httptest.NewRecorder()
+	rig.ctrl.WorldDrilldown(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "New (30d)") {
+		t.Errorf("expected 'New (30d)' column header in body:\n%s", body)
+	}
+	if !strings.Contains(body, "<td class=\"text-right\">12</td>") {
+		t.Errorf("expected per-world current-window cell '12' in body:\n%s", body)
 	}
 }

@@ -117,3 +117,55 @@ func SnapshotDaily(snapshot *contract.UIStatsSnapshot, scope contract.StatsScope
 func scopeKey(scope contract.StatsScope) string {
 	return strings.Join([]string{scope.Region, scope.Datacenter, scope.World}, "\x00")
 }
+
+// NewCharacterWindow holds new-character totals for the current and previous
+// 30-day windows, both ending on the snapshot's generation day.
+type NewCharacterWindow struct {
+	Current  int64
+	Previous int64
+}
+
+// NewCharactersWindow sums the snapshot's new-character daily series across
+// the current window (the trailing 30 UTC days ending on the generation day)
+// and the previous window (the 30 days before it). A nil or empty world list
+// reads the global-scope series; otherwise the world-scope rows of exactly
+// the named worlds are summed. Missing days count as zero.
+func NewCharactersWindow(snapshot *contract.UIStatsSnapshot, worlds []string) NewCharacterWindow {
+	var window NewCharacterWindow
+	if snapshot == nil {
+		return window
+	}
+	end := snapshot.GeneratedAt.UTC().Truncate(24 * time.Hour)
+	currentStart := end.AddDate(0, 0, -29)
+	previousStart := end.AddDate(0, 0, -59)
+	global := len(worlds) == 0
+	selected := make(map[string]struct{}, len(worlds))
+	for _, world := range worlds {
+		selected[world] = struct{}{}
+	}
+	for _, day := range snapshot.NewCharacters {
+		if global {
+			if day.Scope != (contract.StatsScope{}) {
+				continue
+			}
+		} else {
+			if day.Scope.World == "" {
+				continue
+			}
+			if _, ok := selected[day.Scope.World]; !ok {
+				continue
+			}
+		}
+		parsed, err := time.Parse("2006-01-02", day.Day)
+		if err != nil {
+			continue
+		}
+		switch {
+		case !parsed.Before(currentStart) && !parsed.After(end):
+			window.Current += day.Count
+		case !parsed.Before(previousStart) && parsed.Before(currentStart):
+			window.Previous += day.Count
+		}
+	}
+	return window
+}
