@@ -33,7 +33,7 @@ func TestDashboardUsesSnapshotWhenRawAggregateRepositoriesFail(t *testing.T) {
 	ach.CountExpansionsErr = errSnapshotOnly
 	ach.NewCharactersPerDayErr = errSnapshotOnly
 	svc := census.NewService(chars, ach, mockrepo.NewCensusRunFake())
-	ctrl := NewUIController(svc, mockqueue.NewFake(), stats)
+	ctrl := NewUIController(svc, mockqueue.NewFake(), stats, testBaseURL)
 
 	rec := httptest.NewRecorder()
 	ctrl.Dashboard(rec, httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil))
@@ -78,7 +78,7 @@ func TestDashboardETagAndSnapshotFreshness(t *testing.T) {
 		Summary:          contract.StatsSummary{Total: 1},
 	}
 	stats := census.NewUIStatsService(mockrepo.NewUIStatsFake(snapshot), time.Minute, 365*24*time.Hour)
-	ctrl := NewUIController(census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake()), mockqueue.NewFake(), stats)
+	ctrl := NewUIController(census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake()), mockqueue.NewFake(), stats, testBaseURL)
 
 	first := httptest.NewRecorder()
 	ctrl.Dashboard(first, httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil))
@@ -111,7 +111,7 @@ func TestDashboardMarksOldSnapshotStale(t *testing.T) {
 		MaxLevel:      100,
 	}
 	stats := census.NewUIStatsService(mockrepo.NewUIStatsFake(snapshot), time.Minute, 12*time.Hour)
-	ctrl := NewUIController(nil, mockqueue.NewFake(), stats)
+	ctrl := NewUIController(nil, mockqueue.NewFake(), stats, testBaseURL)
 	rec := httptest.NewRecorder()
 	ctrl.Dashboard(rec, httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "refresh delayed; showing the last available snapshot") {
@@ -128,7 +128,7 @@ func TestDashboardETagIncludesNormalizedQueryAndRepresentation(t *testing.T) {
 		MaxLevel:      100,
 	}
 	stats := census.NewUIStatsService(mockrepo.NewUIStatsFake(snapshot), time.Minute, 12*time.Hour)
-	ctrl := NewUIController(nil, mockqueue.NewFake(), stats)
+	ctrl := NewUIController(nil, mockqueue.NewFake(), stats, testBaseURL)
 
 	etag := func(target string, htmx bool) string {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -152,7 +152,7 @@ func TestDashboardETagIncludesNormalizedQueryAndRepresentation(t *testing.T) {
 }
 
 func TestAnalyticsRouteWithoutSnapshotFailsFast(t *testing.T) {
-	ctrl := NewUIController(nil, mockqueue.NewFake(), nil)
+	ctrl := NewUIController(nil, mockqueue.NewFake(), nil, testBaseURL)
 	rec := httptest.NewRecorder()
 	ctrl.Dashboard(rec, httptest.NewRequest(http.MethodGet, "/ui/dashboard", nil))
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "60" {

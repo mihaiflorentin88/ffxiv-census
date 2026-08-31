@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{if .Title}}{{.Title}} — {{end}}FFXIV Census</title>
+    <link rel="canonical" href="{{.BaseURL}}{{.CanonicalPath}}">
+    <meta name="description" content="{{.Description}}">
+    <meta property="og:site_name" content="FFXIV Census">
+    <meta property="og:title" content="{{if .Title}}{{.Title}} — {{end}}FFXIV Census">
+    <meta property="og:description" content="{{.Description}}">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="{{.BaseURL}}{{.CanonicalPath}}">
     <link rel="stylesheet" href="/ui/assets/styles.css">
     <script src="/ui/assets/htmx.min.js"></script>
     <script src="/ui/assets/chart.umd.min.js"></script>

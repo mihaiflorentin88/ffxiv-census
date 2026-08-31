@@ -110,7 +110,7 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(dcList)
 	}
 
-	c.render(w, "templates/worlds.html", statsPageData("Worlds Census", "worlds", state, WorldsViewData{
+	c.render(w, "templates/worlds.html", statsPageData("Worlds Census", "worlds", "/ui/worlds", "Final Fantasy XIV world rankings: total and active character counts for every world and datacenter, with region filters and 30-day activity ratios.", state, WorldsViewData{
 		TotalCharacters:  totalChars,
 		ActiveCharacters: activeChars,
 		SelectedRegion:   selectedRegion,

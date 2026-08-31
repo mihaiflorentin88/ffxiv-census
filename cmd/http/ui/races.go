@@ -153,7 +153,7 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 
 	regionList := []string{"NA", "EU", "JP", "OCE"}
 
-	c.render(w, "templates/races.html", statsPageData(title, "races", state, RacesViewData{
+	c.render(w, "templates/races.html", statsPageData(title, "races", "/ui/races", "Race and clan demographics for Final Fantasy XIV: population shares, active ratios, and tribe and gender breakdowns filterable by region, datacenter, and world.", state, RacesViewData{
 		TotalCharacters:  totalChars,
 		ActiveCharacters: activeChars,
 		SelectedRegion:   selectedRegion,

@@ -17,16 +17,18 @@ type UIController struct {
 	svc              *census.Service
 	stats            *census.UIStatsService
 	q                contract.Queue
+	baseURL          string
 	pageTemplates    map[string]*template.Template
 	partialTemplates map[string]*template.Template
 }
 
 // NewUIController constructs a new UI controller.
-func NewUIController(svc *census.Service, q contract.Queue, stats *census.UIStatsService) *UIController {
+func NewUIController(svc *census.Service, q contract.Queue, stats *census.UIStatsService, baseURL string) *UIController {
 	controller := &UIController{
 		svc:              svc,
 		stats:            stats,
 		q:                q,
+		baseURL:          strings.TrimRight(baseURL, "/"),
 		pageTemplates:    make(map[string]*template.Template),
 		partialTemplates: make(map[string]*template.Template),
 	}
@@ -59,12 +61,15 @@ func NewUIController(svc *census.Service, q contract.Queue, stats *census.UIStat
 
 // PageData represents common data passed to all top-level UI page templates.
 type PageData struct {
-	Title        string
-	ActiveNav    string
-	SearchQuery  string
-	StatsUpdated string
-	StatsStale   bool
-	Data         any
+	Title         string
+	ActiveNav     string
+	BaseURL       string
+	CanonicalPath string
+	Description   string
+	SearchQuery   string
+	StatsUpdated  string
+	StatsStale    bool
+	Data          any
 }
 
 func (c *UIController) currentStats(w http.ResponseWriter, r *http.Request) (*contract.UIStatsSnapshot, census.UIStatsState, bool) {
@@ -94,13 +99,15 @@ func (c *UIController) currentStats(w http.ResponseWriter, r *http.Request) (*co
 	return snapshot, state, true
 }
 
-func statsPageData(title, activeNav string, state census.UIStatsState, data any) PageData {
+func statsPageData(title, activeNav, canonicalPath, description string, state census.UIStatsState, data any) PageData {
 	return PageData{
-		Title:        title,
-		ActiveNav:    activeNav,
-		StatsUpdated: state.GeneratedAt.UTC().Format("2006-01-02 15:04 UTC"),
-		StatsStale:   state.Stale,
-		Data:         data,
+		Title:         title,
+		ActiveNav:     activeNav,
+		CanonicalPath: canonicalPath,
+		Description:   description,
+		StatsUpdated:  state.GeneratedAt.UTC().Format("2006-01-02 15:04 UTC"),
+		StatsStale:    state.Stale,
+		Data:          data,
 	}
 }
 
@@ -113,7 +120,7 @@ func (c *UIController) render(w http.ResponseWriter, pageTemplate string, data P
 		http.Error(w, "Template rendering error", http.StatusInternalServerError)
 		return
 	}
-
+	data.BaseURL = c.baseURL
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.Execute(w, data); err != nil {
 		logging.Error("ui.render.execute", err.Error())
@@ -152,8 +159,10 @@ func (c *UIController) Methodology(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.render(w, "templates/methodology.html", PageData{
-		Title:     "Methodology",
-		ActiveNav: "methodology",
+		Title:         "Methodology",
+		ActiveNav:     "methodology",
+		CanonicalPath: "/ui/methodology",
+		Description:   "How the FFXIV Census builds its statistics: public Lodestone achievements as the activity signal, snapshot refreshes, data sources, and known limitations.",
 		Data: MethodologyViewData{
 			Expansions: expansions,
 		},

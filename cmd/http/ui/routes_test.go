@@ -17,7 +17,7 @@ func TestRegisterRoutes(t *testing.T) {
 		path       string
 		wantStatus int
 	}{
-		{"Root Redirect", http.MethodGet, "/", http.StatusFound},
+		{"Root Dashboard", http.MethodGet, "/", http.StatusOK},
 		{"Dashboard", http.MethodGet, "/ui/dashboard", http.StatusOK},
 		{"Races", http.MethodGet, "/ui/races", http.StatusOK},
 		{"Worlds", http.MethodGet, "/ui/worlds", http.StatusOK},

@@ -14,7 +14,7 @@
 
 | Route | Method | Description |
 |---|---|---|
-| `/` | `GET` | Redirects to `/ui/dashboard` |
+| `/` | `GET` | Dashboard overview served directly at the root URL (same handler as `/ui/dashboard`) |
 | `/ui/dashboard` | `GET` | Executive overview: responsive stat-card grid (total population, 30-day active ratio, ingest status), race distribution doughnut chart, expansion MSQ completion card, 30-day new-character line chart, and region summary with world drill-down. All aggregate data comes from the cached statistics snapshot. |
 | `/ui/partials/world-breakdown` | `GET` | HTMX partial returning world and datacenter rows for a requested region (`?region=NA`) |
 | `/ui/races` | `GET` | Playable race demographics with cascading region/DC/world filters, global percentage shares, active ratios, and demographic charts. Filtering selects precomputed snapshot groups and performs no aggregate database query. |
@@ -25,6 +25,22 @@
 | `/ui/characters` | `GET` | Paginated directory browser of discovered player characters |
 | `/ui/characters/search` | `GET` | Global search handler: numeric IDs redirect directly to `/ui/characters/{id}`, text queries filter by character name |
 | `/ui/assets/*` | `GET` | Static asset file server (`styles.css`, `htmx.min.js`, `chart.umd.min.js`) |
+
+### Head Metadata & Canonical URLs
+
+Every indexable page (dashboard, races, worlds, per-world, expansions, methodology) renders SEO head
+metadata from the shared `PageData` struct:
+
+- `<link rel="canonical">` with the absolute URL built from `app.base_url` (`container.Load.Config().App.BaseURL`,
+  default `https://census.ffxivbard.com`) plus the page's clean path.
+- `<meta name="description">` with a concise per-page summary.
+- Open Graph tags: `og:site_name` (`FFXIV Census`), `og:title`, `og:description`, `og:type` (`website`), and
+  `og:url` matching the canonical URL.
+
+Filter query parameters (for example `/ui/worlds?region=NA&dc=Aether`) never appear in the canonical URL:
+filtered views always canonicalize to their clean path, so crawlers index exactly one URL per page. The
+root URL `/` and `/ui/dashboard` serve the same dashboard handler, and each renders its own canonical path
+(`/` and `/ui/dashboard` respectively).
 
 ## 3. Statistics Snapshot
 

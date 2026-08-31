@@ -67,6 +67,7 @@ The window drives `active_characters`/`active_ratio` on `GET /api/v1/census/late
 | GET | `/api/v1/stats/breakdown` | `by` (required, `race`\|`world`\|`datacenter`\|`region`) | `[BreakdownGroup]` | 400 (missing/unknown `by`), 500, 503 |
 | GET | `/api/v1/stats/new-characters` | `since` (required, `YYYY-MM-DD`), `until` (optional, `YYYY-MM-DD`, default now) | `[NewCharactersDay]` | 400 (invalid or outside snapshot window), 500, 503 |
 | GET | `/api/v1/stats/expansion` | `name` (optional, exact match) | `[ExpansionStat]` | 500, 503 |
+| GET | `/sitemap.xml` | — | Sitemap-protocol XML document (`application/xml`) | — (degrades to static URLs, never 503) |
 
 ### GET /health
 
@@ -191,6 +192,12 @@ How many distinct characters completed each expansion's MSQ. The optional `name`
   {"expansion": "Stormblood", "count": 1}
 ]
 ```
+
+### GET /sitemap.xml
+
+Sitemap-protocol document (`application/xml; charset=utf-8`) listing every indexable page as an absolute URL: the five static pages (`/`, `/ui/races`, `/ui/worlds`, `/ui/expansions`, `/ui/methodology`) plus one `/ui/worlds/{world}` entry per world in the aggregate snapshot. Worlds without a known datacenter mapping are skipped, matching the worlds page. URLs are joined onto `[app]` `base_url`.
+
+Every `<url>` carries `<lastmod>` with the snapshot's `generated_at` in RFC 3339 UTC. When no valid snapshot is available, the sitemap degrades to the five static URLs without `<lastmod>` and still returns 200 — a sitemap must never fail.
 
 ## See also
 

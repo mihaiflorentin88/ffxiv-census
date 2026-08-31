@@ -16,7 +16,7 @@ func Register(mux *http.ServeMux) {
 	svc := container.Load.CensusService()
 	stats := container.Load.UIStatsService()
 	q := container.Load.Queue()
-	ctrl := NewUIController(svc, q, stats)
+	ctrl := NewUIController(svc, q, stats, container.Load.Config().App.BaseURL)
 	ctrl.RegisterRoutes(mux)
 
 	assets, err := fs.Sub(content, "assets")
@@ -29,9 +29,7 @@ func Register(mux *http.ServeMux) {
 
 // RegisterRoutes mounts all controller routes to the mux.
 func (c *UIController) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui/dashboard", http.StatusFound)
-	})
+	mux.HandleFunc("GET /{$}", c.Dashboard)
 	mux.HandleFunc("GET /ui/dashboard", c.Dashboard)
 	mux.HandleFunc("GET /ui/partials/world-breakdown", c.WorldDrilldown)
 	mux.HandleFunc("GET /ui/races", c.Races)
@@ -39,6 +37,7 @@ func (c *UIController) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/worlds", c.Worlds)
 	mux.HandleFunc("GET /ui/expansions", c.Expansions)
 	mux.HandleFunc("GET /ui/methodology", c.Methodology)
+	mux.HandleFunc("GET /sitemap.xml", c.Sitemap)
 	// Personal info routes are currently disabled to protect player privacy.
 	// mux.HandleFunc("GET /ui/characters/{id}", c.CharacterDetail)
 	// mux.HandleFunc("GET /ui/characters", c.CharacterList)

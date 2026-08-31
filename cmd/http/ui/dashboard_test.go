@@ -141,7 +141,7 @@ func newTestRig(t *testing.T) *testRig {
 	svc := census.NewService(chars, ach, runs)
 	q := mockqueue.NewFake()
 	stats := census.NewUIStatsService(&testStatsRepository{svc: svc}, time.Nanosecond, time.Hour)
-	ctrl := NewUIController(svc, q, stats)
+	ctrl := NewUIController(svc, q, stats, testBaseURL)
 	return &testRig{
 		svc:   svc,
 		chars: chars,
