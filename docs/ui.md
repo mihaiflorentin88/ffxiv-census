@@ -36,6 +36,8 @@ metadata from the shared `PageData` struct:
 - `<meta name="description">` with a concise per-page summary.
 - Open Graph tags: `og:site_name` (`FFXIV Census`), `og:title`, `og:description`, `og:type` (`website`), and
   `og:url` matching the canonical URL.
+- Favicon: the embedded site icon is served at `/favicon.ico` (`image/png`) and linked from every page's
+  head via `<link rel="icon" type="image/png" href="/favicon.ico">`, so search results display the icon.
 
 Filter query parameters (for example `/ui/worlds?region=NA&dc=Aether`) never appear in the canonical URL:
 filtered views always canonicalize to their clean path, so crawlers index exactly one URL per page. The
