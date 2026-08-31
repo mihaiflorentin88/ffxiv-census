@@ -133,7 +133,7 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 		ExpansionCompletions: expansionCards,
 	}
 
-	c.render(w, "templates/dashboard.html", statsPageData("Dashboard", "dashboard", r.URL.Path, "Final Fantasy XIV population census: total characters, active players, race demographics, and 30-day growth trends across every region and datacenter.", state, viewData))
+	c.render(w, "templates/dashboard.html", statsPageData("Dashboard", "dashboard", "/", "Final Fantasy XIV population census: total characters, active players, race demographics, and 30-day growth trends across every region and datacenter.", state, viewData))
 }
 
 // WorldDrilldown handles GET /ui/partials/world-breakdown?region=NA.

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mihaiflorentin88/ffxiv-census/container"
 	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	mockqueue "github.com/mihaiflorentin88/ffxiv-census/mock/queue"
 	mockrepo "github.com/mihaiflorentin88/ffxiv-census/mock/repository"
@@ -51,17 +50,8 @@ func serveSitemap(t *testing.T, ctrl *UIController) *httptest.ResponseRecorder {
 	return rec
 }
 
-func withSitemapBaseURL(t *testing.T) string {
-	t.Helper()
-	t.Setenv("APP_BASE_URL", "https://census.example.test")
-	prev := container.Load
-	container.Load = container.NewServiceContainer()
-	t.Cleanup(func() { container.Load = prev })
-	return container.Load.Config().App.BaseURL
-}
-
 func TestSitemapHandler(t *testing.T) {
-	base := withSitemapBaseURL(t)
+	base := testBaseURL
 	ctrl, stats, chars := newSitemapTestController(t)
 	now := time.Now().UTC()
 	recent := now.Add(-1 * time.Hour)
@@ -138,7 +128,7 @@ func (r *testErrorStatsRepository) Refresh(context.Context, contract.UIStatsRefr
 }
 
 func TestSitemapHandler_DegradedStillServesStaticURLs(t *testing.T) {
-	base := withSitemapBaseURL(t)
+	base := testBaseURL
 	want := []string{
 		base + "/",
 		base + "/ui/races",

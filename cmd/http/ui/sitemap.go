@@ -4,10 +4,8 @@ import (
 	"encoding/xml"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/mihaiflorentin88/ffxiv-census/container"
 	census "github.com/mihaiflorentin88/ffxiv-census/domain/census"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -33,7 +31,7 @@ var sitemapStaticPaths = []string{"/", "/ui/races", "/ui/worlds", "/ui/expansion
 // fail: when no usable snapshot exists it degrades to the static URLs only,
 // still answering 200.
 func (c *UIController) Sitemap(w http.ResponseWriter, r *http.Request) {
-	baseURL := strings.TrimRight(container.Load.Config().App.BaseURL, "/")
+	baseURL := c.baseURL
 
 	var lastmod string
 	var worldPaths []string
@@ -42,9 +40,7 @@ func (c *UIController) Sitemap(w http.ResponseWriter, r *http.Request) {
 		if err == nil && snapshot != nil {
 			lastmod = snapshot.GeneratedAt.UTC().Format(time.RFC3339)
 			for _, row := range census.SnapshotGroups(snapshot, "world", contract.StatsScope{}) {
-				// Mirror the worlds page: skip unassigned worlds and worlds
-				// outside the known datacenter hierarchy.
-				if row.Key == "" || census.RegionForDatacenter(WorldToDC(row.Key)) == "" {
+				if !isIndexableWorld(row.Key) {
 					continue
 				}
 				worldPaths = append(worldPaths, "/ui/worlds/"+row.Key)

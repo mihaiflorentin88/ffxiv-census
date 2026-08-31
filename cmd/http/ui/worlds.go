@@ -48,14 +48,11 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 
 	for _, row := range census.SnapshotGroups(snapshot, "world", contract.StatsScope{}) {
 		wName := row.Key
-		if wName == "" {
-			continue // skip characters with no world assigned
+		if !isIndexableWorld(wName) {
+			continue // skip unassigned worlds and worlds outside the known hierarchy
 		}
 		wDC := WorldToDC(wName)
 		wReg := census.RegionForDatacenter(wDC)
-		if wReg == "" {
-			continue // skip worlds not mapped to a known region
-		}
 
 		regionSet[wReg] = true
 		dcSet[wDC] = true

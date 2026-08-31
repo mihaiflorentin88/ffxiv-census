@@ -42,7 +42,7 @@ func TestIndexablePagesHeadMetadata(t *testing.T) {
 		canonicalPath string
 	}{
 		{"Dashboard At Root", "/", "/"},
-		{"Dashboard", "/ui/dashboard", "/ui/dashboard"},
+		{"Dashboard", "/ui/dashboard", "/"},
 		{"Races", "/ui/races", "/ui/races"},
 		{"Worlds", "/ui/worlds", "/ui/worlds"},
 		{"World Detail", "/ui/worlds/Adamantoise", "/ui/worlds/Adamantoise"},

@@ -173,6 +173,12 @@ func WorldToDC(world string) string {
 	return "Unknown"
 }
 
+// isIndexableWorld reports whether a snapshot world key names a world that is
+// part of the known world hierarchy and therefore gets an indexable page.
+func isIndexableWorld(world string) bool {
+	return world != "" && census.RegionForDatacenter(WorldToDC(world)) != ""
+}
+
 // WorldToRegion returns the region (NA, EU, JP, OCE) for a world, or "Unknown" if not found.
 func WorldToRegion(world string) string {
 	dc := WorldToDC(world)
