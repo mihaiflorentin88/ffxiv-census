@@ -29,8 +29,9 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Name string `mapstructure:"name"`
-	Env  string `mapstructure:"env"`
+	Name    string `mapstructure:"name"`
+	Env     string `mapstructure:"env"`
+	BaseURL string `mapstructure:"base_url"`
 }
 
 type LoggingConfig struct {

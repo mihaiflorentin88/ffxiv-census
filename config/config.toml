@@ -1,6 +1,7 @@
 [app]
-name = "ffxiv-census"
-env  = "production"
+name     = "ffxiv-census"
+env      = "production"
+base_url = "https://census.ffxivbard.com"
 
 [logging]
 default        = "color"

@@ -14,6 +14,9 @@ func TestNewConfig_Defaults(t *testing.T) {
 	if cfg.App.Name != "ffxiv-census" {
 		t.Errorf("expected App.Name 'ffxiv-census', got %q", cfg.App.Name)
 	}
+	if cfg.App.BaseURL != "https://census.ffxivbard.com" {
+		t.Errorf("expected App.BaseURL 'https://census.ffxivbard.com', got %q", cfg.App.BaseURL)
+	}
 	if cfg.HTTP.Port != 8080 {
 		t.Errorf("expected HTTP.Port 8080, got %d", cfg.HTTP.Port)
 	}
@@ -72,6 +75,16 @@ func TestNewConfig_EnvOverrides(t *testing.T) {
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.App.Env != "production" {
 					t.Errorf("expected App.Env 'production', got %q", cfg.App.Env)
+				}
+			},
+		},
+		{
+			name:   "app base url override",
+			envKey: "APP_BASE_URL",
+			envVal: "https://staging.ffxivbard.com",
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.App.BaseURL != "https://staging.ffxivbard.com" {
+					t.Errorf("expected App.BaseURL 'https://staging.ffxivbard.com', got %q", cfg.App.BaseURL)
 				}
 			},
 		},
