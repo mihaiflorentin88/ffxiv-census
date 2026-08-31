@@ -1,5 +1,6 @@
 # SEO Crawlability — Implementation Plan
 
+> **Status:** Implemented and released in v1.11.16 (2026-08-31); all five tickets closed. Search Console submission and re-indexing remain operator actions.
 Implements [docs/superpowers/specs/2026-08-31-seo-crawlability-indexable-pages.md](../specs/2026-08-31-seo-crawlability-indexable-pages.md) (parent issue: [#3](https://github.com/mihaiflorentin88/ffxiv-census/issues/3)).
 
 Tracer-bullet tickets live in the issue tracker, each labeled `ready-for-agent`. Work the frontier: start with the unblocked ticket, then any ticket whose blockers are all done.

@@ -1,7 +1,7 @@
 # SEO Crawlability: Indexable Pages, Sitemap, and Search Presentation
 
 Date: 2026-08-31
-Status: ready-for-agent
+Status: implemented — released v1.11.16, 2026-08-31
 
 ## Problem Statement
 

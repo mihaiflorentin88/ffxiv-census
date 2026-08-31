@@ -171,7 +171,7 @@ _Avoid_: 30-day window
 
 **New character**:
 The canonical definition of a newly created character: one that has earned the chocobo milestone, counted per UTC day.
-_Avoid_: new-character series, created character
+_Avoid_: new-character series, created character, new player (players own characters; the census counts characters)
 
 **MSQ completion funnel**:
 The expansion-by-expansion view of how many characters completed each expansion's main-scenario story, read as retention and drop-off.

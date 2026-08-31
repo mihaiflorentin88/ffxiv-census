@@ -1,7 +1,6 @@
 # Implementation Plan: UI Statistics Read Model and 90M-Character Query Scaling
 
-> **Implementation gate:** Do not edit production code until the user explicitly says
-> `proceed`. Follow strict red/green/refactor TDD for every production change.
+> **Status:** Implemented and released; the implementation gate below is historical and lifted.
 
 ## Objective
 
