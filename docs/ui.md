@@ -136,3 +136,20 @@ Filter lists are derived server-side using `DCsForRegion()` and `WorldsForDC()` 
 functions in `cmd/http/ui/world_data.go`, which map the static FFXIV world→datacenter→region
 hierarchy from the `worldDatacenter` map. Each filter change triggers a full page reload
 via `onchange="this.form.submit()"`.
+
+## 7. Search Console
+
+The site is registered in Google Search Console as `census.ffxivbard.com`. Crawl policy is
+Cloudflare-managed (`robots.txt` at the edge); the app contributes discovery and signals:
+`/sitemap.xml` (all indexable pages, snapshot-derived `lastmod`), per-page canonical URLs,
+meta descriptions and Open Graph tags, and `/favicon.ico`.
+
+After deploying a release that changes indexable pages or URLs:
+
+1. Verify production: `curl -sS https://census.ffxivbard.com/sitemap.xml | head`, check `/` serves the
+   dashboard (no redirect), and a page's canonical URL matches its address.
+2. In Search Console, submit or re-submit `https://census.ffxivbard.com/sitemap.xml` under *Sitemaps*.
+3. Run *URL Inspection → Live Test* on `https://census.ffxivbard.com/` (this also proves Googlebot can
+   fetch the page end-to-end, including any edge/proxy layer).
+4. Request indexing for `/` to seed a recrawl.
+
