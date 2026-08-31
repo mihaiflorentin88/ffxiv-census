@@ -187,3 +187,9 @@ _Avoid_: world breakdown
 **World hierarchy**:
 The fixed game geography mapping every world to its datacenter and every datacenter to its region.
 _Avoid_: world data
+
+## Public site
+
+**Indexable page**:
+A UI page served as complete HTML at its canonical URL and listed in the sitemap: the dashboard, races, worlds, per-world, expansions, and methodology pages. HTMX partials, the JSON API, and the disabled character pages are not indexable.
+_Avoid_: SEO page, content page, crawlable page
