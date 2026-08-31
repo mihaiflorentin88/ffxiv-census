@@ -67,12 +67,11 @@ func (c *UIController) WorldDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	scope := contract.StatsScope{World: worldName}
 	timeline := census.SnapshotDaily(snapshot, scope)
-	window := census.NewCharactersWindow(snapshot, []string{worldName})
+	window := census.NewCharactersWindow(snapshot, scope)
 	var windowDays []contract.DailyCount
 	if snapshot != nil {
-		cutoff := snapshot.GeneratedAt.UTC().AddDate(0, 0, -29).Format("2006-01-02")
 		for _, day := range timeline {
-			if day.Day >= cutoff {
+			if day.Day >= window.StartDay {
 				windowDays = append(windowDays, day)
 			}
 		}

@@ -184,6 +184,7 @@ func TestWorldsHandler_NewCharactersCard(t *testing.T) {
 				"?dc=Chaos":           fmt.Sprintf("▲ %s (200.0%%) vs previous 30d", formatNumber(int64(20*chaosCount))),
 				"?region=EU&dc=Chaos": fmt.Sprintf("▲ %s (200.0%%) vs previous 30d", formatNumber(int64(20*chaosCount))),
 				"?region=EU":          fmt.Sprintf("▲ %s (200.0%%) vs previous 30d", formatNumber(int64(20*euCount))),
+				"?region=eu":          fmt.Sprintf("▲ %s (200.0%%) vs previous 30d", formatNumber(int64(20*euCount))),
 			},
 		},
 		{
@@ -196,6 +197,7 @@ func TestWorldsHandler_NewCharactersCard(t *testing.T) {
 				"?dc=Chaos":           fmt.Sprintf("▲ %s vs previous 30d", formatNumber(int64(12*chaosCount))),
 				"?region=EU&dc=Chaos": fmt.Sprintf("▲ %s vs previous 30d", formatNumber(int64(12*chaosCount))),
 				"?region=EU":          fmt.Sprintf("▲ %s vs previous 30d", formatNumber(int64(12*euCount))),
+				"?region=eu":          fmt.Sprintf("▲ %s vs previous 30d", formatNumber(int64(12*euCount))),
 			},
 		},
 		{
@@ -207,6 +209,7 @@ func TestWorldsHandler_NewCharactersCard(t *testing.T) {
 				"?dc=Chaos":           "No new characters recorded",
 				"?region=EU&dc=Chaos": "No new characters recorded",
 				"?region=EU":          "No new characters recorded",
+				"?region=eu":          "No new characters recorded",
 			},
 		},
 	}

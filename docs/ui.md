@@ -15,11 +15,11 @@
 | Route | Method | Description |
 |---|---|---|
 | `/` | `GET` | Dashboard overview served directly at the root URL (same handler as `/ui/dashboard`) |
-| `/ui/dashboard` | `GET` | Executive overview: responsive stat-card grid (total population, 30-day active ratio, ingest status), race distribution doughnut chart, expansion MSQ completion card, 30-day new-character line chart, and region summary with world drill-down. All aggregate data comes from the cached statistics snapshot. |
-| `/ui/partials/world-breakdown` | `GET` | HTMX partial returning world and datacenter rows for a requested region (`?region=NA`) |
-| `/ui/races` | `GET` | Playable race demographics with cascading region/DC/world filters, global percentage shares, active ratios, and demographic charts. Filtering selects precomputed snapshot groups and performs no aggregate database query. |
-| `/ui/worlds` | `GET` | Global server rankings table with interactive region/datacenter filters |
-| `/ui/worlds/{world}` | `GET` | World detail page: total population, active players (30d), new characters (chocobo milestone 590 in last 30 days), race breakdown, MSQ completions, and 30-day new-character timeline |
+| `/ui/dashboard` | `GET` | Executive overview: responsive stat-card grid (total population, 30-day active ratio, new characters (30d) with trend vs the previous 30 days, ingest status), race distribution doughnut chart, expansion MSQ completion card, 30-day new-character line chart, and region summary with world drill-down. All aggregate data comes from the cached statistics snapshot. |
+| `/ui/partials/world-breakdown` | `GET` | HTMX partial returning world and datacenter rows for a requested region (`?region=NA`), including each world's New (30d) count |
+| `/ui/races` | `GET` | Playable race demographics with cascading region/DC/world filters, a new-characters (30d) card that follows the active filters, global percentage shares, active ratios, and demographic charts. Filtering selects precomputed snapshot groups and performs no aggregate database query. |
+| `/ui/worlds` | `GET` | Global server rankings table (including a per-world New (30d) column) with interactive region/datacenter filters and a filter-scoped new-characters (30d) card |
+| `/ui/worlds/{world}` | `GET` | World detail page: total population, active players (30d), new characters (chocobo milestone 590 in last 30 days, with trend vs the previous 30 days), race breakdown, MSQ completions, and 30-day new-character timeline |
 | `/ui/expansions` | `GET` | MSQ story completion funnel (A Realm Reborn, Heavensward, Stormblood, Shadowbringers, Endwalker, Dawntrail) with retention and drop-off metrics |
 | `/ui/characters/{id}` | `GET` | Detailed character profile with Dawntrail Lv 100 job matrix, story milestone timeline, Free Company badge, and external links |
 | `/ui/characters` | `GET` | Paginated directory browser of discovered player characters |
@@ -46,7 +46,7 @@ root URL `/` and `/ui/dashboard` serve the same dashboard handler, and each rend
 
 ## 3. Statistics Snapshot
 
-`refresh ui-stats` builds one versioned JSON read model in `ui_stats_snapshots`. It computes global, region, datacenter, and world population totals; demographic groups; expansion completion counts; and the bounded 30-day Chocobo-milestone series. Refreshes use a PostgreSQL advisory lock, a repeatable-read transaction, and an atomic single-row upsert, so readers see either the old complete snapshot or the new complete snapshot.
+`refresh ui-stats` builds one versioned JSON read model in `ui_stats_snapshots`. It computes global, region, datacenter, and world population totals; demographic groups; expansion completion counts; and the Chocobo-milestone daily new-character series reaching back 60 days (the 30-day headline window plus the 30-day comparison window). Refreshes use a PostgreSQL advisory lock, a repeatable-read transaction, and an atomic single-row upsert, so readers see either the old complete snapshot or the new complete snapshot.
 
 ```bash
 # Build/replace the current snapshot immediately
@@ -101,7 +101,7 @@ cmd/http/ui/
 ├── worlds.go               # Controller for /ui/worlds
 ├── expansions.go           # Controller for /ui/expansions
 ├── character.go            # Controller for /ui/characters/{id} & /ui/characters/search
-├── world_data.go           # World, Datacenter, and Region mapping + cascading filter helpers
+├── world_data.go           # UI wrappers over the domain world hierarchy + indexable-world helper
 ├── template_helpers.go     # Template helper functions (formatting numbers, dates, job roles)
 └── ui_test.go              # Table-driven HTTP handler test suite
 ```
@@ -133,8 +133,9 @@ belonging to the selected region. When no region is selected, all DCs are shown.
 ### Implementation
 
 Filter lists are derived server-side using `DCsForRegion()` and `WorldsForDC()` helper
-functions in `cmd/http/ui/world_data.go`, which map the static FFXIV world→datacenter→region
-hierarchy from the `worldDatacenter` map. Each filter change triggers a full page reload
+functions in `cmd/http/ui/world_data.go`, which delegate to the world hierarchy in the
+domain (world → datacenter → region). The same hierarchy resolves the scope of every
+new-characters (30d) card and column. Each filter change triggers a full page reload
 via `onchange="this.form.submit()"`.
 
 ## 7. Search Console

@@ -61,11 +61,14 @@ func formatPercent(num, denom int64) string {
 // formatTrend renders the change between two window totals as an arrow with
 // the absolute delta and the percentage of the previous value. A zero
 // previous window renders the absolute delta only; two zero windows render
-// an empty string.
+// an empty string; equal non-zero windows render without an arrow.
 func formatTrend(current, previous int64) string {
 	delta := current - previous
 	if delta == 0 && previous == 0 {
 		return ""
+	}
+	if delta == 0 {
+		return fmt.Sprintf("%s (%s)", formatNumber(0), formatPercent(0, previous))
 	}
 	arrow := "▲"
 	if delta < 0 {

@@ -60,17 +60,13 @@ func (r *testStatsRepository) LoadCurrent(ctx context.Context) (*contract.UIStat
 			filter contract.CharacterFilter
 		}{scope: contract.StatsScope{Region: region}, filter: contract.CharacterFilter{Region: region}})
 	}
-	dcs := make(map[string]bool)
-	for _, dc := range worldDatacenter {
-		dcs[dc] = true
-	}
-	for dc := range dcs {
+	for _, dc := range census.Datacenters() {
 		filters = append(filters, struct {
 			scope  contract.StatsScope
 			filter contract.CharacterFilter
 		}{scope: contract.StatsScope{Datacenter: dc}, filter: contract.CharacterFilter{Datacenter: dc}})
 	}
-	for world := range worldDatacenter {
+	for _, world := range census.Worlds() {
 		filters = append(filters, struct {
 			scope  contract.StatsScope
 			filter contract.CharacterFilter
@@ -107,7 +103,7 @@ func (r *testStatsRepository) LoadCurrent(ctx context.Context) (*contract.UIStat
 	for _, day := range days {
 		snapshot.NewCharacters = append(snapshot.NewCharacters, contract.ScopedDailyCount{Day: day.Day, Count: day.Count})
 	}
-	for world := range worldDatacenter {
+	for _, world := range census.Worlds() {
 		detail, detailErr := r.svc.WorldDetail(ctx, world)
 		if detailErr != nil {
 			return nil, detailErr

@@ -1,7 +1,7 @@
 # New Characters (30d) Cards and Columns Across Analytics Pages
 
 Date: 2026-08-31
-Status: ready-for-agent
+Status: implemented — tickets #10–#14 closed; release pending (#15)
 
 ## Problem Statement
 

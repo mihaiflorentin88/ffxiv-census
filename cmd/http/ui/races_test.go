@@ -278,6 +278,12 @@ func TestRacesHandler_NewCharactersCard(t *testing.T) {
 			wantContains:  []string{growthTrend(naWorlds)},
 		},
 		{
+			name:          "lowercase region still scopes the card",
+			query:         "/ui/races?region=na",
+			newCharacters: growthDays(),
+			wantContains:  []string{growthTrend(naWorlds)},
+		},
+		{
 			name:          "datacenter filter sums dc worlds",
 			query:         "/ui/races?dc=Crystal",
 			newCharacters: growthDays(),

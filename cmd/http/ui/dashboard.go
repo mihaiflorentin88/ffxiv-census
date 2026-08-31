@@ -122,7 +122,7 @@ func (c *UIController) Dashboard(w http.ResponseWriter, r *http.Request) {
 		expansionCards[i].Percent = formatPercent(expansionCards[i].Count, total)
 	}
 
-	newCharactersWindow := census.NewCharactersWindow(snapshot, nil)
+	newCharactersWindow := census.NewCharactersWindow(snapshot, contract.StatsScope{})
 
 	viewData := DashboardViewData{
 		TotalCharacters:      total,
@@ -164,7 +164,7 @@ func (c *UIController) WorldDrilldown(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if strings.EqualFold(wReg, region) || (region == "Unknown" && wReg == "Unknown") {
-			newCharacters := census.NewCharactersWindow(snapshot, []string{wName})
+			newCharacters := census.NewCharactersWindow(snapshot, contract.StatsScope{World: wName})
 			worlds = append(worlds, WorldRow{
 				Region:           wReg,
 				Datacenter:       wDC,

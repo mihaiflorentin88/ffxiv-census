@@ -62,20 +62,7 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 		scope.Region = selectedRegion
 	}
 
-	var newCharactersWorlds []string
-	if selectedWorld != "" {
-		newCharactersWorlds = []string{selectedWorld}
-	} else if selectedDC != "" {
-		newCharactersWorlds = WorldsForDC(selectedDC)
-	} else if selectedRegion != "" {
-		for world := range worldDatacenter {
-			if census.RegionForDatacenter(WorldToDC(world)) == selectedRegion {
-				newCharactersWorlds = append(newCharactersWorlds, world)
-			}
-		}
-		sort.Strings(newCharactersWorlds)
-	}
-	newWindow := census.NewCharactersWindow(snapshot, newCharactersWorlds)
+	newWindow := census.NewCharactersWindow(snapshot, scope)
 
 	var totalChars, activeChars int64
 	var raceRows []RaceRow
@@ -128,15 +115,7 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 	if selectedRegion != "" {
 		dcList = DCsForRegion(selectedRegion)
 	} else {
-		dcSet := make(map[string]bool)
-		for _, dc := range worldDatacenter {
-			if dc != "" {
-				dcSet[dc] = true
-			}
-		}
-		for dc := range dcSet {
-			dcList = append(dcList, dc)
-		}
+		dcList = census.Datacenters()
 		sort.Strings(dcList)
 	}
 
@@ -149,13 +128,7 @@ func (c *UIController) Races(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(worldList)
 	} else {
-		worldSet := make(map[string]bool)
-		for w := range worldDatacenter {
-			worldSet[w] = true
-		}
-		for w := range worldSet {
-			worldList = append(worldList, w)
-		}
+		worldList = census.Worlds()
 		sort.Strings(worldList)
 	}
 

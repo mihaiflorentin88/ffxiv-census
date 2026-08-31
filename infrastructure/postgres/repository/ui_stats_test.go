@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,7 +255,10 @@ func TestUIStatsSnapshotSchemaV2RoundTrip(t *testing.T) {
 	if loaded.SchemaVersion != 2 {
 		t.Fatalf("stored snapshot schema version = %d, want 2", loaded.SchemaVersion)
 	}
-	if _, err := driver.Execute(ctx, `UPDATE ui_stats_snapshots SET schema_version = 1 WHERE snapshot_key = 'current'`); err == nil {
-		t.Fatal("a schema_version = 1 row must violate the v2 check constraint")
+	if _, err := driver.Execute(ctx, `UPDATE ui_stats_snapshots SET schema_version = 1 WHERE snapshot_key = 'current'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stats.LoadCurrent(ctx); err == nil || !strings.Contains(err.Error(), "unsupported UI statistics schema version 1") {
+		t.Fatalf("loading a stored v1 snapshot must fail with unsupported-version error, got %v", err)
 	}
 }

@@ -118,31 +118,35 @@ func scopeKey(scope contract.StatsScope) string {
 	return strings.Join([]string{scope.Region, scope.Datacenter, scope.World}, "\x00")
 }
 
-// NewCharacterWindow holds new-character totals for the current and previous
-// 30-day windows, both ending on the snapshot's generation day.
-type NewCharacterWindow struct {
+// NewCharacterTotals holds new-character sums for the current and previous
+// 30-day windows, both ending on the snapshot's generation day. StartDay is
+// the first UTC day (YYYY-MM-DD) of the current window.
+type NewCharacterTotals struct {
 	Current  int64
 	Previous int64
+	StartDay string
 }
 
-// NewCharactersWindow sums the snapshot's new-character daily series across
-// the current window (the trailing 30 UTC days ending on the generation day)
-// and the previous window (the 30 days before it). A nil or empty world list
-// reads the global-scope series; otherwise the world-scope rows of exactly
-// the named worlds are summed. Missing days count as zero.
-func NewCharactersWindow(snapshot *contract.UIStatsSnapshot, worlds []string) NewCharacterWindow {
-	var window NewCharacterWindow
+// NewCharactersWindow sums the snapshot's daily new-character series for the
+// given stats scope across the current window (the trailing 30 UTC days
+// ending on the generation day) and the previous window (the 30 days before
+// it). Global and world scopes read their exact-scope series rows;
+// datacenter and region scopes sum the member worlds of the world hierarchy,
+// with a datacenter selection reducing to that datacenter's world set. A
+// selection matching no known world, datacenter, or region totals zero
+// rather than falling back to global. Missing days count as zero.
+func NewCharactersWindow(snapshot *contract.UIStatsSnapshot, scope contract.StatsScope) NewCharacterTotals {
+	var totals NewCharacterTotals
 	if snapshot == nil {
-		return window
+		return totals
 	}
 	end := snapshot.GeneratedAt.UTC().Truncate(24 * time.Hour)
 	currentStart := end.AddDate(0, 0, -29)
 	previousStart := end.AddDate(0, 0, -59)
-	global := len(worlds) == 0
-	selected := make(map[string]struct{}, len(worlds))
-	for _, world := range worlds {
-		selected[world] = struct{}{}
-	}
+	totals.StartDay = currentStart.Format("2006-01-02")
+
+	global := scope == (contract.StatsScope{})
+	selected := worldSet(scope)
 	for _, day := range snapshot.NewCharacters {
 		if global {
 			if day.Scope != (contract.StatsScope{}) {
@@ -162,10 +166,31 @@ func NewCharactersWindow(snapshot *contract.UIStatsSnapshot, worlds []string) Ne
 		}
 		switch {
 		case !parsed.Before(currentStart) && !parsed.After(end):
-			window.Current += day.Count
+			totals.Current += day.Count
 		case !parsed.Before(previousStart) && parsed.Before(currentStart):
-			window.Previous += day.Count
+			totals.Previous += day.Count
 		}
 	}
-	return window
+	return totals
+}
+
+// worldSet resolves a stats scope to the set of world names whose series
+// rows sum up to the scope. World scopes resolve their name to the
+// canonical spelling; datacenter and region scopes resolve to the member
+// worlds of the world hierarchy.
+func worldSet(scope contract.StatsScope) map[string]struct{} {
+	set := make(map[string]struct{})
+	switch {
+	case scope.World != "":
+		set[canonicalWorld(scope.World)] = struct{}{}
+	case scope.Datacenter != "":
+		for _, world := range WorldsForDatacenter(scope.Datacenter) {
+			set[world] = struct{}{}
+		}
+	case scope.Region != "":
+		for _, world := range WorldsForRegion(scope.Region) {
+			set[world] = struct{}{}
+		}
+	}
+	return set
 }

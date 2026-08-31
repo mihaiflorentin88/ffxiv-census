@@ -73,7 +73,7 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 			Active:           row.Active,
 			ActiveRatio:      formatPercent(row.Active, row.Total),
 			ActivePctVal:     actPctVal,
-			NewCharacters30d: census.NewCharactersWindow(snapshot, []string{wName}).Current,
+			NewCharacters30d: census.NewCharactersWindow(snapshot, contract.StatsScope{World: wName}).Current,
 		})
 	}
 
@@ -111,19 +111,7 @@ func (c *UIController) Worlds(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(dcList)
 	}
 
-	var trendWorlds []string
-	switch {
-	case selectedDC != "":
-		trendWorlds = WorldsForDC(selectedDC)
-	case selectedRegion != "":
-		for world := range worldDatacenter {
-			if strings.EqualFold(census.RegionForDatacenter(WorldToDC(world)), selectedRegion) {
-				trendWorlds = append(trendWorlds, world)
-			}
-		}
-		sort.Strings(trendWorlds)
-	}
-	newWindow := census.NewCharactersWindow(snapshot, trendWorlds)
+	newWindow := census.NewCharactersWindow(snapshot, contract.StatsScope{Region: selectedRegion, Datacenter: selectedDC})
 
 	c.render(w, "templates/worlds.html", statsPageData("Worlds Census", "worlds", "/ui/worlds", "Final Fantasy XIV world rankings: total and active character counts for every world and datacenter, with region filters and 30-day activity ratios.", state, WorldsViewData{
 		TotalCharacters:    totalChars,
