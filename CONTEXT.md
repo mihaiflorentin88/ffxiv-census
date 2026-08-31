@@ -173,8 +173,12 @@ _Avoid_: 30-day window
 The canonical definition of a newly created character: one that has earned the chocobo milestone, counted per UTC day.
 _Avoid_: new-character series, created character, new player (players own characters; the census counts characters)
 
+**Max-level character**:
+A character whose census record shows at least one class or job at the current level cap — combat, crafting, or gathering alike — counted once per character no matter how many of its jobs sit at the cap.
+_Avoid_: maxed character, max-level jobs (the census counts characters, not jobs)
+
 **MSQ completion funnel**:
-The expansion-by-expansion view of how many characters completed each expansion's main-scenario story, read as retention and drop-off.
+The expansion-by-expansion view of how many characters' milestone records show each expansion's main-scenario story completed, read as retention and drop-off. Characters with private or unscanned achievements are invisible to it, however far they have progressed.
 
 **Cascading filters**:
 The linked region → datacenter → world filters in which each selection narrows the next.
