@@ -9,7 +9,7 @@ GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/
 	build-linux-amd64 build-linux-arm64 \
 	build-darwin-amd64 build-darwin-arm64 \
 	build-windows-amd64 build-windows-arm64 \
-	docker-build docker-tag docker-push k8s-release \
+	docker-build docker-tag k8s-release \
 	docker-image test tidy fmt lint postgres postgres-stop
 
 build:
@@ -56,11 +56,11 @@ build-windows-arm64:
 	@mkdir -p $(DIST_DIR)
 	@GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o $(DIST_DIR)/$(APP_NAME)-windows-arm64.exe $(MAIN_PKG)
 
-docker-build: build-linux-arm64
-	@echo "==> building ARM64 Docker image"
-	@docker buildx build --platform linux/arm64 \
-		--build-arg BINARY=dist/ffxiv-census-linux-arm64 \
-		-t $(DOCKER_IMAGE):latest . --load
+docker-build: build-linux-arm64 build-linux-amd64
+	@echo "==> building and pushing multi-arch Docker image $(DOCKER_IMAGE):latest (linux/amd64 + linux/arm64)"
+	@docker buildx inspect multiarch >/dev/null 2>&1 || docker buildx create --name multiarch --driver docker-container >/dev/null
+	@docker buildx build --builder multiarch --platform linux/amd64,linux/arm64 \
+		-t $(DOCKER_IMAGE):latest --push .
 
 docker-tag:
 	@tag="$(TAG)"; \
@@ -71,19 +71,8 @@ docker-tag:
 		echo "Error: TAG is required"; \
 		exit 1; \
 	fi; \
-	echo "==> tagging $(DOCKER_IMAGE):latest as $(DOCKER_IMAGE):$$tag"; \
-	docker tag $(DOCKER_IMAGE):latest $(DOCKER_IMAGE):$$tag
-
-docker-push:
-	@tag="$(TAG)"; \
-	if [ -z "$$tag" ]; then \
-		read -p "Enter image tag to push (default 'latest'): " tag; \
-	fi; \
-	if [ -z "$$tag" ]; then \
-		tag="latest"; \
-	fi; \
-	echo "==> pushing $(DOCKER_IMAGE):$$tag"; \
-	docker push $(DOCKER_IMAGE):$$tag
+	echo "==> tagging $(DOCKER_IMAGE):latest as $(DOCKER_IMAGE):$$tag (multi-arch manifest)"; \
+	docker buildx imagetools create -t $(DOCKER_IMAGE):$$tag $(DOCKER_IMAGE):latest
 
 k8s-release:
 	@tag="$(TAG)"; \

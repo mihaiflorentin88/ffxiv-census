@@ -224,7 +224,7 @@ make build
 
 ## Release Workflow
 
-The application release process involves reading current release tags from GitHub, bumping the version tag according to Semantic Versioning (`vMAJOR.MINOR.PATCH`), creating and pushing the Git tag, building cross-compiled Linux/ARM64 artifacts, pushing Docker images, and deploying via Helm to Kubernetes.
+The application release process involves reading current release tags from GitHub, bumping the version tag according to Semantic Versioning (`vMAJOR.MINOR.PATCH`), creating and pushing the Git tag, building cross-compiled Linux AMD64/ARM64 artifacts, pushing multi-architecture Docker images, and deploying via Helm to Kubernetes.
 
 > **Important**: Always check existing Git and Docker tags before releasing, and bump the version tag (e.g., `v1.0.0` -> `v1.0.1`). Do not reuse or overwrite existing release tags.
 
@@ -250,19 +250,21 @@ git push origin v1.0.1
 
 ### 3. Build & Push Docker Image
 
-Build the production image for ARM64 and push both the release tag and `latest` to Docker Hub:
+Build multi-architecture production images for `linux/amd64` and `linux/arm64`, push them to Docker Hub as a manifest list under `latest`, then tag the release version on top of the same multi-arch manifest:
 
 ```bash
-# 1. Build ARM64 binary and Docker image (tagged as latest)
+# 1. Cross-compile AMD64 + ARM64 binaries, build and push the
+#    multi-arch image as latest (buildx pushes directly)
 make docker-build
 
-# 2. Tag image with release version
+# 2. Tag the pushed multi-arch image with the release version
 make docker-tag TAG=v1.0.1
 
-# 3. Push release tag and latest to Docker Hub
-make docker-push TAG=v1.0.1
-make docker-push TAG=latest
+# 3. Verify the release tag serves both platforms
+docker buildx imagetools inspect mihaiflorentin88/census:v1.0.1
 ```
+
+The published tag is a manifest list covering `linux/amd64` and `linux/arm64`; Kubernetes nodes of either architecture pull the matching image automatically, so a single image tag serves mixed ARM64/X86-64 clusters with no Helm changes.
 
 ### 4. Deploy to Kubernetes
 
