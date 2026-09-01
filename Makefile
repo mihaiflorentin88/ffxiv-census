@@ -60,6 +60,7 @@ docker-build: build-linux-arm64 build-linux-amd64
 	@echo "==> building and pushing multi-arch Docker image $(DOCKER_IMAGE):latest (linux/amd64 + linux/arm64)"
 	@docker buildx inspect multiarch >/dev/null 2>&1 || docker buildx create --name multiarch --driver docker-container >/dev/null
 	@docker buildx build --builder multiarch --platform linux/amd64,linux/arm64 \
+		--provenance=false \
 		-t $(DOCKER_IMAGE):latest --push .
 
 docker-tag:
