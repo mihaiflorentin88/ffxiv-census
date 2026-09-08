@@ -192,6 +192,15 @@ workers:
         - --proxy
         - -c
         - "25"
+      env:
+        - name: QUEUE_MAX_ATTEMPTS
+          value: "50"
+        - name: RABBITMQ_URL
+          value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
+        - name: POSTGRES_MAX_OPEN_CONNS
+          value: "15"
+        - name: POSTGRES_MAX_IDLE_CONNS
+          value: "10"
     - name: proxy-character-census
       replicaCount: 1
       command:
@@ -201,6 +210,15 @@ workers:
         - --proxy
         - -c
         - "15"
+      env:
+        - name: QUEUE_MAX_ATTEMPTS
+          value: "50"
+        - name: RABBITMQ_URL
+          value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
+        - name: POSTGRES_MAX_OPEN_CONNS
+          value: "15"
+        - name: POSTGRES_MAX_IDLE_CONNS
+          value: "10"
     - name: proxy-achievement-census
       replicaCount: 1
       command:
@@ -210,6 +228,15 @@ workers:
         - --proxy
         - -c
         - "25"
+      env:
+        - name: QUEUE_MAX_ATTEMPTS
+          value: "50"
+        - name: RABBITMQ_URL
+          value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
+        - name: POSTGRES_MAX_OPEN_CONNS
+          value: "15"
+        - name: POSTGRES_MAX_IDLE_CONNS
+          value: "10"
 
     # --- Proxy discovery/scanning ---
     - name: proxy-new
@@ -220,6 +247,15 @@ workers:
         - consume
         - -c
         - "30"
+      env:
+        - name: QUEUE_MAX_ATTEMPTS
+          value: "50"
+        - name: RABBITMQ_URL
+          value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
+        - name: POSTGRES_MAX_OPEN_CONNS
+          value: "15"
+        - name: POSTGRES_MAX_IDLE_CONNS
+          value: "10"
     - name: proxy-scan
       replicaCount: 1
       command:
@@ -227,16 +263,25 @@ workers:
         - proxy
         - scan
         - -c
-        - "200"
+        - "400"
         - --dead-scan-percentage
-        - "20"
+        - "30"
+      env:
+        - name: QUEUE_MAX_ATTEMPTS
+          value: "50"
+        - name: RABBITMQ_URL
+          value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
+        - name: POSTGRES_MAX_OPEN_CONNS
+          value: "25"
+        - name: POSTGRES_MAX_IDLE_CONNS
+          value: "20"
       resources:
-      requests:
-        memory: 100Mi
-        cpu: 100m
-      limits:
-        memory: 1Gi
-        cpu: 1000m
+        requests:
+          memory: 100Mi
+          cpu: 1000m
+        limits:
+          memory: 2Gi
+          cpu: 2500m
     # --- Census failed queue retry consumer ---
     - name: census-retry
       replicaCount: 1
@@ -273,25 +318,25 @@ cronjobs:
     volumes: []
   instances:
     - name: publish-character
-      schedule: "*/3 * * * *"
+      schedule: "*/4 * * * *"
       command:
         - /app/ffxiv-census
         - publish
         - character-census
         - --limit
-        - "500"
+        - "300"
         - --older-than
         - "0"
 
     - name: publish-id-sweep
-      schedule: "*/1 * * * *"
+      schedule: "*/2 * * * *"
       command:
         - /app/ffxiv-census
         - publish
         - id-sweep
         - --auto
         - --count
-        - "550"
+        - "350"
         - --chunk-size
         - "1"
 
