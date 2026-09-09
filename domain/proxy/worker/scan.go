@@ -66,14 +66,15 @@ func SplitScanConcurrency(concurrency, deadScanPercentage int) (regular, dead in
 }
 
 // prefetchBufferCap returns how many records one pool keeps in memory — queued
-// in the buffer or in flight inside a worker: workers + 30% (integer floor).
-// The headroom keeps every worker fed while the prefetcher round-trips to the
-// database for the next batch.
+// in the buffer or in flight inside a worker: ceil(workers × 1.3). The
+// headroom keeps every worker fed while the prefetcher round-trips to the
+// database for the next batch, and stays above the worker count even for
+// small pools so there is always at least one record ready to feed.
 func prefetchBufferCap(workers int) int {
 	if workers <= 0 {
 		workers = 1
 	}
-	return workers + workers*3/10
+	return (workers*13 + 9) / 10
 }
 
 // creditPool is an exact counting semaphore: avail + credits held by the
@@ -91,7 +92,6 @@ func newCreditPool(n int) *creditPool {
 	return &creditPool{wake: make(chan struct{}, 1), avail: n}
 }
 
-// take drains and returns all currently available credits.
 func (c *creditPool) take() int {
 	c.mu.Lock()
 	n := c.avail

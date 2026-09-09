@@ -32,7 +32,7 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 ./bin/ffxiv-census proxy discover [--limit 0]   # 0 = no limit (publish all)
 
 # Run a long-running scan worker (direct database batches)
-./bin/ffxiv-census proxy scan [--concurrency 4]   # concurrency = batch size
+./bin/ffxiv-census proxy scan [--concurrency 4]   # concurrency = workers per pool
 
 # Consume new-proxy events (long-running)
 ./bin/ffxiv-census proxy consume [--concurrency 4]
@@ -142,7 +142,7 @@ The `proxy scan` worker queries the database with priority ordering:
 
 1. **Inactive** proxies (oldest scan first)
 2. **Active** proxies not scanned in 10 minutes
-3. **Dead** proxies not scanned in 3 days
+3. **Dead** proxies not scanned in 7 days
 
 Each pool keeps `concurrency + 30%` records in memory (queued or in flight). The prefetcher claims up to that headroom per query — claimed rows are stamped `last_scanned_at = NOW()` atomically (single `FOR UPDATE SKIP LOCKED` statement), so rows in flight are never re-fetched, and a crash mid-batch leaves claimed rows invisible until their regular scan window passes. After empty batches or per-record errors, the worker waits one minute before querying again. Cancellation during the idle wait returns cleanly.
 

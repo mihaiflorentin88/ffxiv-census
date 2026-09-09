@@ -251,9 +251,9 @@ func TestRunScan_PrefetchLimitIsBufferCap(t *testing.T) {
 	defer cancel()
 	w.RunScan(ctx, 7, 0)
 
-	// 7 workers → buffer cap 7 + 7*3/10 = 9.
-	if repo.LimitSeen() != 9 {
-		t.Errorf("ListForScan limit = %d, want 9 (buffer cap)", repo.LimitSeen())
+	// 7 workers → buffer cap = ceil(7 × 1.3) = 10.
+	if repo.LimitSeen() != 10 {
+		t.Errorf("ListForScan limit = %d, want 10 (buffer cap)", repo.LimitSeen())
 	}
 }
 
@@ -266,9 +266,9 @@ func TestRunScan_NormalizesNonPositiveConcurrency(t *testing.T) {
 	defer cancel()
 	w.RunScan(ctx, 0, 0)
 
-	// Default 4 workers → buffer cap 4 + 4*3/10 = 5.
-	if repo.LimitSeen() != 5 {
-		t.Errorf("ListForScan limit = %d, want 5 (default cap)", repo.LimitSeen())
+	// Default 4 workers → buffer cap = ceil(4 × 1.3) = 6.
+	if repo.LimitSeen() != 6 {
+		t.Errorf("ListForScan limit = %d, want 6 (default cap)", repo.LimitSeen())
 	}
 }
 
@@ -295,14 +295,14 @@ func TestRunScan_PrefetchStaysWithinBufferCap(t *testing.T) {
 		close(done)
 	}()
 
-	// 4 workers → cap 5. The first fetch must be exactly the cap, and while
+	// 4 workers → cap 6. The first fetch must be exactly the cap, and while
 	// the gated workers hold records, no further fetch may happen.
 	time.Sleep(150 * time.Millisecond)
 	if got := repo.ListCallCount(); got != 1 {
 		t.Errorf("ListForScan calls = %d, want 1 (buffer full, workers busy)", got)
 	}
-	if repo.LimitSeen() != 5 {
-		t.Errorf("ListForScan limit = %d, want 5 (cap)", repo.LimitSeen())
+	if repo.LimitSeen() != 6 {
+		t.Errorf("ListForScan limit = %d, want 6 (cap)", repo.LimitSeen())
 	}
 
 	close(gate) // let everything drain
@@ -566,7 +566,7 @@ func TestSplitScanConcurrency(t *testing.T) {
 
 func TestRunScan_DeadPercentage_SplitsConcurrency(t *testing.T) {
 	// 10 concurrency, 20% dead → regular=8, dead=2. The first regular fetch is
-	// the buffer cap (8 workers → 8 + 8*3/10 = 10); dead fetch is its cap (2).
+	// the buffer cap (8 workers → ceil(8 × 1.3) = 11); dead fetch is its cap (ceil(2 × 1.3) = 3).
 	regularBatch := []contract.ProxyRecord{
 		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
 	}
@@ -584,11 +584,11 @@ func TestRunScan_DeadPercentage_SplitsConcurrency(t *testing.T) {
 
 	w.RunScan(ctx, 10, 20)
 
-	if repo.LimitSeen() != 10 {
-		t.Errorf("regular limit = %d, want 10 (buffer cap)", repo.LimitSeen())
+	if repo.LimitSeen() != 11 {
+		t.Errorf("regular limit = %d, want 11 (buffer cap)", repo.LimitSeen())
 	}
-	if repo.DeadLimitSeen() != 2 {
-		t.Errorf("dead limit = %d, want 2 (buffer cap)", repo.DeadLimitSeen())
+	if repo.DeadLimitSeen() != 3 {
+		t.Errorf("dead limit = %d, want 3 (buffer cap)", repo.DeadLimitSeen())
 	}
 }
 
