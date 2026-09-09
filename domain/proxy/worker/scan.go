@@ -19,8 +19,8 @@ type Scanner interface {
 // scanListFunc is the function signature for fetching proxy batches.
 type scanListFunc func(context.Context, int) ([]contract.ProxyRecord, error)
 
-// ScanWorker reads priority-ordered database batches and scans proxies directly,
-// without going through RabbitMQ.
+// ScanWorker reads priority-ordered database batches through a prefetcher and
+// scans them concurrently, without going through RabbitMQ.
 type ScanWorker struct {
 	repo      contract.ProxyRepository
 	scanner   Scanner
@@ -29,8 +29,8 @@ type ScanWorker struct {
 	notifier  func() // called after a proxy becomes active (best-effort)
 }
 
-// NewScanWorker creates a ScanWorker. The idleDelay controls how long the worker
-// waits after an empty batch or per-record error before querying again.
+// NewScanWorker creates a ScanWorker. The idleDelay controls how long the
+// worker waits after an empty batch or per-record error before querying again.
 // Production callers should pass time.Minute.
 func NewScanWorker(repo contract.ProxyRepository, scanner Scanner, logger contract.Logger, idleDelay time.Duration) *ScanWorker {
 	return &ScanWorker{
@@ -65,17 +65,82 @@ func SplitScanConcurrency(concurrency, deadScanPercentage int) (regular, dead in
 	return regular, dead
 }
 
+// prefetchBufferCap returns how many records one pool keeps in memory — queued
+// in the buffer or in flight inside a worker: workers + 30% (integer floor).
+// The headroom keeps every worker fed while the prefetcher round-trips to the
+// database for the next batch.
+func prefetchBufferCap(workers int) int {
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers + workers*3/10
+}
+
+// creditPool is an exact counting semaphore: avail + credits held by the
+// prefetcher or workers always equals the initial capacity. A channel was
+// tried first, but worker releases could refill it while the prefetcher still
+// held drained credits, deadlocking the blocking refunds — a mutex counter
+// cannot overflow or lose credits.
+type creditPool struct {
+	mu    sync.Mutex
+	wake  chan struct{} // signaled on release; spurious wakeups are fine
+	avail int
+}
+
+func newCreditPool(n int) *creditPool {
+	return &creditPool{wake: make(chan struct{}, 1), avail: n}
+}
+
+// take drains and returns all currently available credits.
+func (c *creditPool) take() int {
+	c.mu.Lock()
+	n := c.avail
+	c.avail = 0
+	c.mu.Unlock()
+	return n
+}
+
+// release returns credits; never blocks, never loses count.
+func (c *creditPool) release(n int) {
+	if n <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.avail += n
+	c.mu.Unlock()
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// wait blocks until a credit may be available, the context ends, or a failure
+// wake arrives. The caller must re-check with take().
+func (c *creditPool) wait(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-c.wake:
+		return true
+	}
+}
+
 // RunScan runs the scan loop until the context is cancelled.
-// Concurrency controls both the goroutine limit per batch and the SQL LIMIT.
-// Non-positive concurrency defaults to 4.
-// deadScanPercentage (0-90) reserves a portion of concurrency for dead proxy scanning.
-// Values below 0 are treated as 0; values above 90 are capped to 90.
+// Concurrency controls the number of scan workers per pool; each pool also
+// keeps prefetchBufferCap(workers) records in memory (workers + 30%) so the
+// workers never wait on a database round trip. The prefetcher claims batches
+// ahead of the workers, and claimed rows are stamped last_scanned_at at claim
+// time so in-flight rows can never be re-fetched.
+// deadScanPercentage (0-90) reserves a portion of concurrency for dead proxy
+// scanning. Values below 0 are treated as 0; values above 90 are capped to 90.
 func (w *ScanWorker) RunScan(ctx context.Context, concurrency, deadScanPercentage int) error {
 	regular, dead := SplitScanConcurrency(concurrency, deadScanPercentage)
 
 	w.logger.InfoContext(ctx, "scan_worker.pool_allocation",
 		"regular_workers", regular,
-		"dead_workers", dead)
+		"dead_workers", dead,
+		"regular_buffer", prefetchBufferCap(regular),
+		"dead_buffer", prefetchBufferCap(dead))
 
 	poolCtx, poolCancel := context.WithCancel(ctx)
 	defer poolCancel()
@@ -110,72 +175,129 @@ func (w *ScanWorker) RunScan(ctx context.Context, concurrency, deadScanPercentag
 	return firstErr
 }
 
-// runScanPool runs a single scan pool loop until the context is cancelled.
-func (w *ScanWorker) runScanPool(ctx context.Context, pool string, concurrency int, list scanListFunc) error {
+// runScanPool feeds persistent workers from a prefetcher-owned buffer. Credits
+// bound produced-but-unfinished records to prefetchBufferCap(workers): the
+// prefetcher consumes one credit per record it fetches, and each worker
+// releases its credit after the record's scan and write complete. The database
+// is only touched by the prefetcher (reads) and by workers between scans
+// (writes) — never held open during a proxy check.
+func (w *ScanWorker) runScanPool(ctx context.Context, pool string, workers int, list scanListFunc) error {
+	capacity := prefetchBufferCap(workers)
+	jobs := make(chan contract.ProxyRecord, capacity)
+	credits := newCreditPool(capacity)
+	// failFlag records that a worker saw a record failure since the last
+	// fetch, so the prefetcher can pause feeding for the idle delay. failWake
+	// wakes the prefetcher when it is waiting for credits; the flag is the
+	// source of truth (the wake is best-effort).
+	var failFlag atomic.Bool
+	failWake := make(chan struct{}, 1)
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case rec, ok := <-jobs:
+					if !ok {
+						return
+					}
+					w.scanOne(ctx, pool, rec, credits, &failFlag, failWake)
+				}
+			}
+		}()
+	}
+
+	defer func() {
+		close(jobs)
+		wg.Wait()
+	}()
+
 	for {
-		batch, err := list(ctx, concurrency)
-		if err != nil {
-			return fmt.Errorf("list proxies for scan [%s]: %w", pool, err)
+		// Consume available credits; each fetched record spends one.
+		free := credits.take()
+		if free == 0 {
+			// Buffer full and all workers busy — wait for a completion.
+			if !credits.wait(ctx) {
+				return nil
+			}
+			free = credits.take()
 		}
 
-		if len(batch) == 0 {
-			// Empty batch — wait before retrying.
-			select {
-			case <-ctx.Done():
+		// Pause after record failures — backpressure for database trouble.
+		// Refund the drained credits first: the fetch they reserved will not
+		// happen this iteration.
+		if failFlag.CompareAndSwap(true, false) {
+			credits.release(free)
+			if !w.waitIdle(ctx) {
 				return nil
-			case <-time.After(w.idleDelay):
 			}
 			continue
 		}
 
-		// Scan the batch with bounded concurrency.
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, concurrency)
-		var hadError atomic.Bool
-
-		for i := range batch {
-			select {
-			case <-ctx.Done():
-				wg.Wait()
-				return nil
-			case sem <- struct{}{}:
-			}
-
-			wg.Add(1)
-			go func(rec *contract.ProxyRecord) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				defer func() {
-					if r := recover(); r != nil {
-						w.logger.ErrorContext(ctx, "scan_worker.panic",
-							"pool", pool,
-							"proxy_id", rec.ID,
-							"error", fmt.Sprintf("%v", r),
-							"stack", string(debug.Stack()))
-					}
-				}()
-
-				if err := w.scanner.ProcessScanProxy(ctx, rec); err != nil {
-					w.logger.WarnContext(ctx, "scan_worker.scan_error",
-						"pool", pool,
-						"proxy_id", rec.ID,
-						"error", err)
-					hadError.Store(true)
-				} else if w.notifier != nil {
-					w.notifier()
-				}
-			}(&batch[i])
+		batch, err := list(ctx, free)
+		if err != nil {
+			return fmt.Errorf("list proxies for scan [%s]: %w", pool, err)
 		}
 
-		wg.Wait()
-
-		// If any record had an error, wait before the next batch.
-		if hadError.Load() {
+		for _, rec := range batch {
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-time.After(w.idleDelay):
+			case jobs <- rec:
 			}
 		}
+		// Refund unconsumed credits: short batch or empty batch. This must
+		// run for every fetch — including empty ones — or the pool slowly
+		// leaks its credits and starves.
+		credits.release(free - len(batch))
+
+		if len(batch) == 0 {
+			if !w.waitIdle(ctx) {
+				return nil
+			}
+		}
+	}
+}
+
+// scanOne runs a single scan and write, recovering panics so one bad record
+// cannot take down the pool, and releasing the record's credit afterwards.
+func (w *ScanWorker) scanOne(ctx context.Context, pool string, rec contract.ProxyRecord, credits *creditPool, failFlag *atomic.Bool, failWake chan struct{}) {
+	defer credits.release(1)
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.ErrorContext(ctx, "scan_worker.panic",
+				"pool", pool,
+				"proxy_id", rec.ID,
+				"error", fmt.Sprintf("%v", r),
+				"stack", string(debug.Stack()))
+		}
+	}()
+
+	if err := w.scanner.ProcessScanProxy(ctx, &rec); err != nil {
+		w.logger.WarnContext(ctx, "scan_worker.scan_error",
+			"pool", pool,
+			"proxy_id", rec.ID,
+			"error", err)
+		failFlag.Store(true)
+		select {
+		case failWake <- struct{}{}:
+		default:
+		}
+	} else if w.notifier != nil {
+		w.notifier()
+	}
+}
+
+// waitIdle blocks for the idle delay, returning false if the context ended.
+func (w *ScanWorker) waitIdle(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(w.idleDelay):
+		return true
 	}
 }

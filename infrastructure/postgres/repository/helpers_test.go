@@ -2,6 +2,8 @@ package repository_test
 
 import (
 	"context"
+	"os"
+	"strconv"
 	"testing"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
@@ -12,9 +14,17 @@ import (
 
 func newTestDriver(t *testing.T) contract.DatabaseDriver {
 	t.Helper()
+	// TEST_POSTGRES_PORT lets a developer point the tests at a Postgres on a
+	// non-default local port (e.g. a container on 5433 when 5432 is taken).
+	port := 5432
+	if v := os.Getenv("TEST_POSTGRES_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			port = p
+		}
+	}
 	cfg := &config.PostgresConfig{
 		Host:         "localhost",
-		Port:         5432,
+		Port:         port,
 		User:         "census",
 		Password:     "secret",
 		Database:     "ffxiv_census",

@@ -64,12 +64,14 @@ type ProxyRepository interface {
 	UpdateStatus(ctx context.Context, id int64, status string, latencyMS *int, failCount int, lastAliveAt *time.Time) error
 	// UpdateScanTime sets last_scanned_at and updated_at to now.
 	UpdateScanTime(ctx context.Context, id int64) error
-	// ListForScan returns eligible inactive and active proxies needing verification,
-	// ordered by scan priority: inactive (oldest scan first), then active not scanned
-	// in 10 minutes. Dead proxies are excluded — use ListDeadForScan for those.
+	// ListForScan claims up to limit eligible inactive and active proxies for
+	// verification, inactive (oldest scan first) before active (oldest first).
+	// Claimed rows are stamped last_scanned_at = now atomically, so rows in
+	// flight are never returned again until their regular scan window passes.
+	// Dead proxies are excluded — use ListDeadForScan for those.
 	ListForScan(ctx context.Context, limit int) ([]ProxyRecord, error)
-	// ListDeadForScan returns eligible dead proxies (not scanned in 7 days),
-	// ordered by oldest scan first. Only dead proxies are returned.
+	// ListDeadForScan claims up to limit dead proxies (not scanned in 7 days),
+	// oldest first, stamping last_scanned_at at claim time like ListForScan.
 	ListDeadForScan(ctx context.Context, limit int) ([]ProxyRecord, error)
 	// ListActive returns up to limit active proxies ordered by latency (lowest first).
 	ListActive(ctx context.Context, limit int) ([]ProxyRecord, error)

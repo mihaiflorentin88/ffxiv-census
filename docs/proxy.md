@@ -134,7 +134,7 @@ The proxy consumer (`proxy consume`) uses push-based consumption via RabbitMQ fo
 - **Retry/fail**: Handled internally by the queue adapter (retry exchange with TTL backoff, dead-letter for permanent failures)
 - **Graceful shutdown**: Cancels the consumption context, finishes in-flight jobs
 
-The `proxy scan` worker is a separate long-running process that reads batches directly from the database, bypassing RabbitMQ entirely.
+The `proxy scan` worker is a separate long-running process that reads batches directly from the database, bypassing RabbitMQ entirely. Each pool runs a prefetcher goroutine that claims and buffers records ahead of the workers, so workers never wait on a database round trip; workers only touch the database to write results between scans, never while holding a proxy check open.
 
 ## Scan Priority
 
@@ -144,7 +144,7 @@ The `proxy scan` worker queries the database with priority ordering:
 2. **Active** proxies not scanned in 10 minutes
 3. **Dead** proxies not scanned in 3 days
 
-The SQL `LIMIT` equals the `-c/--concurrency` flag value. After each batch completes, the next batch is fetched immediately. After empty batches or per-record errors, the worker waits one minute before querying again. Cancellation during the idle wait returns cleanly.
+Each pool keeps `concurrency + 30%` records in memory (queued or in flight). The prefetcher claims up to that headroom per query — claimed rows are stamped `last_scanned_at = NOW()` atomically (single `FOR UPDATE SKIP LOCKED` statement), so rows in flight are never re-fetched, and a crash mid-batch leaves claimed rows invisible until their regular scan window passes. After empty batches or per-record errors, the worker waits one minute before querying again. Cancellation during the idle wait returns cleanly.
 
 ---
 

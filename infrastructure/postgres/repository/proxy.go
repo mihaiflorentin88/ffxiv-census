@@ -22,6 +22,11 @@ func NewProxyRepository(driver contract.DatabaseDriver) contract.ProxyRepository
 const proxyColumns = `id, protocol, ip, port, country, anonymity, latency_ms, uptime_percent,
 	status, last_scanned_at, last_alive_at, first_seen_at, source, fail_count, locked_by, locked_at, created_at, updated_at`
 
+// proxyColumnsClaimed mirrors proxyColumns with the p alias used by the
+// claiming UPDATE ... RETURNING in listForScan.
+const proxyColumnsClaimed = `p.id, p.protocol, p.ip, p.port, p.country, p.anonymity, p.latency_ms, p.uptime_percent,
+	p.status, p.last_scanned_at, p.last_alive_at, p.first_seen_at, p.source, p.fail_count, p.locked_by, p.locked_at, p.created_at, p.updated_at`
+
 func scanProxy(row rowScanner) (*contract.ProxyRecord, error) {
 	var p contract.ProxyRecord
 	var country, anonymity, lockedBy sql.NullString
@@ -157,29 +162,49 @@ func (r *ProxyRepository) UpdateScanTime(ctx context.Context, id int64) error {
 	return nil
 }
 
+// ListForScan claims up to limit eligible inactive and active proxies for
+// scanning, inactive (oldest first) before active (oldest first). Dead proxies
+// are excluded — use ListDeadForScan for those.
 func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
+	return r.listForScan(ctx, limit, `
+			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '20 minutes')
+			OR (status = 'active' AND last_scanned_at < NOW() - INTERVAL '10 minutes')`,
+		`CASE WHEN status = 'inactive' THEN 0 ELSE 1 END, last_scanned_at ASC NULLS FIRST`)
+}
+
+// ListDeadForScan claims up to limit dead proxies not scanned in 7 days,
+// oldest first.
+func (r *ProxyRepository) ListDeadForScan(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
+	return r.listForScan(ctx, limit, `status = 'dead' AND last_scanned_at < NOW() - INTERVAL '7 days'`,
+		`last_scanned_at ASC NULLS FIRST`)
+}
+
+// listForScan claims up to limit proxies matching the eligibility filter in a
+// single atomic statement: chosen rows are stamped last_scanned_at = NOW() as
+// they are returned, so a running-ahead prefetcher (or a second replica) can
+// never re-select rows that are already in flight. A crash after claiming but
+// before the scan writes leaves the row invisible until its regular scan
+// window passes.
+func (r *ProxyRepository) listForScan(ctx context.Context, limit int, where, orderBy string) ([]contract.ProxyRecord, error) {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query := `SELECT ` + proxyColumns + ` FROM proxies
-		WHERE
-			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '20 minutes')
-			OR (status = 'active' AND last_scanned_at < NOW() - INTERVAL '10 minutes')
-		ORDER BY
-			CASE
-				WHEN status = 'inactive' THEN 0
-				WHEN status = 'active' THEN 1
-			END,
-			last_scanned_at ASC NULLS FIRST`
+	query := `WITH chosen AS (
+		SELECT id FROM proxies
+		WHERE ` + where + `
+		ORDER BY ` + orderBy + `
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED
+	)
+	UPDATE proxies p
+	SET last_scanned_at = NOW()
+	FROM chosen
+	WHERE p.id = chosen.id
+	RETURNING ` + proxyColumnsClaimed
 
-	var rows *sql.Rows
-	if limit > 0 {
-		rows, err = db.QueryContext(ctx, query+` LIMIT $1`, limit)
-	} else {
-		rows, err = db.QueryContext(ctx, query)
-	}
+	rows, err := db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("proxy list for scan: %w", err)
 	}
@@ -190,38 +215,6 @@ func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contrac
 		p, err := scanProxy(rows)
 		if err != nil {
 			return nil, fmt.Errorf("proxy scan row: %w", err)
-		}
-		proxies = append(proxies, *p)
-	}
-	return proxies, rows.Err()
-}
-
-func (r *ProxyRepository) ListDeadForScan(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
-	db, err := r.driver.Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	query := `SELECT ` + proxyColumns + ` FROM proxies
-		WHERE status = 'dead' AND last_scanned_at < NOW() - INTERVAL '7 days'
-		ORDER BY last_scanned_at ASC NULLS FIRST`
-
-	var rows *sql.Rows
-	if limit > 0 {
-		rows, err = db.QueryContext(ctx, query+` LIMIT $1`, limit)
-	} else {
-		rows, err = db.QueryContext(ctx, query)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("proxy list dead for scan: %w", err)
-	}
-	defer rows.Close()
-
-	var proxies []contract.ProxyRecord
-	for rows.Next() {
-		p, err := scanProxy(rows)
-		if err != nil {
-			return nil, fmt.Errorf("proxy scan dead row: %w", err)
 		}
 		proxies = append(proxies, *p)
 	}
