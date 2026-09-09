@@ -25,7 +25,6 @@ type IDSweep struct {
 	census      *census.Service
 	logger      contract.Logger
 	rateLimiter contract.ProviderRateLimiter
-	proxyMode   bool // when true: Lodestone primary, Tomestone fallback on error only
 }
 
 func NewIDSweep(
@@ -46,14 +45,6 @@ func NewIDSweep(
 		logger:      loggerOrDiscard(logger),
 		rateLimiter: rl,
 	}
-}
-
-// WithProxyMode enables proxy mode for this handler. In proxy mode,
-// Lodestone is the primary provider and Tomestone is used only as a
-// fallback when Lodestone returns an error (not 404).
-func (h *IDSweep) WithProxyMode() *IDSweep {
-	h.proxyMode = true
-	return h
 }
 
 func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
@@ -111,13 +102,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
 				}
 			}
-		} else if h.proxyMode {
-			// Proxy mode: Lodestone primary, Tomestone fallback on error only
+		} else {
+			// Dual-source default for every workflow (proxy and direct):
+			// Lodestone is authoritative for existence and is always probed
+			// first; Tomestone only fills in when Lodestone errors.
 			lodestoneAvail := h.lodestone != nil && (h.rateLimiter == nil || h.rateLimiter.IsAvailable(contract.ProviderLodestone))
 			tomestoneAvail := h.tomestone != nil && h.tomestone.IsConfigured() && (h.rateLimiter == nil || h.rateLimiter.IsAvailable(contract.ProviderTomestone))
 
 			if !lodestoneAvail && !tomestoneAvail {
-				return nil, errors.New("id-sweep proxy mode: all providers unavailable or rate-limited")
+				return nil, errors.New("id-sweep: all providers unavailable or rate-limited")
 			}
 
 			if lodestoneAvail {
@@ -171,94 +164,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					}
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "not_found"))
-					}
+					// Lodestone never answered (paused/unavailable), so
+					// Tomestone's 404 alone is not authoritative for
+					// existence. Fail the delivery for a Lodestone retry
+					// instead of silently skipping the ID.
+					h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)))
+					return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone currently paused/unavailable, retrying on lodestone", id)
 				} else {
 					h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
 					return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, err)
-				}
-			}
-		} else {
-			// Auto / default: Tomestone primary, Lodestone fallback
-			tomestoneAvail := h.tomestone != nil && h.tomestone.IsConfigured() && (h.rateLimiter == nil || h.rateLimiter.IsAvailable(contract.ProviderTomestone))
-			lodestoneAvail := h.lodestone != nil && (h.rateLimiter == nil || h.rateLimiter.IsAvailable(contract.ProviderLodestone))
-
-			if !tomestoneAvail && !lodestoneAvail {
-				return nil, errors.New("id-sweep: all providers unavailable or rate-limited")
-			}
-
-			if tomestoneAvail {
-				tChar, err := h.tomestone.FetchCharacterProfile(ctx, id, false)
-				if err == nil {
-					jobs, serr := h.storeTomestone(ctx, id, tChar)
-					if serr != nil {
-						return nil, serr
-					}
-					next = append(next, jobs...)
-				} else if errors.Is(err, contract.ErrCharacterNotFound) {
-					// Tomestone 404: character not indexed, try Lodestone
-					if lodestoneAvail {
-						lChar, lerr := h.lodestone.FetchCharacter(ctx, id)
-						if lerr == nil {
-							jobs, serr := h.storeLodestone(ctx, id, lChar)
-							if serr != nil {
-								return nil, serr
-							}
-							next = append(next, jobs...)
-						} else if errors.Is(lerr, contract.ErrCharacterNotFound) {
-							if h.logger.Enabled(ctx, slog.LevelDebug) {
-								h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone+lodestone"), slog.String("status", "not_found"))
-							}
-						} else {
-							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", lerr))
-							return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, lerr)
-						}
-					} else {
-						// Lodestone unavailable: return error to retry later on Lodestone
-						h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)))
-						return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone currently paused/unavailable, retrying on lodestone", id)
-					}
-				} else {
-					// Tomestone transient error: fall back to Lodestone
-					if lodestoneAvail {
-						lChar, lerr := h.lodestone.FetchCharacter(ctx, id)
-						if lerr == nil {
-							jobs, serr := h.storeLodestone(ctx, id, lChar)
-							if serr != nil {
-								return nil, serr
-							}
-							next = append(next, jobs...)
-						} else if errors.Is(lerr, contract.ErrCharacterNotFound) {
-							// Lodestone is authoritative for existence: if it says 404, character doesn't exist.
-							if h.logger.Enabled(ctx, slog.LevelDebug) {
-								h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone+lodestone"), slog.String("status", "not_found"))
-							}
-						} else {
-							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", lerr))
-							return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, lerr)
-						}
-					} else {
-						h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
-						return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, err)
-					}
-				}
-			} else {
-				// Tomestone unavailable/paused, Lodestone available: probe Lodestone directly
-				lChar, err := h.lodestone.FetchCharacter(ctx, id)
-				if err == nil {
-					jobs, serr := h.storeLodestone(ctx, id, lChar)
-					if serr != nil {
-						return nil, serr
-					}
-					next = append(next, jobs...)
-				} else if errors.Is(err, contract.ErrCharacterNotFound) {
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "not_found"))
-					}
-				} else {
-					h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", err))
-					return nil, fmt.Errorf("id-sweep lodestone fetch %d: %w", id, err)
 				}
 			}
 		}

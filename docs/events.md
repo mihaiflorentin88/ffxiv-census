@@ -38,15 +38,19 @@ Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `
 
 ## Dual-source ingest, Fallback & Provider Rate-Limit Coordination
 
-Both `id-sweep` and `character-census` are dual-source events, but they use different primary providers in `auto` source mode:
-
-**`id-sweep` (character discovery):** Tomestone primary, Lodestone fallback.
-1. Handlers probe **Tomestone.gg** first. Tomestone runs at 5 req/s (REST API) vs Lodestone's 1 req/s (scraper), making it the faster discovery path.
-2. When Tomestone returns a 404 (`contract.ErrCharacterNotFound`), handlers fall back to **The Lodestone** — the character may exist but not be indexed by Tomestone.
-3. When Tomestone encounters a transient error, handlers fall back to **The Lodestone** as the authoritative source.
-4. If Tomestone returns 404 and Lodestone is unavailable/paused, the job returns an error to retry on Lodestone later.
-5. If both providers return 404, the character is confirmed missing/deleted and skipped.
-6. If Tomestone errors and Lodestone returns 404, the character is confirmed missing (Lodestone is authoritative for existence).
+**`id-sweep` (character discovery):** Lodestone primary, Tomestone fallback.
+1. Handlers probe **The Lodestone** first — it is authoritative for existence for
+   both the proxy and direct workflows.
+2. When Lodestone returns a transient error (HTTP 202 challenge, timeout, 5xx),
+   handlers fall back to **Tomestone.gg**.
+3. A Tomestone 404 is **never** treated as conclusive: because Lodestone itself
+   did not answer, the delivery fails so the queue can retry it on Lodestone
+   later — silently skipping here would lose characters that exist on Lodestone
+   but are missing from Tomestone's index.
+4. If Lodestone returns 404, the character is confirmed missing and skipped
+   without consulting Tomestone.
+5. If Lodestone is paused/unavailable, handlers probe Tomestone directly; a
+   Tomestone 404 in that state also fails the delivery for a Lodestone retry.
 
 **`character-census` (profile re-census):** Lodestone primary, Tomestone fallback.
 1. Handlers query **The Lodestone** first as the authoritative source of truth.

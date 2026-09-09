@@ -19,9 +19,9 @@ Earned timestamps are extracted only from the completed achievement row, so new 
 
 ## Primary Provider & Fallback Integration
 
-The Lodestone client serves as the **primary data provider for `character-census`** and the **fallback provider for `id-sweep`** across the census ingest pipeline:
-- **ID Sweep (`id-sweep`)**: Tomestone.gg is queried first for character ranges in `auto` mode (5 req/s REST API vs Lodestone's 1 req/s scraper). Lodestone is the fallback when Tomestone returns 404 or transient errors — characters may exist on Lodestone but not be indexed by Tomestone.
-- **Character Census (`character-census`)**: Lodestone is fetched first as the authoritative source, falling back to Tomestone.gg when unresolvable or rate-limited.
+The Lodestone client serves as the **primary data provider for both `id-sweep` and `character-census`** across the census ingest pipeline, in proxy and direct workflows alike:
+- **ID Sweep (`id-sweep`)**: The Lodestone is probed first — it is authoritative for existence. Tomestone.gg is only a fallback when Lodestone returns a transient error; a Tomestone 404 in that state fails the delivery for a Lodestone retry instead of skipping the ID.
+- **Character Census (`character-census`)**: The Lodestone is fetched first as the authoritative source of truth, falling back to Tomestone.gg when unresolvable or rate-limited.
 - **Achievement Census (`achievement-census`)**: Lodestone is the exclusive provider. When Lodestone is rate-limited or paused, achievement messages remain queued in RabbitMQ while dual-source event types continue on Tomestone.
 
 ## Hidden profiles

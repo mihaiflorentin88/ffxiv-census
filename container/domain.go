@@ -177,7 +177,7 @@ func (s *ServiceContainer) ProxyCensusHandlers(lodestoneClient contract.Lodeston
 	if svc == nil {
 		return reg
 	}
-	reg.Register(handler.EventIDSweep, handler.NewIDSweep(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter).WithProxyMode())
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter))
 	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(lodestoneClient, svc, s.Logger(), rateLimiter))
 	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter))
 	return reg

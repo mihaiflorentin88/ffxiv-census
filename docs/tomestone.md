@@ -58,13 +58,14 @@ Inspect live Tomestone character profiles directly via the CLI:
 
 ## Dual-Source Ingest & Fallback
 
-Tomestone.gg serves as the **primary provider for `id-sweep`** (character discovery) and the **fallback provider for `character-census`** (profile re-census).
+Tomestone.gg serves as the **fallback provider** for both dual-source events:
 
-- **`id-sweep` (Tomestone primary):** When `--source auto` (default) is set, handlers probe Tomestone.gg first (5 req/s REST API) for maximum discovery throughput. If Tomestone returns a 404 or transient error, handlers fall back to The Lodestone. If both return 404, the character is confirmed missing.
+- **`id-sweep` (Lodestone primary):** Handlers probe The Lodestone first for every ID — it is authoritative for existence, in proxy and direct workflows alike. Only when Lodestone returns a transient error do handlers fall back to Tomestone.gg. A Tomestone 404 in that state is not conclusive and the delivery is retried on Lodestone later; if both providers return 404 (only possible via explicit `--source tomestone` runs), the character is confirmed missing.
 - **`character-census` (Lodestone primary, Tomestone fallback):** Handlers query The Lodestone first as the authoritative source. If Lodestone returns a 404, scrape error, or encounters rate limits, handlers fall back to Tomestone.gg.
 - Explicit `--source tomestone` on `id-sweep` queries Tomestone.gg directly without querying Lodestone.
-- Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into downstream jobs (`achievement-census`, and `fc-census` when affiliated with a free company) via `BuildDependentCharacterJobs`.
+- Ingested characters are persisted via `CensusService.UpsertTomestoneCharacter` and immediately chained into downstream jobs (`achievement-census`) via `BuildDependentCharacterJobs`.
 - When Lodestone is rate-limited, workers automatically switch dual-source queues (`id-sweep`, `character-census`) to Tomestone while pausing Lodestone-exclusive queues.
+
 ### Rate Limiting in Proxy Mode
 
 All proxy Tomestone clients in a process share a single `RequestRateController` at the configured `rate_limit` (default 5 req/s). The `RequestRateController` manages the token bucket, configured/clamped rate, and global consecutive-429 adaptive backoff state. This prevents N proxy goroutines from each creating an independent 5 req/s bucket, which would allow N×5 requests/second. Tokens are charged per HTTP attempt — each retry acquires a new token.

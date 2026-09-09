@@ -316,13 +316,13 @@ cronjobs:
     volumes: []
   instances:
     - name: publish-character
-      schedule: "*/4 * * * *"
+      schedule: "*/2 * * * *"
       command:
         - /app/ffxiv-census
         - publish
         - character-census
         - --limit
-        - "500"
+        - "600"
         - --older-than
         - "0"
 
@@ -334,7 +334,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --count
-        - "400"
+        - "700"
         - --chunk-size
         - "1"
 
