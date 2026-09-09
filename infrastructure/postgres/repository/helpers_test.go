@@ -50,12 +50,7 @@ func newTestDriver(t *testing.T) contract.DatabaseDriver {
 	required := os.Getenv("REQUIRE_TEST_POSTGRES") == "1"
 	// TEST_POSTGRES_PORT lets a developer point the tests at a Postgres on a
 	// non-default local port (e.g. a dedicated container on 5433).
-	port := 5432
-	if v := os.Getenv("TEST_POSTGRES_PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil && p > 0 {
-			port = p
-		}
-	}
+	port := testPostgresPort()
 
 	ctx := context.Background()
 	adminCfg := &config.PostgresConfig{
@@ -210,4 +205,41 @@ func mustGetProxy(t *testing.T, repo contract.ProxyRepository, id int64) *contra
 		t.Fatalf("proxy %d missing", id)
 	}
 	return p
+}
+
+// testPostgresPort resolves the Postgres port repository tests connect to.
+// An explicit TEST_POSTGRES_PORT wins when it parses as a positive integer;
+// otherwise the default is 5433 — the dedicated test container port — so a
+// developer's own 5432 server is never a fallback target.
+func testPostgresPort() int {
+	if v := os.Getenv("TEST_POSTGRES_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			return p
+		}
+	}
+	return 5433
+}
+
+func TestPostgresPortDefaultsTo5433(t *testing.T) {
+	t.Setenv("TEST_POSTGRES_PORT", "")
+	if got := testPostgresPort(); got != 5433 {
+		t.Fatalf("default port = %d, want 5433 (a developer's 5432 server is never a fallback target)", got)
+	}
+
+	t.Setenv("TEST_POSTGRES_PORT", "5555")
+	if got := testPostgresPort(); got != 5555 {
+		t.Fatalf("explicit port = %d, want 5555", got)
+	}
+
+	t.Setenv("TEST_POSTGRES_PORT", "5432")
+	if got := testPostgresPort(); got != 5432 {
+		t.Fatalf("explicit port = %d, want 5432 (explicit env still wins)", got)
+	}
+
+	for _, garbage := range []string{"nope", "0", "-1"} {
+		t.Setenv("TEST_POSTGRES_PORT", garbage)
+		if got := testPostgresPort(); got != 5433 {
+			t.Fatalf("TEST_POSTGRES_PORT=%q: port = %d, want default 5433", garbage, got)
+		}
+	}
 }

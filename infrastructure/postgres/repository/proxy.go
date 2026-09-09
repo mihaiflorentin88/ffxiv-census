@@ -301,27 +301,6 @@ func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL 
 	return p, nil
 }
 
-func (r *ProxyRepository) ExtendLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (bool, error) {
-	db, err := r.driver.Acquire(ctx)
-	if err != nil {
-		return false, err
-	}
-	now := time.Now().UTC()
-	expireThreshold := now.Add(-lockTTL)
-	result, err := db.ExecContext(ctx,
-		`UPDATE proxies SET locked_at = $1, updated_at = $2
-		WHERE id = $3 AND locked_by = $4 AND locked_at >= $5`,
-		now, now, id, owner, expireThreshold)
-	if err != nil {
-		return false, fmt.Errorf("proxy extend lock: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("proxy extend lock rows: %w", err)
-	}
-	return rows > 0, nil
-}
-
 func (r *ProxyRepository) ReleaseProxy(ctx context.Context, id int64, owner string) error {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {

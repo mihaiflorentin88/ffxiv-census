@@ -103,22 +103,34 @@ func StallingTCP(t *testing.T) (addr string) {
 
 // HTTPProxy is a minimal local HTTP proxy. It counts CONNECT tunnels and
 // absolute-form forwarded requests separately and tracks open client
-// connections so tests can observe teardown.
+// connections so tests can observe teardown. With RefuseStatus set it
+// accepts TCP but answers every CONNECT and forwarded request with that
+// status instead of reaching the target.
 type HTTPProxy struct {
-	ln       net.Listener
-	Connects atomic.Int64
-	Forwards atomic.Int64
-	Open     atomic.Int64
+	ln           net.Listener
+	RefuseStatus int
+	Connects     atomic.Int64
+	Forwards     atomic.Int64
+	Open         atomic.Int64
 }
 
 // NewHTTPProxy starts the proxy and registers its shutdown with the test.
-func NewHTTPProxy(t *testing.T) *HTTPProxy {
+func NewHTTPProxy(t *testing.T) *HTTPProxy { return newHTTPProxy(t, 0) }
+
+// NewRefusingHTTPProxy starts a proxy that accepts TCP and answers every
+// CONNECT (and absolute-form request) with status instead of tunneling,
+// for CONNECT-refusal regressions.
+func NewRefusingHTTPProxy(t *testing.T, status int) *HTTPProxy {
+	return newHTTPProxy(t, status)
+}
+
+func newHTTPProxy(t *testing.T, refuseStatus int) *HTTPProxy {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	p := &HTTPProxy{ln: ln}
+	p := &HTTPProxy{ln: ln, RefuseStatus: refuseStatus}
 	t.Cleanup(func() { _ = ln.Close() })
 	go p.serve()
 	return p
@@ -166,12 +178,27 @@ func (p *HTTPProxy) handle(conn net.Conn) {
 		}
 		if req.Method == http.MethodConnect {
 			p.Connects.Add(1)
+			if p.RefuseStatus != 0 {
+				p.reject(conn)
+				return
+			}
 			p.tunnel(conn, req.Host)
 			return
 		}
 		p.Forwards.Add(1)
+		if p.RefuseStatus != 0 {
+			p.reject(conn)
+			return
+		}
 		p.forward(conn, req)
 	}
+}
+
+// reject answers the request with the configured refusal status and closes
+// the connection; the deferred close in handle runs right after.
+func (p *HTTPProxy) reject(conn net.Conn) {
+	_, _ = fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nConnection: close\r\n\r\n",
+		p.RefuseStatus, http.StatusText(p.RefuseStatus))
 }
 
 func (p *HTTPProxy) tunnel(conn net.Conn, host string) {
@@ -220,31 +247,38 @@ func relay(a, b net.Conn) {
 }
 
 // SOCKS4Proxy is a minimal local SOCKS4 server. With Stall set it accepts
-// TCP but never answers the handshake.
+// TCP but never answers the handshake. With GarbageVN set it answers the
+// handshake with a malformed nonzero version byte.
 type SOCKS4Proxy struct {
-	ln       net.Listener
-	Stall    bool
-	Connects atomic.Int64
-	Open     atomic.Int64
+	ln        net.Listener
+	Stall     bool
+	GarbageVN bool
+	Connects  atomic.Int64
+	Open      atomic.Int64
 
 	mu     sync.Mutex
 	target string
 }
 
 // NewSOCKS4Proxy starts a SOCKS4 server that tunnels to the requested target.
-func NewSOCKS4Proxy(t *testing.T) *SOCKS4Proxy { return newSOCKS4Proxy(t, false) }
+func NewSOCKS4Proxy(t *testing.T) *SOCKS4Proxy { return newSOCKS4Proxy(t, false, false) }
 
 // NewStalledSOCKS4 starts a SOCKS4 server that accepts TCP and never answers
 // the handshake.
-func NewStalledSOCKS4(t *testing.T) *SOCKS4Proxy { return newSOCKS4Proxy(t, true) }
+func NewStalledSOCKS4(t *testing.T) *SOCKS4Proxy { return newSOCKS4Proxy(t, true, false) }
 
-func newSOCKS4Proxy(t *testing.T, stall bool) *SOCKS4Proxy {
+// NewGarbageVNSOCKS4 starts a SOCKS4 server that answers the handshake with
+// a nonzero version byte (and a granted status byte), for malformed-reply
+// regressions.
+func NewGarbageVNSOCKS4(t *testing.T) *SOCKS4Proxy { return newSOCKS4Proxy(t, false, true) }
+
+func newSOCKS4Proxy(t *testing.T, stall, garbageVN bool) *SOCKS4Proxy {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	p := &SOCKS4Proxy{ln: ln, Stall: stall}
+	p := &SOCKS4Proxy{ln: ln, Stall: stall, GarbageVN: garbageVN}
 	t.Cleanup(func() { _ = ln.Close() })
 	go p.serve()
 	return p
@@ -293,6 +327,12 @@ func (p *SOCKS4Proxy) handle(conn net.Conn) {
 
 	if p.Stall {
 		_, _ = io.Copy(io.Discard, conn)
+		return
+	}
+	if p.GarbageVN {
+		// Malformed reply: the version byte must be null per the SOCKS4
+		// spec; the granted status byte must not make the client accept it.
+		_, _ = conn.Write([]byte{0x01, 0x5A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return
 	}
 

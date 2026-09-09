@@ -1,7 +1,9 @@
 package httpclient
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -77,11 +79,13 @@ var proxyDialer = &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Se
 // through the given proxy URL. Supported schemes are http, https, socks5,
 // and socks4. The transport starts from a clone of the standard library's
 // DefaultTransport with the inherited ProxyFromEnvironment explicitly
-// cleared; only the selected proxy is assigned.
+// cleared; the selected proxy is applied by the dial function.
 //
-// timeout bounds the SOCKS4 dial and handshake; other schemes are bounded by
-// the caller's client timeout and request context. Dial and negotiation
-// failures are wrapped in *ProxyDialError.
+// HTTP and HTTPS proxies complete their CONNECT handshake inside the dial
+// function, so a proxy that answers CONNECT with a non-2xx status is a
+// proven proxy failure. timeout bounds the SOCKS4 dial and handshake; other
+// schemes are bounded by the caller's client timeout and request context.
+// Dial and negotiation failures are wrapped in *ProxyDialError.
 func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport, error) {
 	if proxyURL == "" {
 		return nil, errors.New("proxy URL is empty")
@@ -96,14 +100,7 @@ func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport,
 
 	switch u.Scheme {
 	case "http", "https":
-		base.Proxy = http.ProxyURL(u)
-		base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := proxyDialer.DialContext(ctx, network, addr)
-			if err != nil {
-				return nil, &ProxyDialError{Reason: "dial", Err: err}
-			}
-			return conn, nil
-		}
+		base.DialContext = httpConnectDialContext(u, base)
 	case "socks5":
 		dialer, err := xproxy.FromURL(u, xproxy.Direct)
 		if err != nil {
@@ -136,6 +133,107 @@ func NewDirectTransport() *http.Transport {
 	base.Proxy = nil
 	return base
 }
+
+// httpConnectDialContext returns the transport dial function for HTTP and
+// HTTPS proxies. It performs the CONNECT handshake itself instead of leaving
+// it to net/http, so every proxy-side failure — the TCP dial, TLS to the
+// proxy, a request write or response read error, and a non-2xx CONNECT
+// refusal — is wrapped in *ProxyDialError and classifies as a conclusive
+// proxy failure. Success yields the established tunnel to addr.
+func httpConnectDialContext(u *url.URL, transport *http.Transport) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		proxyPort := u.Port()
+		if proxyPort == "" {
+			proxyPort = "80"
+			if u.Scheme == "https" {
+				proxyPort = "443"
+			}
+		}
+		conn, err := proxyDialer.DialContext(ctx, network, net.JoinHostPort(u.Hostname(), proxyPort))
+		if err != nil {
+			return nil, &ProxyDialError{Reason: "dial", Err: err}
+		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
+
+		if d, ok := ctx.Deadline(); ok {
+			_ = conn.SetDeadline(d)
+		}
+
+		if u.Scheme == "https" {
+			cfg := transport.TLSClientConfig.Clone()
+			if cfg == nil {
+				cfg = &tls.Config{}
+			}
+			if cfg.ServerName == "" {
+				cfg.ServerName = u.Hostname()
+			}
+			tconn := tls.Client(conn, cfg)
+			if err := tconn.HandshakeContext(ctx); err != nil {
+				_ = conn.Close()
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
+				return nil, &ProxyDialError{Reason: "proxy tls", Err: fmt.Errorf("tls handshake with proxy: %w", err)}
+			}
+			conn = tconn
+		}
+
+		req := &http.Request{
+			Method: http.MethodConnect,
+			URL:    &url.URL{Opaque: addr},
+			Host:   addr,
+			Header: make(http.Header),
+		}
+		if u.User != nil {
+			password, _ := u.User.Password()
+			req.SetBasicAuth(u.User.Username(), password)
+		}
+		if err := req.Write(conn); err != nil {
+			_ = conn.Close()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, &ProxyDialError{Reason: "connect", Err: fmt.Errorf("write CONNECT: %w", err)}
+		}
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, req)
+		if err != nil {
+			_ = conn.Close()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, &ProxyDialError{Reason: "connect", Err: fmt.Errorf("read CONNECT response: %w", err)}
+		}
+		if resp.StatusCode/100 != 2 {
+			_ = conn.Close()
+			return nil, &ProxyDialError{Reason: "connect", Err: fmt.Errorf("proxy refused CONNECT with %s", resp.Status)}
+		}
+
+		// Success: clear the handshake deadline; the HTTP request context
+		// now owns the connection. The reply has no body, so tunnel bytes
+		// continue on the same stream; anything the header reader already
+		// buffered must not be lost.
+		_ = conn.SetDeadline(time.Time{})
+		if err := ctx.Err(); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if br.Buffered() != 0 {
+			return &tunnelConn{Conn: conn, r: br}, nil
+		}
+		return conn, nil
+	}
+}
+
+// tunnelConn fuses the tunnel connection with CONNECT-response bytes the
+// header reader already buffered, so tunnel data is never lost.
+type tunnelConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *tunnelConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // socks4DialContext returns the transport dial function for SOCKS4 proxies.
 // It performs a real bounded handshake: the TCP dial and every handshake
@@ -207,6 +305,10 @@ func socks4DialContext(u *url.URL, timeout time.Duration) func(ctx context.Conte
 				return nil, ctxErr
 			}
 			return nil, &ProxyDialError{Reason: "socks4 handshake", Err: fmt.Errorf("read reply: %w", err)}
+		}
+		if reply[0] != 0x00 { // the SOCKS4 reply version byte must be null
+			_ = conn.Close()
+			return nil, &ProxyDialError{Reason: "socks4 negotiation", Err: fmt.Errorf("unexpected reply version %d", reply[0])}
 		}
 		if reply[1] != 0x5A { // 0x5A (90) is granted
 			_ = conn.Close()

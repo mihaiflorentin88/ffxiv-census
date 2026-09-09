@@ -79,6 +79,30 @@ func TestNewProxyTransport_FailedProxyLeavesTargetUntouched(t *testing.T) {
 	}
 }
 
+func TestNewProxyTransport_HTTPConnectRefusedIsProxyDialError(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusBadGateway} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			target, targetHits := proxytest.TLSTarget(t, `{"ip":"203.0.113.9"}`)
+			p := proxytest.NewRefusingHTTPProxy(t, status)
+
+			client := proxiedClient(t, "http://"+p.Addr(), target, fixtureTimeout)
+
+			_, err := client.Get(target.URL)
+			if err == nil {
+				t.Fatal("expected error for a refused CONNECT")
+			}
+			var dialErr *ProxyDialError
+			if !errors.As(err, &dialErr) {
+				t.Fatalf("error = %v, want *ProxyDialError", err)
+			}
+			if got := targetHits.Load(); got != 0 {
+				t.Fatalf("target request count = %d, want 0", got)
+			}
+			p.WaitConnsClosed(t, 2*time.Second)
+		})
+	}
+}
+
 func TestNewProxyTransport_UnsupportedScheme(t *testing.T) {
 	if _, err := NewProxyTransport("ftp://127.0.0.1:21", fixtureTimeout); err == nil {
 		t.Fatal("expected error for unsupported scheme")
@@ -210,6 +234,29 @@ func TestNewProxyTransport_SOCKS4HandshakeStallIsBounded(t *testing.T) {
 	var dialErr *ProxyDialError
 	if !errors.As(err, &dialErr) {
 		t.Fatalf("error = %v, want *ProxyDialError", err)
+	}
+	p.WaitConnsClosed(t, 2*time.Second)
+}
+
+func TestNewProxyTransport_SOCKS4GarbageVNIsNegotiationFailure(t *testing.T) {
+	p := proxytest.NewGarbageVNSOCKS4(t)
+
+	transport, err := NewProxyTransport("socks4://"+p.Addr(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("NewProxyTransport: %v", err)
+	}
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+
+	_, err = client.Get("https://192.0.2.1:443/")
+	if err == nil {
+		t.Fatal("expected error for a malformed SOCKS4 reply version")
+	}
+	var dialErr *ProxyDialError
+	if !errors.As(err, &dialErr) {
+		t.Fatalf("error = %v, want *ProxyDialError", err)
+	}
+	if dialErr.Reason != "socks4 negotiation" {
+		t.Fatalf("reason = %q, want %q", dialErr.Reason, "socks4 negotiation")
 	}
 	p.WaitConnsClosed(t, 2*time.Second)
 }

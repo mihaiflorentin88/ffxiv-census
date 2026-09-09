@@ -271,27 +271,6 @@ func (f *FakeProxyRepository) ClaimProxy(_ context.Context, owner string, lockTT
 	return best, nil
 }
 
-func (f *FakeProxyRepository) ExtendLock(_ context.Context, id int64, owner string, lockTTL time.Duration) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.proxies[id]
-	if !ok {
-		return false, nil
-	}
-	if p.LockedBy == nil || *p.LockedBy != owner {
-		return false, nil
-	}
-	now := time.Now().UTC()
-	expireThreshold := now.Add(-lockTTL)
-	if p.LockedAt != nil && p.LockedAt.Before(expireThreshold) {
-		return false, nil // lock expired
-	}
-	p.LockedAt = &now
-	p.UpdatedAt = now
-	f.proxies[id] = p
-	return true, nil
-}
-
 func (f *FakeProxyRepository) ReleaseProxy(_ context.Context, id int64, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -622,7 +601,6 @@ func (f *FakeProxyRepository) RecordConsumerFailure(_ context.Context, rec contr
 	p.GeneralHealthy = false
 	p.Status = status
 	p.LastCompletedAt = &now
-	p.LastScannedAt = &now
 	p.FailCount = newFailCount
 	p.RecoveryStep = update.RecoveryStep
 	p.NextAttemptAt = &nextAttempt

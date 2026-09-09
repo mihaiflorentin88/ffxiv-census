@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -65,8 +66,8 @@ func TestHealthCheck_SuccessThroughProxy(t *testing.T) {
 	if latency < 0 {
 		t.Fatalf("latency = %d, want non-negative", latency)
 	}
-	if got := p.Forwards.Load(); got != 1 {
-		t.Fatalf("proxy forward count = %d, want 1", got)
+	if got := p.Connects.Load(); got != 1 {
+		t.Fatalf("proxy CONNECT count = %d, want 1", got)
 	}
 	if got := targetHits.Load(); got != 1 {
 		t.Fatalf("target request count = %d, want 1", got)
@@ -82,6 +83,22 @@ func TestHealthCheck_ProxyRefusedIsCheckProxy(t *testing.T) {
 	requireKind(t, err, contract.CheckProxy)
 	if got := targetHits.Load(); got != 0 {
 		t.Fatalf("target request count = %d, want 0 (failed proxy must not touch target)", got)
+	}
+}
+
+func TestHealthCheck_HTTPConnectRefusedIsCheckProxy(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusBadGateway} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			target, targetHits := httpTarget(t, http.StatusOK, `{"ip":"203.0.113.9"}`)
+			p := proxytest.NewRefusingHTTPProxy(t, status)
+			h := NewHealthChecker(target.URL, fixtureBudget, nil)
+
+			_, err := h.Check(context.Background(), "http", "127.0.0.1", p.Port())
+			requireKind(t, err, contract.CheckProxy)
+			if got := targetHits.Load(); got != 0 {
+				t.Fatalf("target request count = %d, want 0", got)
+			}
+		})
 	}
 }
 

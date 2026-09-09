@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,6 +73,22 @@ func TestChecker_ProxyRefusedIsCheckProxy(t *testing.T) {
 	requireKind(t, err, contract.CheckProxy)
 	if got := targetHits.Load(); got != 0 {
 		t.Fatalf("target request count = %d, want 0", got)
+	}
+}
+
+func TestChecker_HTTPConnectRefusedIsCheckProxy(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusBadGateway} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			target, targetHits := httpTarget(t, http.StatusOK, "<html>ok</html>")
+			p := proxytest.NewRefusingHTTPProxy(t, status)
+			c := NewChecker(target.URL, fixtureBudget, nil)
+
+			_, err := c.Check(context.Background(), "http", "127.0.0.1", p.Port())
+			requireKind(t, err, contract.CheckProxy)
+			if got := targetHits.Load(); got != 0 {
+				t.Fatalf("target request count = %d, want 0", got)
+			}
+		})
 	}
 }
 
