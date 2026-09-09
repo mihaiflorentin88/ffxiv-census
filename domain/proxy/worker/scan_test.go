@@ -910,6 +910,9 @@ func TestRunScan_PanicReleasesLeaseAndCapacity(t *testing.T) {
 	if !row.GeneralHealthy || row.FailCount != 0 {
 		t.Fatalf("panic marked the proxy dead: healthy=%v fails=%d", row.GeneralHealthy, row.FailCount)
 	}
+	// The panicked row is the only releasing row in this test, so the next
+	// release event is deterministically the panicked branch's ReleaseScan.
+	waitSignal(t, probe.releaseEvents, 2*time.Second)
 }
 
 func TestRunScan_NoDoubleOwnershipUnderContinuousReadmission(t *testing.T) {
