@@ -107,7 +107,6 @@ type scanResult struct {
 	queue      contract.ScanQueue
 	latency    int
 	err        error
-	started    time.Time     // wall clock at the network attempt
 	duration   time.Duration // check duration measured around the checker call
 	startSnap  contract.GuardSnapshot
 	finishSnap contract.GuardSnapshot
@@ -224,7 +223,6 @@ func (w *ScanWorker) runCheck(ctx context.Context, job scanJob) (res scanResult)
 		}
 	}()
 	started := time.Now()
-	res.started = started
 	res.startSnap = w.guard.Snapshot()
 	res.latency, res.err = w.checker.Check(ctx, job.lease.Record.Protocol, job.lease.Record.IP, job.lease.Record.Port)
 	res.duration = time.Since(started)

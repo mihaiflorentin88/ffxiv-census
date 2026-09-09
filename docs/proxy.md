@@ -197,7 +197,7 @@ Experiment/operations SQL over the same database (no separate telemetry subsyste
 
 ## Measured local exercise (2026-09-09)
 
-Throwaway fixtures on one Apple M1 host: local TLS IP-echo target, HTTP CONNECT / HTTPS CONNECT / SOCKS4 / SOCKS5 proxies (100 ms forwarding delay), immediate-refusal and 10 s-stall populations; 10 000 seeded rows per run (6000 delayed-success, 3900 refusal, 100 stall); `verification_interval` 10 s, all other defaults; per-process `-c 30`; identical policy and 150 s window per run; scanners ran as Linux containers, one run per dataset reset. Accepted completions counted from `accepted=true` log events only.
+Throwaway fixtures on one Apple M1 host: local TLS IP-echo target, HTTP CONNECT / HTTPS CONNECT / SOCKS4 / SOCKS5 proxies (100 ms forwarding delay), immediate-refusal and 10 s-stall populations; 10 000 seeded rows per run (6000 delayed-success, 3900 refusal, 100 stall); `verification_interval` 10 s, all other defaults; per-process `-c 30`; identical policy and measurement method per run; scanners ran as Linux containers, one run per dataset reset. Accepted completions counted from `accepted=true` log events only. Printed rates divide accepted completions by the full per-run wall-clock span from scanner start to shutdown completion (168 s, 171 s and 172 s respectively), which includes the startup ramp and the graceful-shutdown drain tail; the periodic CPU, connection and progress samples were taken inside the 150 s steady window and do not set the denominator.
 
 | Scanners (-c 30 each) | Accepted completions/s | Verify lateness avg/p95 | Postgres container CPU | Scanner CPU each |
 |---|---|---|---|---|
