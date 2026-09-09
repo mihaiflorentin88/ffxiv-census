@@ -19,3 +19,4 @@ k8s/charts/*.tgz
 backups/
 *.sql.gz
 .scratch
+.worktrees/
