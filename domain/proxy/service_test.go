@@ -97,27 +97,43 @@ func TestService_ProcessScanProxy_BecomesActive(t *testing.T) {
 		t.Fatalf("InsertIfAbsent: inserted=%v err=%v", inserted, err)
 	}
 
+	// First scan fails: the proxy must go inactive with fail_count 1.
+	checker := &fakeChecker{err: errors.New("lodestone down")}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
+
 	proxies, _ := repo.ListForScan(context.Background(), 10)
 	if len(proxies) != 1 {
 		t.Fatalf("expected 1 scannable proxy, got %d", len(proxies))
 	}
-
-	// ProcessScanProxy now takes the already-selected record directly.
-	checker := &fakeChecker{latency: 150}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
-
-	err = svc.ProcessScanProxy(context.Background(), &proxies[0])
-	if err != nil {
-		t.Fatalf("ProcessScanProxy: %v", err)
+	if err := svc.ProcessScanProxy(context.Background(), &proxies[0]); err != nil {
+		t.Fatalf("ProcessScanProxy (failing): %v", err)
+	}
+	p, _ := repo.Get(context.Background(), proxies[0].ID)
+	if p.Status != contract.ProxyStatusInactive || p.FailCount != 1 {
+		t.Fatalf("after failed scan: status=%s fail_count=%d, want inactive/1", p.Status, p.FailCount)
 	}
 
-	p, _ := repo.Get(context.Background(), proxies[0].ID)
+	// Proxy recovers: a successful scan must reset fail_count to 0.
+	checker.err = nil
+	checker.latency = 150
+	proxies, _ = repo.ListForScan(context.Background(), 10)
+	if len(proxies) != 1 {
+		t.Fatalf("expected the recovered proxy to be scannable again, got %d", len(proxies))
+	}
+	if err := svc.ProcessScanProxy(context.Background(), &proxies[0]); err != nil {
+		t.Fatalf("ProcessScanProxy (recovering): %v", err)
+	}
+
+	p, _ = repo.Get(context.Background(), proxies[0].ID)
 	if p.Status != contract.ProxyStatusActive {
 		t.Fatalf("expected active, got %s", p.Status)
 	}
 	if p.LatencyMS == nil || *p.LatencyMS != 150 {
 		t.Fatalf("expected latency 150, got %v", p.LatencyMS)
+	}
+	if p.FailCount != 0 {
+		t.Fatalf("expected fail_count reset to 0 on success, got %d", p.FailCount)
 	}
 }
 
