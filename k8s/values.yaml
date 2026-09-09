@@ -334,7 +334,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --count
-        - "300"
+        - "400"
         - --chunk-size
         - "1"
 
