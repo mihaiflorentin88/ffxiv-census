@@ -1,7 +1,7 @@
 # Adaptive, replica-scalable proxy scanning
 
 Date: 2026-09-09
-Status: Design sections approved; written specification awaiting user review.
+Status: Written specification approved by the user on 2026-09-09; implementation plan pending review.
 
 ## Objective
 
