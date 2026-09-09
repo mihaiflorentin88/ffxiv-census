@@ -173,6 +173,7 @@ func TestCharacterCensus_LodestoneError_FallbackToTomestone_Success(t *testing.T
 		ID:            200,
 		Name:          "Fallback Hero",
 		Server:        "Gilgamesh",
+		Race:          "Hyur",
 		FreeCompanyID: &fcID,
 	})
 
@@ -206,6 +207,7 @@ func TestCharacterCensus_LodestonePaused_UsesTomestoneDirectly(t *testing.T) {
 		ID:     300,
 		Name:   "Direct Tomestone Hero",
 		Server: "Leviathan",
+		Race:   "Hyur",
 	})
 
 	next, err := h.Handle(context.Background(), characterPayload(300))
@@ -315,5 +317,48 @@ func TestCharacterCensus_AllProvidersRateLimited_ReturnsError(t *testing.T) {
 	_, err := h.Handle(context.Background(), characterPayload(600))
 	if err == nil {
 		t.Fatal("expected error when all providers are rate limited")
+	}
+}
+
+// A character whose profile is hidden on Lodestone surfaces on the Tomestone
+// fallback paths with no race data. Both fallback paths must skip the
+// character (no store, no chained jobs, no queue error).
+func TestCharacterCensus_LodestoneError_FallbackToTomestone_HiddenProfileSkipped(t *testing.T) {
+	h, ls, ts, _, chars := newTestDualCharacterCensus(t)
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return nil, errors.New("lodestone 403 access restricted")
+	}
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID: 610, Name: "Restricted Hero", Server: "Odin", Datacenter: "Chaos", Gender: "male",
+	})
+
+	next, err := h.Handle(context.Background(), characterPayload(610))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 0 {
+		t.Errorf("next jobs = %+v, want none for hidden profile", next)
+	}
+	if got, _ := chars.Get(context.Background(), 610); got != nil {
+		t.Errorf("hidden-profile character was stored: %+v", got)
+	}
+}
+
+func TestCharacterCensus_LodestonePaused_UsesTomestoneDirectly_HiddenProfileSkipped(t *testing.T) {
+	h, _, ts, limiter, chars := newTestDualCharacterCensus(t)
+	limiter.Pause(contract.ProviderLodestone, 10*time.Minute, "lodestone paused")
+	ts.SetCharacter(&contract.TomestoneCharacter{
+		ID: 620, Name: "Restricted Hero", Server: "Odin", Datacenter: "Chaos", Gender: "male", Race: "----",
+	})
+
+	next, err := h.Handle(context.Background(), characterPayload(620))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(next) != 0 {
+		t.Errorf("next jobs = %+v, want none for hidden profile", next)
+	}
+	if got, _ := chars.Get(context.Background(), 620); got != nil {
+		t.Errorf("hidden-profile character was stored: %+v", got)
 	}
 }

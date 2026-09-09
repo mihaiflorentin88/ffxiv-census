@@ -45,6 +45,21 @@ func NewService(
 	}
 }
 
+// ErrProfileHidden is returned by the upsert entry points when a character
+// carries no usable race data. On Lodestone this happens for private profiles
+// (no race block at all), access-restricted profiles (HTTP 403, surfaced via
+// the Tomestone fallback with an empty race), and suppressed demographics
+// (race/clan rendered as "----"). Such characters exist but have no
+// censusable demographics: callers skip them without storing and without
+// failing the job.
+var ErrProfileHidden = errors.New("character profile hidden: no race data")
+
+// hiddenRace reports whether a profile's race is unusable for the census.
+func hiddenRace(race string) bool {
+	race = strings.TrimSpace(race)
+	return race == "" || race == "----"
+}
+
 // SetConfig configures max level and expansion milestones.
 func (s *Service) SetConfig(maxLevel uint32, expansions []ExpansionConfig) {
 	s.mu.Lock()
@@ -147,10 +162,14 @@ func (s *Service) GetCharacter(ctx context.Context, charID uint32) (*contract.Ch
 
 // UpsertCharacter converts a Lodestone character into a CharacterRecord and
 // persists it (profile + jobs) atomically. Region is derived from the
-// datacenter. nil race/tribe/grand-company are tolerated (stored empty).
+// datacenter. A profile without usable race data returns ErrProfileHidden and
+// is not persisted; an existing row keeps its last known good data.
 func (s *Service) UpsertCharacter(ctx context.Context, char *contract.CharacterProfile) error {
 	if char == nil {
 		return errors.New("cannot upsert nil character")
+	}
+	if hiddenRace(char.Race) {
+		return ErrProfileHidden
 	}
 	if strings.TrimSpace(char.Name) == "" {
 		return fmt.Errorf("cannot upsert character %d: name is empty", char.ID)
@@ -162,9 +181,13 @@ func (s *Service) UpsertCharacter(ctx context.Context, char *contract.CharacterP
 
 // UpsertTomestoneCharacter converts a Tomestone character into a CharacterRecord and
 // persists it (profile + jobs + gear) atomically. Region is derived from the datacenter.
+// A profile without usable race data returns ErrProfileHidden and is not persisted.
 func (s *Service) UpsertTomestoneCharacter(ctx context.Context, char *contract.TomestoneCharacter) error {
 	if char == nil {
 		return errors.New("cannot upsert nil tomestone character")
+	}
+	if hiddenRace(char.Race) {
+		return ErrProfileHidden
 	}
 	if strings.TrimSpace(char.Name) == "" {
 		return fmt.Errorf("cannot upsert character %d: name is empty", char.ID)

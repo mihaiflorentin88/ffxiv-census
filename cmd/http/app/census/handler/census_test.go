@@ -79,13 +79,13 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, w
 func TestCensusController_Latest(t *testing.T) {
 	rig := newRig(t)
 	rig.seed(t, &contract.CharacterProfile{
-		ID: 1, Name: "Tataru", World: "Ultros", Datacenter: "Primal", Gender: 2,
+		ID: 1, Name: "Tataru", World: "Ultros", Datacenter: "Primal", Gender: 2, Race: "Lalafell",
 		ClassJobs: []contract.ClassJobRecord{
 			{ClassJobID: 1, Name: "Gladiator", Level: 100},
 		},
 	})
 	rig.seed(t, &contract.CharacterProfile{
-		ID: 2, Name: "Moen", World: "Ultros", Datacenter: "Primal",
+		ID: 2, Name: "Moen", World: "Ultros", Datacenter: "Primal", Race: "Lalafell",
 		ClassJobs: []contract.ClassJobRecord{
 			{ClassJobID: 1, Name: "Gladiator", Level: 90},
 		},
@@ -137,7 +137,7 @@ func TestCensusController_Latest_NilService(t *testing.T) {
 func TestCensusController_List(t *testing.T) {
 	rig := newRig(t)
 	for _, id := range []uint32{1, 2, 3} {
-		rig.seed(t, &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal"})
+		rig.seed(t, &contract.CharacterProfile{ID: id, Name: "Char", World: "Ultros", Datacenter: "Primal", Race: "Hyur"})
 	}
 
 	tests := []struct {
@@ -282,7 +282,7 @@ func TestCensusController_Get(t *testing.T) {
 
 func TestCensusController_Get_NotFound(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "Char", World: "Ultros", Datacenter: "Primal"})
+	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "Char", World: "Ultros", Datacenter: "Primal", Race: "Hyur"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/census/characters/999", nil)
 	req.SetPathValue("id", "999")
@@ -303,9 +303,9 @@ func TestCensusController_Get_InvalidID(t *testing.T) {
 
 func TestCensusController_Breakdown(t *testing.T) {
 	rig := newRig(t)
-	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "A", World: "Ultros", Datacenter: "Primal"})
-	rig.seed(t, &contract.CharacterProfile{ID: 2, Name: "B", World: "Ultros", Datacenter: "Primal"})
-	rig.seed(t, &contract.CharacterProfile{ID: 3, Name: "C", World: "Moogle", Datacenter: "Chaos"})
+	rig.seed(t, &contract.CharacterProfile{ID: 1, Name: "A", World: "Ultros", Datacenter: "Primal", Race: "Hyur"})
+	rig.seed(t, &contract.CharacterProfile{ID: 2, Name: "B", World: "Ultros", Datacenter: "Primal", Race: "Hyur"})
+	rig.seed(t, &contract.CharacterProfile{ID: 3, Name: "C", World: "Moogle", Datacenter: "Chaos", Race: "Hyur"})
 
 	var groups []response.BreakdownGroup
 	decodeJSON(t, doGET(t, rig.c.Breakdown, "/api/v1/stats/breakdown?by=world"), &groups)

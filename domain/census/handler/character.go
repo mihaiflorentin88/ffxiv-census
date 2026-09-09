@@ -60,40 +60,14 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	if lodestoneAvail {
 		char, err := h.lodestone.FetchCharacter(ctx, p.CharacterID)
 		if err == nil {
-			// Skip characters with no race data (private profiles)
-			if char.Race == "" || char.Race == "----" {
-				h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "private_profile"))
-				return nil, nil
-			}
-			h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.String("fc_id", char.FreeCompanyID), slog.String("source", "lodestone"))
-			if err := h.census.UpsertCharacter(ctx, char); err != nil {
-				h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World), slog.Any("error", err))
-				return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, err)
-			}
-			h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", char.Name), slog.String("world", char.World))
-			next := BuildDependentCharacterJobs(char.ID)
-			h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
-			return next, nil
+			return h.finishLodestone(ctx, char)
 		}
 
 		if errors.Is(err, contract.ErrCharacterNotFound) {
 			if tomestoneAvail {
 				tChar, terr := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 				if terr == nil {
-					// Skip characters with no race data (private profiles)
-					if tChar.Race == "" || tChar.Race == "----" {
-						h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("reason", "private_profile"))
-						return nil, nil
-					}
-					h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-					if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-						h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-						return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
-					}
-					h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
-					next := BuildDependentCharacterJobs(tChar.ID)
-					h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
-					return next, nil
+					return h.finishTomestone(ctx, tChar)
 				}
 				if errors.Is(terr, contract.ErrCharacterNotFound) {
 					if derr := h.census.MarkCharacterDeleted(ctx, p.CharacterID, time.Now().UTC()); derr != nil {
@@ -120,15 +94,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 		if tomestoneAvail {
 			tChar, terr := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 			if terr == nil {
-				h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-				if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-					h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-					return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
-				}
-				h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
-				next := BuildDependentCharacterJobs(tChar.ID)
-				h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
-				return next, nil
+				return h.finishTomestone(ctx, tChar)
 			}
 			if errors.Is(terr, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.character_census.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("lodestone_error", err))
@@ -145,15 +111,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 	// Lodestone unavailable/paused, but Tomestone is available
 	tChar, err := h.tomestone.FetchCharacterProfile(ctx, p.CharacterID, false)
 	if err == nil {
-		h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-		if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-			h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-			return nil, fmt.Errorf("character-census upsert %d: %w", p.CharacterID, uerr)
-		}
-		h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("name", tChar.Name), slog.String("world", tChar.Server))
-		next := BuildDependentCharacterJobs(tChar.ID)
-		h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Int("chained", len(next)))
-		return next, nil
+		return h.finishTomestone(ctx, tChar)
 	}
 
 	if errors.Is(err, contract.ErrCharacterNotFound) {
@@ -163,4 +121,42 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 
 	h.logger.WarnContext(ctx, "handler.character_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("source", "tomestone"), slog.Any("error", err))
 	return nil, fmt.Errorf("character-census tomestone fetch %d: %w", p.CharacterID, err)
+}
+
+// finishLodestone stores a fetched Lodestone profile and chains dependent
+// jobs. A hidden profile (census.ErrProfileHidden) completes the job without
+// storing or chaining.
+func (h *CharacterCensus) finishLodestone(ctx context.Context, char *contract.CharacterProfile) ([]contract.QueueJob, error) {
+	h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(char.ID)), slog.String("name", char.Name), slog.String("world", char.World), slog.String("fc_id", char.FreeCompanyID), slog.String("source", "lodestone"))
+	if err := h.census.UpsertCharacter(ctx, char); err != nil {
+		if errors.Is(err, census.ErrProfileHidden) {
+			h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(char.ID)), slog.String("reason", "profile_hidden"))
+			return nil, nil
+		}
+		h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(char.ID)), slog.String("name", char.Name), slog.String("world", char.World), slog.Any("error", err))
+		return nil, fmt.Errorf("character-census upsert %d: %w", char.ID, err)
+	}
+	h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(char.ID)), slog.String("name", char.Name), slog.String("world", char.World))
+	next := BuildDependentCharacterJobs(char.ID)
+	h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(char.ID)), slog.Int("chained", len(next)))
+	return next, nil
+}
+
+// finishTomestone stores a fetched Tomestone profile and chains dependent
+// jobs. A hidden profile (census.ErrProfileHidden) completes the job without
+// storing or chaining.
+func (h *CharacterCensus) finishTomestone(ctx context.Context, char *contract.TomestoneCharacter) ([]contract.QueueJob, error) {
+	h.logger.DebugContext(ctx, "handler.character_census.fetched", slog.Uint64("character_id", uint64(char.ID)), slog.String("name", char.Name), slog.String("world", char.Server), slog.String("source", "tomestone"))
+	if err := h.census.UpsertTomestoneCharacter(ctx, char); err != nil {
+		if errors.Is(err, census.ErrProfileHidden) {
+			h.logger.DebugContext(ctx, "handler.character_census.skipped", slog.Uint64("character_id", uint64(char.ID)), slog.String("reason", "profile_hidden"))
+			return nil, nil
+		}
+		h.logger.ErrorContext(ctx, "handler.character_census.store_error", slog.Uint64("character_id", uint64(char.ID)), slog.String("name", char.Name), slog.String("world", char.Server), slog.Any("error", err))
+		return nil, fmt.Errorf("character-census upsert %d: %w", char.ID, err)
+	}
+	h.logger.DebugContext(ctx, "handler.character_census.stored", slog.Uint64("character_id", uint64(char.ID)), slog.String("name", char.Name), slog.String("world", char.Server))
+	next := BuildDependentCharacterJobs(char.ID)
+	h.logger.DebugContext(ctx, "handler.character_census.done", slog.Uint64("character_id", uint64(char.ID)), slog.Int("chained", len(next)))
+	return next, nil
 }

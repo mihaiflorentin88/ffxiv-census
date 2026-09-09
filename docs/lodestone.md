@@ -24,6 +24,14 @@ The Lodestone client serves as the **primary data provider for `character-census
 - **Character Census (`character-census`)**: Lodestone is fetched first as the authoritative source, falling back to Tomestone.gg when unresolvable or rate-limited.
 - **Achievement Census (`achievement-census`)**: Lodestone is the exclusive provider. When Lodestone is rate-limited or paused, achievement messages remain queued in RabbitMQ while dual-source event types continue on Tomestone.
 
+## Hidden profiles
+
+Three Lodestone states leave a character without usable race data; the parse yields an empty race (or `----`) and the census skips the character via `census.ErrProfileHidden` (see `docs/census.md` → Hidden profiles):
+
+- **Private profile** — HTTP 200 with "This character's profile is private"; the page has name and world but no race/tribe block.
+- **Access-restricted profile** — HTTP 403 "Access Restricted", deterministic per character (typically actioned accounts); the Tomestone fallback then serves the character with an empty race.
+- **Suppressed race/clan** — HTTP 200 but the Race/Clan block renders `----` placeholders.
+
 ## Rate limiting
 
 A token bucket (`golang.org/x/time/rate`) gates **every** method call: one token, refilled at `rate_limit` per second. Tokens are charged per HTTP attempt — each retry acquires a new token from the bucket.

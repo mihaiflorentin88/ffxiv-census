@@ -82,24 +82,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 		if p.Source == "tomestone" {
 			tChar, err := h.tomestone.FetchCharacterProfile(ctx, id, false)
 			if err == nil {
-				// Skip characters with no race data (private profiles)
-				if tChar.Race == "" || tChar.Race == "----" {
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "private_profile"))
-					}
-					if id >= p.To {
-						break
-					}
-					continue
+				jobs, serr := h.storeTomestone(ctx, id, tChar)
+				if serr != nil {
+					return nil, serr
 				}
-				if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-					h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-					return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
-				}
-				if h.logger.Enabled(ctx, slog.LevelDebug) {
-					h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-				}
-				jobs := BuildDependentCharacterJobs(tChar.ID)
 				next = append(next, jobs...)
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.Any("error", err))
@@ -112,24 +98,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 		} else if p.Source == "lodestone" {
 			lChar, err := h.lodestone.FetchCharacter(ctx, id)
 			if err == nil {
-				// Skip characters with no race data (private profiles)
-				if lChar.Race == "" || lChar.Race == "----" {
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "private_profile"))
-					}
-					if id >= p.To {
-						break
-					}
-					continue
+				jobs, serr := h.storeLodestone(ctx, id, lChar)
+				if serr != nil {
+					return nil, serr
 				}
-				if uerr := h.census.UpsertCharacter(ctx, lChar); uerr != nil {
-					h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
-					return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
-				}
-				if h.logger.Enabled(ctx, slog.LevelDebug) {
-					h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-				}
-				jobs := BuildDependentCharacterJobs(lChar.ID)
 				next = append(next, jobs...)
 			} else if !errors.Is(err, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.Any("error", err))
@@ -151,24 +123,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 			if lodestoneAvail {
 				lChar, err := h.lodestone.FetchCharacter(ctx, id)
 				if err == nil {
-					// Skip characters with no race data (private profiles)
-					if lChar.Race == "" || lChar.Race == "----" {
-						if h.logger.Enabled(ctx, slog.LevelDebug) {
-							h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "private_profile"))
-						}
-						if id >= p.To {
-							break
-						}
-						continue
+					jobs, serr := h.storeLodestone(ctx, id, lChar)
+					if serr != nil {
+						return nil, serr
 					}
-					if uerr := h.census.UpsertCharacter(ctx, lChar); uerr != nil {
-						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
-						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
-					}
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-					}
-					jobs := BuildDependentCharacterJobs(lChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
 					if h.logger.Enabled(ctx, slog.LevelDebug) {
@@ -179,24 +137,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					if tomestoneAvail {
 						tChar, terr := h.tomestone.FetchCharacterProfile(ctx, id, false)
 						if terr == nil {
-							// Skip characters with no race data (private profiles)
-							if tChar.Race == "" || tChar.Race == "----" {
-								if h.logger.Enabled(ctx, slog.LevelDebug) {
-									h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "private_profile"))
-								}
-								if id >= p.To {
-									break
-								}
-								continue
+							jobs, serr := h.storeTomestone(ctx, id, tChar)
+							if serr != nil {
+								return nil, serr
 							}
-							if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-								h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-								return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
-							}
-							if h.logger.Enabled(ctx, slog.LevelDebug) {
-								h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-							}
-							jobs := BuildDependentCharacterJobs(tChar.ID)
 							next = append(next, jobs...)
 						} else if errors.Is(terr, contract.ErrCharacterNotFound) {
 							if h.logger.Enabled(ctx, slog.LevelDebug) {
@@ -215,14 +159,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				// Lodestone unavailable, use Tomestone directly
 				tChar, err := h.tomestone.FetchCharacterProfile(ctx, id, false)
 				if err == nil {
-					if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
+					jobs, serr := h.storeTomestone(ctx, id, tChar)
+					if serr != nil {
+						return nil, serr
 					}
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-					}
-					jobs := BuildDependentCharacterJobs(tChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
 					if h.logger.Enabled(ctx, slog.LevelDebug) {
@@ -245,28 +185,20 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 			if tomestoneAvail {
 				tChar, err := h.tomestone.FetchCharacterProfile(ctx, id, false)
 				if err == nil {
-					if uerr := h.census.UpsertTomestoneCharacter(ctx, tChar); uerr != nil {
-						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.Any("error", uerr))
-						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
+					jobs, serr := h.storeTomestone(ctx, id, tChar)
+					if serr != nil {
+						return nil, serr
 					}
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", tChar.Name), slog.String("world", tChar.Server), slog.String("source", "tomestone"))
-					}
-					jobs := BuildDependentCharacterJobs(tChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
 					// Tomestone 404: character not indexed, try Lodestone
 					if lodestoneAvail {
 						lChar, lerr := h.lodestone.FetchCharacter(ctx, id)
 						if lerr == nil {
-							if uerr := h.census.UpsertCharacter(ctx, lChar); uerr != nil {
-								h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
-								return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
+							jobs, serr := h.storeLodestone(ctx, id, lChar)
+							if serr != nil {
+								return nil, serr
 							}
-							if h.logger.Enabled(ctx, slog.LevelDebug) {
-								h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-							}
-							jobs := BuildDependentCharacterJobs(lChar.ID)
 							next = append(next, jobs...)
 						} else if errors.Is(lerr, contract.ErrCharacterNotFound) {
 							if h.logger.Enabled(ctx, slog.LevelDebug) {
@@ -286,14 +218,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 					if lodestoneAvail {
 						lChar, lerr := h.lodestone.FetchCharacter(ctx, id)
 						if lerr == nil {
-							if uerr := h.census.UpsertCharacter(ctx, lChar); uerr != nil {
-								h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
-								return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
+							jobs, serr := h.storeLodestone(ctx, id, lChar)
+							if serr != nil {
+								return nil, serr
 							}
-							if h.logger.Enabled(ctx, slog.LevelDebug) {
-								h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-							}
-							jobs := BuildDependentCharacterJobs(lChar.ID)
 							next = append(next, jobs...)
 						} else if errors.Is(lerr, contract.ErrCharacterNotFound) {
 							// Lodestone is authoritative for existence: if it says 404, character doesn't exist.
@@ -313,14 +241,10 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 				// Tomestone unavailable/paused, Lodestone available: probe Lodestone directly
 				lChar, err := h.lodestone.FetchCharacter(ctx, id)
 				if err == nil {
-					if uerr := h.census.UpsertCharacter(ctx, lChar); uerr != nil {
-						h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.Any("error", uerr))
-						return nil, fmt.Errorf("id-sweep upsert %d: %w", id, uerr)
+					jobs, serr := h.storeLodestone(ctx, id, lChar)
+					if serr != nil {
+						return nil, serr
 					}
-					if h.logger.Enabled(ctx, slog.LevelDebug) {
-						h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", lChar.Name), slog.String("world", lChar.World), slog.String("source", "lodestone"))
-					}
-					jobs := BuildDependentCharacterJobs(lChar.ID)
 					next = append(next, jobs...)
 				} else if errors.Is(err, contract.ErrCharacterNotFound) {
 					if h.logger.Enabled(ctx, slog.LevelDebug) {
@@ -339,4 +263,46 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 	}
 	h.logger.DebugContext(ctx, "handler.id_sweep.done", slog.Uint64("from", uint64(p.From)), slog.Uint64("to", uint64(p.To)), slog.Int("discovered", len(next)))
 	return next, nil
+}
+
+// storeLodestone persists a discovered Lodestone character and returns its
+// dependent jobs. Hidden profiles (census.ErrProfileHidden) are skipped: the
+// character exists but has no censusable demographics, so nothing is stored
+// and no jobs are chained.
+func (h *IDSweep) storeLodestone(ctx context.Context, id uint32, char *contract.CharacterProfile) ([]contract.QueueJob, error) {
+	if err := h.census.UpsertCharacter(ctx, char); err != nil {
+		if errors.Is(err, census.ErrProfileHidden) {
+			if h.logger.Enabled(ctx, slog.LevelDebug) {
+				h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone"), slog.String("status", "profile_hidden"))
+			}
+			return nil, nil
+		}
+		h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", char.Name), slog.String("world", char.World), slog.Any("error", err))
+		return nil, fmt.Errorf("id-sweep upsert %d: %w", id, err)
+	}
+	if h.logger.Enabled(ctx, slog.LevelDebug) {
+		h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", char.Name), slog.String("world", char.World), slog.String("source", "lodestone"))
+	}
+	return BuildDependentCharacterJobs(char.ID), nil
+}
+
+// storeTomestone persists a discovered Tomestone character and returns its
+// dependent jobs. Hidden profiles (census.ErrProfileHidden) are skipped: the
+// character exists but has no censusable demographics, so nothing is stored
+// and no jobs are chained.
+func (h *IDSweep) storeTomestone(ctx context.Context, id uint32, char *contract.TomestoneCharacter) ([]contract.QueueJob, error) {
+	if err := h.census.UpsertTomestoneCharacter(ctx, char); err != nil {
+		if errors.Is(err, census.ErrProfileHidden) {
+			if h.logger.Enabled(ctx, slog.LevelDebug) {
+				h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "tomestone"), slog.String("status", "profile_hidden"))
+			}
+			return nil, nil
+		}
+		h.logger.ErrorContext(ctx, "handler.id_sweep.store_error", slog.Uint64("character_id", uint64(id)), slog.String("name", char.Name), slog.String("world", char.Server), slog.Any("error", err))
+		return nil, fmt.Errorf("id-sweep upsert %d: %w", id, err)
+	}
+	if h.logger.Enabled(ctx, slog.LevelDebug) {
+		h.logger.DebugContext(ctx, "handler.id_sweep.discovered", slog.Uint64("character_id", uint64(id)), slog.String("name", char.Name), slog.String("world", char.Server), slog.String("source", "tomestone"))
+	}
+	return BuildDependentCharacterJobs(char.ID), nil
 }

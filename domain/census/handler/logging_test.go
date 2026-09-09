@@ -95,7 +95,7 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	ls := mocklodestone.NewFake()
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
 		if id == 10 {
-			return &contract.CharacterProfile{ID: 10, Name: "Alisaie Leveilleur", World: "Louisoix"}, nil
+			return &contract.CharacterProfile{ID: 10, Name: "Alisaie Leveilleur", World: "Louisoix", Race: "Elezen"}, nil
 		}
 		return nil, contract.ErrCharacterNotFound
 	}

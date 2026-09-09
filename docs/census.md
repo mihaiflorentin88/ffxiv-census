@@ -102,8 +102,8 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 `domain/census/service.go` is the domain brain: it converts Lodestone DTOs into persisted records and computes milestone/activity facts. Constructed via `container.Load.CensusService()` with the three repositories; the ingest handlers call it. The service caches the milestone registry in memory (5-minute TTL) to avoid re-querying the DB on every achievement census; `SyncMilestones` invalidates the cache.
 
 - `SyncMilestones(ctx)` — seeds configured expansion milestones and chocobo achievement into the DB (idempotent). Invalidates the in-memory milestone cache so the next `ProcessAchievements` picks up the fresh registry.
-- `UpsertCharacter(ctx, *contract.CharacterProfile)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). nil race/tribe/grand-company are tolerated.
-- `UpsertTomestoneCharacter(ctx, *contract.TomestoneCharacter)` — converts a Tomestone character + jobs into records and persists them atomically.
+- `UpsertCharacter(ctx, *contract.CharacterProfile)` — converts a Lodestone character + jobs into records and persists them atomically. `region` is derived from the datacenter via `RegionForDatacenter` (table below). A profile whose race is empty or `----` returns `ErrProfileHidden` and is **not** persisted (hidden profile — see below); an existing row keeps its last known good data.
+- `UpsertTomestoneCharacter(ctx, *contract.TomestoneCharacter)` — converts a Tomestone character + jobs into records and persists them atomically, with the same `ErrProfileHidden` guard as `UpsertCharacter`.
 - `ProcessMilestoneResults(ctx, charID, summary)` — additively persists earned tracked milestones and updates achievement privacy plus the global latest achievement from the list page. Uses the in-memory milestone cache (5-minute TTL) to avoid re-querying the DB on every call.
 - `MaxCharacterID(ctx)` — returns the highest known character ID in the repository (excluding deleted characters), used for auto-discovery sweeps.
 - `MilestoneIDs(ctx)` — returns the set of tracked milestone achievement IDs from the cached registry. Useful for handler-level pre-filtering.
@@ -116,6 +116,19 @@ The `CharacterFilter` struct (`port/contract/character_repository.go`) controls 
 - `Breakdown(ctx, by)` — per-`race`/`world`/`datacenter`/`region` totals and active counts; any other dimension returns `ErrInvalidDimension`.
 - `NewCharacters(ctx, since, until)` — characters who earned the Chocobo milestone (achievement 590) per UTC day in `[since, until)`. The Chocobo milestone is the canonical definition for "new character" as it indicates the character has started playing.
 - `ExpansionCompletions(ctx)` — distinct characters per expansion that completed that expansion's MSQ.
+
+
+### Hidden profiles
+
+Three Lodestone states leave a character without usable race data. The census skips such characters on every ingest path (`ErrProfileHidden` from the service upserts, mapped to a skip by the handlers — no store, no chained jobs, no queue error):
+
+| State | Lodestone response | Stored shape (now rejected) |
+| ------ | ------------------ | --------------------------- |
+| Private profile | HTTP 200, "This character's profile is private" — no race block at all | `race=''`, `gender=0` |
+| Access-restricted profile | HTTP 403 "Access Restricted" (deterministic per character); Tomestone fallback serves name/world/gender with empty race | `race=''`, `gender=1` |
+| Suppressed race/clan | HTTP 200, race and clan rendered as `----` placeholders | `race='----'`, `tribe='----'` |
+
+If a hidden profile later becomes public, the next census of that character stores it normally; while it stays hidden, the existing row is left untouched.
 
 ## UIStatsService
 

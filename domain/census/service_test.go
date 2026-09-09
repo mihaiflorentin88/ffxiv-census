@@ -93,12 +93,68 @@ func TestService_StreamCharacters(t *testing.T) {
 	}
 }
 
-func TestService_UpsertCharacter_NilSafe(t *testing.T) {
+func TestService_UpsertCharacter_NilGuard(t *testing.T) {
 	svc, _ := newTestService(t)
-	// Minimal character with nil race/tribe/grand company must not panic.
-	char := &contract.CharacterProfile{ID: 1, Name: "X", World: "W", Datacenter: "Primal", Gender: 0}
-	if err := svc.UpsertCharacter(context.Background(), char); err != nil {
-		t.Fatalf("UpsertCharacter: %v", err)
+	if err := svc.UpsertCharacter(context.Background(), nil); err == nil {
+		t.Fatal("expected error for nil character")
+	}
+}
+
+// A profile without usable race data is hidden on Lodestone (private profile
+// or suppressed race/clan "----"). It must not be persisted and must not
+// erase an existing row.
+func TestService_UpsertCharacter_HiddenProfileNotStored(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+
+	for _, race := range []string{"", "----", "   "} {
+		char := &contract.CharacterProfile{
+			ID: 1, Name: "Hidden", World: "Ultros", Datacenter: "Primal", Race: race,
+			ClassJobs: []contract.ClassJobRecord{{ClassJobID: 1, Name: "Gladiator", Level: 10}},
+		}
+		if err := svc.UpsertCharacter(ctx, char); !errors.Is(err, ErrProfileHidden) {
+			t.Fatalf("race %q: err = %v, want ErrProfileHidden", race, err)
+		}
+		if got, _ := chars.Get(ctx, 1); got != nil {
+			t.Fatalf("race %q: character stored, want skipped", race)
+		}
+		if jobs, _ := chars.GetJobs(ctx, 1); len(jobs) != 0 {
+			t.Fatalf("race %q: %d jobs stored, want 0", race, len(jobs))
+		}
+	}
+
+	// An existing row keeps its last known good data when a re-census hits a
+	// now-hidden profile.
+	if err := svc.UpsertCharacter(ctx, &contract.CharacterProfile{ID: 2, Name: "Good", World: "Ultros", Datacenter: "Primal", Race: "Hyur"}); err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+	if err := svc.UpsertCharacter(ctx, &contract.CharacterProfile{ID: 2, Name: "Good", World: "Ultros", Datacenter: "Primal", Race: ""}); !errors.Is(err, ErrProfileHidden) {
+		t.Fatalf("re-census err = %v, want ErrProfileHidden", err)
+	}
+	got, _ := chars.Get(ctx, 2)
+	if got == nil || got.Race != "Hyur" {
+		t.Fatalf("existing row = %+v, want race Hyur preserved", got)
+	}
+}
+
+func TestService_UpsertTomestoneCharacter_HiddenProfileNotStored(t *testing.T) {
+	svc, chars := newTestService(t)
+	ctx := context.Background()
+
+	for _, race := range []string{"", "----"} {
+		tChar := &contract.TomestoneCharacter{
+			ID: 7, Name: "Hidden", Server: "Odin", Datacenter: "Chaos", Gender: "male", Race: race,
+			Gear: []contract.TomestoneGear{{Slot: "Body", ID: 100, Name: "Robe", ItemLevel: 640}},
+		}
+		if err := svc.UpsertTomestoneCharacter(ctx, tChar); !errors.Is(err, ErrProfileHidden) {
+			t.Fatalf("race %q: err = %v, want ErrProfileHidden", race, err)
+		}
+		if got, _ := chars.Get(ctx, 7); got != nil {
+			t.Fatalf("race %q: character stored, want skipped", race)
+		}
+		if gear, _ := chars.GetGear(ctx, 7); len(gear) != 0 {
+			t.Fatalf("race %q: %d gear stored, want 0", race, len(gear))
+		}
 	}
 }
 
@@ -238,6 +294,7 @@ func TestService_UpsertCharacter_Profile(t *testing.T) {
 		Name:       "Y'shtola Rhul",
 		World:      "Louisoix",
 		Datacenter: "Chaos",
+		Race:       "Miqo'te",
 		Bio:        "Sorceress of the Night's Blessed",
 		ActiveJob:  "Black Mage",
 	}
