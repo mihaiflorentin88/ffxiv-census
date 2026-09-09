@@ -32,9 +32,31 @@ type ProxyRecord struct {
 	LockedAt      *time.Time // lock acquisition time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	// Scan scheduling state (see proxy_scan.go). Absolute timestamps are
+	// owned by the database; callers pass durations, never wall-clock
+	// deadlines. GeneralHealthy records the latest conclusive result and is
+	// independent of the historical Status classification.
+	GeneralHealthy           bool
+	LastCompletedAt          *time.Time
+	LastVerifiedAt           *time.Time
+	NextAttemptAt            *time.Time // verification/recovery deadline; background ignores it
+	ScanNotBefore            *time.Time // common minimum-repeat/inconclusive cooldown
+	RecoveryStep             int
+	ObservationVersion       int64
+	ScanToken                *string
+	ScanLeaseUntil           *time.Time
+	ClaimedVersion           *int64
+	DestinationCooldownUntil *time.Time
 }
 
 // ProxyChecker tests whether a proxy endpoint is reachable and measures latency.
+//
+// Typed-error contract: a nil error means success, including complete
+// response validation. A non-nil error SHOULD be a *ProxyCheckError
+// (possibly wrapped) whose Kind attributes the failure; until the transport
+// adapters migrate, plain errors are permitted and consumers must treat
+// them as inconclusive. Error text is never parsed for decisions.
 type ProxyChecker interface {
 	Check(ctx context.Context, protocol, ip string, port int) (latencyMS int, err error)
 }
