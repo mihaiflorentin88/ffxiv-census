@@ -257,31 +257,29 @@ workers:
         - name: POSTGRES_MAX_IDLE_CONNS
           value: "10"
     - name: proxy-scan
-      replicaCount: 1
+      replicaCount: 5
       command:
         - /app/ffxiv-census
         - proxy
         - scan
         - -c
-        - "400"
-        - --dead-scan-percentage
-        - "30"
+        - "150"
       env:
         - name: QUEUE_MAX_ATTEMPTS
           value: "50"
         - name: RABBITMQ_URL
           value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASSWORD)@rabbitmq.default.svc.cluster.local:5672/ffxiv-census"
         - name: POSTGRES_MAX_OPEN_CONNS
-          value: "25"
+          value: "2"
         - name: POSTGRES_MAX_IDLE_CONNS
-          value: "20"
+          value: "1"
       resources:
         requests:
           memory: 100Mi
-          cpu: 1000m
+          cpu: 500m
         limits:
-          memory: 2Gi
-          cpu: 2500m
+          memory: 1Gi
+          cpu: 1000m
     # --- Census failed queue retry consumer ---
     - name: census-retry
       replicaCount: 1
