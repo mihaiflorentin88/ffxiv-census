@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,14 +28,11 @@ func (h *recordingHandler) Handle(_ context.Context, _ []byte) ([]contract.Queue
 }
 
 type countingHandler struct {
-	mu    sync.Mutex
-	calls *int
+	calls *int32
 }
 
 func (h *countingHandler) Handle(_ context.Context, _ []byte) ([]contract.QueueJob, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	*h.calls++
+	atomic.AddInt32(h.calls, 1)
 	return nil, nil
 }
 
@@ -102,7 +100,7 @@ func TestWorker_PublishesChainedJobs(t *testing.T) {
 	}
 	reg.Register("id-sweep", rh)
 
-	achCalls := 0
+	var achCalls int32
 	reg.Register("achievement-census", &countingHandler{calls: &achCalls})
 
 	w := New(q, reg, nil)
@@ -118,7 +116,7 @@ func TestWorker_PublishesChainedJobs(t *testing.T) {
 		rh.mu.Lock()
 		c := rh.calls
 		rh.mu.Unlock()
-		if c >= 1 && achCalls >= 1 {
+		if c >= 1 && atomic.LoadInt32(&achCalls) >= 1 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -129,8 +127,8 @@ func TestWorker_PublishesChainedJobs(t *testing.T) {
 	if rh.calls != 1 {
 		t.Errorf("id-sweep calls = %d, want 1", rh.calls)
 	}
-	if achCalls != 1 {
-		t.Errorf("achievement-census calls = %d, want 1", achCalls)
+	if atomic.LoadInt32(&achCalls) != 1 {
+		t.Errorf("achievement-census calls = %d, want 1", atomic.LoadInt32(&achCalls))
 	}
 }
 

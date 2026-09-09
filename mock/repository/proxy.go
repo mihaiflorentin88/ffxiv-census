@@ -95,6 +95,7 @@ func (f *FakeProxyRepository) SeedSuccess(id int64, latencyMS int) bool {
 	if err != nil {
 		return false
 	}
+	target := false
 	for _, lease := range leases {
 		if lease.Record.ID != id {
 			_ = f.ReleaseScan(ctx, lease)
@@ -106,9 +107,9 @@ func (f *FakeProxyRepository) SeedSuccess(id int64, latencyMS int) bool {
 			NextDelay:   0,
 			RepeatDelay: 0,
 		})
-		return ok && err == nil
+		target = ok && err == nil
 	}
-	return false
+	return target
 }
 
 func (f *FakeProxyRepository) Exists(_ context.Context, protocol, ip string, port int) (bool, error) {

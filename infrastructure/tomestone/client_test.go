@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient/proxytest"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -651,5 +653,25 @@ func TestNewClientWithProxy_ProtocolsConstruct(t *testing.T) {
 	}
 	if _, err := NewClientWithProxy(cfg, "ftp://127.0.0.1:21", nil); err == nil {
 		t.Fatal("expected error for unsupported proxy protocol")
+	}
+}
+
+// TestFetchCharacterProfile_ProxyDialFailureIsTypedCheckProxy proves a
+// proven proxy-dial failure surfaces as a typed CheckProxy error while the
+// %w chain is preserved.
+func TestFetchCharacterProfile_ProxyDialFailureIsTypedCheckProxy(t *testing.T) {
+	cfg := &config.TomestoneConfig{BaseURL: "https://tomestone.gg"}
+	proxyAddr := "http://127.0.0.1:" + strconv.Itoa(proxytest.ClosedPort(t))
+	c, err := NewClientWithProxy(cfg, proxyAddr, nil)
+	if err != nil {
+		t.Fatalf("NewClientWithProxy: %v", err)
+	}
+	_, err = c.FetchCharacterProfile(context.Background(), 123, false)
+	if err == nil {
+		t.Fatal("expected an error from a dead proxy")
+	}
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckProxy {
+		t.Fatalf("expected typed CheckProxy error, got %v", err)
 	}
 }

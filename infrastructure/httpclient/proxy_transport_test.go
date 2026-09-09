@@ -320,3 +320,26 @@ func TestNewProxyTransport_TLSStallClosesConnections(t *testing.T) {
 	}
 	p.WaitConnsClosed(t, 2*time.Second)
 }
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		hint string
+		want time.Duration
+	}{
+		{"empty", "", 0},
+		{"delta seconds", "90", 90 * time.Second},
+		{"delta seconds with spaces", " 30 ", 30 * time.Second},
+		{"zero delta", "0", 0},
+		{"negative delta", "-5", 0},
+		{"invalid", "soon", 0},
+		{"http date in future", now.Add(2 * time.Minute).Format(http.TimeFormat), 2 * time.Minute},
+		{"http date in past", now.Add(-time.Minute).Format(http.TimeFormat), 0},
+	}
+	for _, tc := range cases {
+		if got := ParseRetryAfter(tc.hint, now); got != tc.want {
+			t.Errorf("%s: ParseRetryAfter(%q) = %v, want %v", tc.name, tc.hint, got, tc.want)
+		}
+	}
+}

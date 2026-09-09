@@ -93,9 +93,22 @@ type ProxyRepository interface {
 	// The proxy must be active, not currently locked, or locked past its TTL.
 	// Only proxies with protocols http, https, socks4, socks5 are considered.
 	ClaimProxy(ctx context.Context, owner string, lockTTL time.Duration) (*ProxyRecord, error)
-	// ExtendLock extends the lock TTL for a proxy owned by the given owner.
-	// Returns false if the proxy is not owned by the caller.
-	ExtendLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (bool, error)
+	// RefreshConsumerLock atomically validates the general-freshness
+	// predicate, ownership, lock validity and destination cooldown, extends
+	// the lock and returns the current record including the live observation
+	// version. It returns nil when any validation fails. It replaces
+	// ExtendLock for scan consumers.
+	RefreshConsumerLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (*ProxyRecord, error)
+	// RecordConsumerFailure persists a conclusive consumer-side failure under
+	// a CAS on the captured observation version, the owner and a still-valid
+	// lock. A stale caller is rejected with (false, nil); only its own valid
+	// owned lock is released. The consumer lock itself is not released on the
+	// accepted path — the caller owns release.
+	RecordConsumerFailure(ctx context.Context, rec ProxyRecord, owner string, lockTTL time.Duration, update ScanUpdate) (bool, error)
+	// CooldownDestination raises the destination cooldown to at least
+	// now+delay and releases the owned consumer lock. It touches neither
+	// general evidence nor the scan version.
+	CooldownDestination(ctx context.Context, id int64, owner string, lockTTL time.Duration, delay time.Duration) error
 	// ReleaseProxy releases the lock on a proxy owned by the given owner.
 	ReleaseProxy(ctx context.Context, id int64, owner string) error
 	// RandomActive returns a random active proxy, optionally excluding IDs.

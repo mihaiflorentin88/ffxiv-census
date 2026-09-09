@@ -2,13 +2,17 @@ package lodestone
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"golang.org/x/time/rate"
 )
 
@@ -613,5 +617,44 @@ func TestNewCustomClient_WithProxyProtocolsConstruct(t *testing.T) {
 	}
 	if _, err := NewCustomClient(cfg, nil, nil, WithProxy("ftp://127.0.0.1:21")); err == nil {
 		t.Fatal("expected error for unsupported proxy protocol")
+	}
+}
+
+func TestDoRequest_ProxyDialFailureIsTypedCheckProxy(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &url.Error{
+			Op:  "Get",
+			URL: "https://na.finalfantasyxiv.com/lodestone/",
+			Err: &httpclient.ProxyDialError{Reason: "dial", Err: errors.New("connection refused")},
+		}
+	}))
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckProxy {
+		t.Fatalf("expected typed CheckProxy error, got %v", err)
+	}
+}
+
+func TestDoRequest_429ExhaustedIsTypedCheckTargetWithRetryAfter(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("Retry-After", "90")
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader("slow down")),
+			Header:     header,
+		}, nil
+	}))
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckTarget {
+		t.Fatalf("expected typed CheckTarget error, got %v", err)
+	}
+	if checkErr.RetryAfter != 90*time.Second {
+		t.Fatalf("expected Retry-After 90s, got %v", checkErr.RetryAfter)
+	}
+	var dialErr *httpclient.ProxyDialError
+	if errors.As(err, &dialErr) {
+		t.Fatal("a target 429 must not be classified as a proxy dial failure")
 	}
 }

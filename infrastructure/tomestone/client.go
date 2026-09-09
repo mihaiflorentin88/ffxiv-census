@@ -306,7 +306,10 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tomestone http get: %w", err)
+		// Proven proxy dial/negotiation failures surface as a typed
+		// conclusive error; ambiguous failures and the business outcomes
+		// below (unauthenticated, not-found) stay unchanged.
+		return nil, fmt.Errorf("tomestone http get: %w", httpclient.WrapProxyDial(err))
 	}
 	defer resp.Body.Close()
 

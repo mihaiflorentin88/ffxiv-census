@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
@@ -9,24 +10,35 @@ import (
 
 // ProxyHub manages proxy acquisition for worker goroutines.
 // Each goroutine calls NewProxy to atomically claim a proxy from the pool.
-// Proxies are tested before handout to avoid giving workers dead proxies.
+// Proxies are tested against the destination before handout, revalidated for
+// ownership and general freshness after the check, and every rejected row is
+// persisted through the typed failure or destination-cooldown paths.
 type ProxyHub struct {
-	repo    contract.ProxyRepository
-	lockTTL time.Duration
-	checker contract.ProxyChecker
-	notify  chan struct{} // buffered(1); signals waiting workers when a proxy becomes available
+	repo         contract.ProxyRepository
+	lockTTL      time.Duration
+	checker      contract.ProxyChecker
+	destCooldown time.Duration // floor for destination cooldowns without a Retry-After
+	policy       contract.ProxyScanPolicy
+	notify       chan struct{} // buffered(1); signals waiting workers when a proxy becomes available
 }
 
-// NewProxyHub creates a ProxyHub with the given repository, lock TTL, and optional checker.
-func NewProxyHub(repo contract.ProxyRepository, lockTTL time.Duration, checker contract.ProxyChecker) *ProxyHub {
-	return &ProxyHub{repo: repo, lockTTL: lockTTL, checker: checker, notify: make(chan struct{}, 1)}
+// NewProxyHub creates a ProxyHub with the given repository, lock TTL,
+// optional destination checker, destination cooldown floor and scan policy.
+func NewProxyHub(repo contract.ProxyRepository, lockTTL time.Duration, checker contract.ProxyChecker, destCooldown time.Duration, policy contract.ProxyScanPolicy) *ProxyHub {
+	return &ProxyHub{repo: repo, lockTTL: lockTTL, checker: checker, destCooldown: destCooldown, policy: policy, notify: make(chan struct{}, 1)}
 }
 
-// NewProxy atomically claims an available proxy for the given owner and tests it.
-// Returns nil (no error) if no proxy is available or the claimed proxy fails the check.
-// The scan worker already validates proxies before marking them active, so a single
-// acquisition attempt is sufficient — the caller (waitForProxy) handles retries with
-// exponential backoff.
+// NewProxy atomically claims an available proxy for the given owner, tests it
+// against the destination and revalidates ownership and general freshness
+// before returning. Returns nil (no error) when no proxy is available or the
+// claimed row is rejected; the caller (waitForProxy) retries with backoff.
+//
+// Rejection handling is typed: a conclusive *ProxyCheckError CheckProxy
+// failure is persisted with the version captured before the check, a
+// destination rejection (CheckTarget) raises the destination cooldown with
+// the Retry-After hint, and local/inconclusive errors release the claim
+// without touching evidence. Database failures propagate as errors — a row is
+// never silently handed out when its state cannot be validated.
 func (h *ProxyHub) NewProxy(ctx context.Context, owner string) (*Proxy, error) {
 	rec, err := h.repo.ClaimProxy(ctx, owner, h.lockTTL)
 	if err != nil {
@@ -36,21 +48,69 @@ func (h *ProxyHub) NewProxy(ctx context.Context, owner string) (*Proxy, error) {
 		return nil, nil
 	}
 
-	p := New(rec, h.repo)
+	p := New(rec, h.repo, h.policy)
 	if h.checker == nil {
 		return p, nil
 	}
 
 	_, err = h.checker.Check(ctx, rec.Protocol, rec.IP, rec.Port)
 	if err == nil {
-		return p, nil
+		// The check took time: ownership or general freshness may have been
+		// lost while it ran. RefreshConsumerLock validates both (plus the
+		// destination cooldown) and extends the lock; it never renews the
+		// general evidence itself, so destination success cannot refresh the
+		// ipify health window.
+		current, err := h.repo.RefreshConsumerLock(ctx, rec.ID, owner, h.lockTTL)
+		if err != nil {
+			return nil, err
+		}
+		if current == nil {
+			releaseClaim(p, owner)
+			return nil, nil
+		}
+		return New(current, h.repo, h.policy), nil
 	}
 
-	// The handout check rejected this proxy. Release the claim so the row is
-	// not leaked; failure classification and cooldowns belong to the scan
-	// pipeline, and the next acquisition attempt re-checks the row.
-	_ = p.Release(ctx, owner)
-	return nil, nil
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) {
+		// Unknown checker failure: give up the claim without any evidence
+		// write; the next acquisition attempt re-checks the row.
+		releaseClaim(p, owner)
+		return nil, nil
+	}
+	switch checkErr.Kind {
+	case contract.CheckProxy:
+		// Conclusive proxy death. The persisted failure is fenced on the
+		// version captured before the check, so a scanner completion in
+		// between rejects it instead of being overwritten.
+		if _, err := p.MarkFailed(ctx, owner, h.lockTTL); err != nil {
+			return nil, err
+		}
+		releaseClaim(p, owner)
+		return nil, nil
+	case contract.CheckTarget:
+		// Destination rejection (403/429/5xx): raise the destination cooldown
+		// to at least the Retry-After hint; general evidence is untouched.
+		delay := max(checkErr.RetryAfter, h.destCooldown)
+		if err := p.CooldownDestination(ctx, owner, h.lockTTL, delay); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	default:
+		// CheckLocal / CheckDeadline / CheckCancelled are inconclusive on
+		// this path: release without failure.
+		releaseClaim(p, owner)
+		return nil, nil
+	}
+}
+
+// releaseClaim gives up the acquisition claim with a bounded context so a
+// cancelled caller cannot leak the lock. Release errors are ignored: the
+// lock expires by TTL and the row stays unclaimable through other predicates.
+func releaseClaim(p *Proxy, owner string) {
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = p.Release(releaseCtx, owner)
 }
 
 // NotifyAvailable signals one waiting worker that a proxy may be available.
@@ -85,6 +145,12 @@ func (h *ProxyHub) LockTTL() time.Duration {
 	return h.lockTTL
 }
 
+// DestinationCooldown returns the floor applied to destination cooldowns
+// when a destination rejection carries no usable Retry-After hint.
+func (h *ProxyHub) DestinationCooldown() time.Duration {
+	return h.destCooldown
+}
+
 // RandomActive returns an unlocked random active proxy for public provider scraping.
 // This method must not be used for Lodestone APIs; Lodestone workers must use
 // NewProxy so proxies are checked and atomically owner-locked.
@@ -93,7 +159,7 @@ func (h *ProxyHub) RandomActive(ctx context.Context) (*Proxy, error) {
 	if err != nil || rec == nil {
 		return nil, err
 	}
-	return New(rec, h.repo), nil
+	return New(rec, h.repo, h.policy), nil
 }
 
 // RandomActiveExcluding returns an unlocked random active proxy, excluding the
@@ -104,7 +170,7 @@ func (h *ProxyHub) RandomActiveExcluding(ctx context.Context, excludeIDs []int64
 	if err != nil || rec == nil {
 		return nil, err
 	}
-	return New(rec, h.repo), nil
+	return New(rec, h.repo, h.policy), nil
 }
 
 // SwapActive returns an unlocked random active proxy different from current.
@@ -119,5 +185,5 @@ func (h *ProxyHub) SwapActive(ctx context.Context, current *Proxy) (*Proxy, erro
 	if err != nil || rec == nil {
 		return nil, err
 	}
-	return New(rec, h.repo), nil
+	return New(rec, h.repo, h.policy), nil
 }

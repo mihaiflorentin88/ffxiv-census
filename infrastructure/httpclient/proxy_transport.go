@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 
 	xproxy "golang.org/x/net/proxy"
 )
@@ -28,6 +31,43 @@ func (e *ProxyDialError) Error() string { return "proxy " + e.Reason + ": " + e.
 
 // Unwrap exposes the wrapped cause so errors.Is/errors.As traverse it.
 func (e *ProxyDialError) Unwrap() error { return e.Err }
+
+// WrapProxyDial re-attributes a transport error as a typed conclusive proxy
+// failure when the chain contains a *ProxyDialError; any other error is
+// returned unchanged so ambiguous failures stay unclassified. The original
+// error stays in the %w chain for errors.As/errors.Is traversal.
+func WrapProxyDial(err error) error {
+	var dialErr *ProxyDialError
+	if errors.As(err, &dialErr) {
+		return &contract.ProxyCheckError{Kind: contract.CheckProxy, Reason: "proxy " + dialErr.Reason, Err: err}
+	}
+	return err
+}
+
+// ParseRetryAfter parses a Retry-After hint as delta-seconds or an HTTP
+// date. The date form yields the duration remaining at receivedAt, never an
+// absolute timestamp. Invalid or non-positive hints return 0 so consumers
+// apply their normal cooldown floor.
+func ParseRetryAfter(hint string, receivedAt time.Time) time.Duration {
+	hint = strings.TrimSpace(hint)
+	if hint == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(hint); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(hint); err == nil {
+		d := t.Sub(receivedAt)
+		if d <= 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
+}
 
 // proxyDialer mirrors the standard library's DefaultTransport dialer so the
 // shared transport keeps its bounded dial timeout and keep-alives.

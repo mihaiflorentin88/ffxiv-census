@@ -76,14 +76,11 @@ func MakeScanUpdate(p contract.ProxyScanPolicy, rec contract.ProxyRecord,
 		update.RepeatDelay = p.MinRepeatInterval
 		update.RecoveryStep = 0
 	case contract.ScanFailure:
-		step := rec.RecoveryStep + 1
-		if bound := recoveryStepBound(p.RecoveryBase, p.RecoveryCap); step < 1 || step > bound {
-			step = bound
-		}
-		update.Outcome = contract.ScanFailure
-		update.NextDelay = RecoveryDelay(step-1, p.RecoveryBase, p.RecoveryCap)
-		update.RepeatDelay = p.MinRepeatInterval
-		update.RecoveryStep = step
+		failure := MakeConsumerFailureUpdate(p, rec)
+		update.Outcome = failure.Outcome
+		update.NextDelay = failure.NextDelay
+		update.RepeatDelay = failure.RepeatDelay
+		update.RecoveryStep = failure.RecoveryStep
 	default:
 		update.Outcome = contract.ScanInconclusive
 		update.RecoveryStep = rec.RecoveryStep
@@ -96,6 +93,27 @@ func MakeScanUpdate(p contract.ProxyScanPolicy, rec contract.ProxyRecord,
 		update.RepeatDelay = delay
 	}
 	return update
+}
+
+// MakeConsumerFailureUpdate builds the relative failure update for one
+// consumer-observed conclusive proxy failure. It mirrors the scanner's
+// failure transition: the next recovery delay advances with the failed
+// history and the repeat position moves by the common floor only, so a
+// consumer failure never widens the background repeat cooldown.
+func MakeConsumerFailureUpdate(p contract.ProxyScanPolicy, rec contract.ProxyRecord) contract.ScanUpdate {
+	step := rec.RecoveryStep + 1
+	if bound := recoveryStepBound(p.RecoveryBase, p.RecoveryCap); step < 1 || step > bound {
+		step = bound
+	}
+	return contract.ScanUpdate{
+		Outcome:       contract.ScanFailure,
+		FreshnessTTL:  p.FreshnessTTL,
+		DeadAfter:     p.DeadAfter,
+		FailThreshold: p.FailThreshold,
+		NextDelay:     RecoveryDelay(step-1, p.RecoveryBase, p.RecoveryCap),
+		RepeatDelay:   p.MinRepeatInterval,
+		RecoveryStep:  step,
+	}
 }
 
 // recoveryStepBound is the largest stored recovery step that can still

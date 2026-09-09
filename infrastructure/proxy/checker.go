@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	httpclient "github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
@@ -105,9 +104,8 @@ func (c *Checker) Check(ctx context.Context, protocol, ip string, port int) (int
 }
 
 // retryAfterForStatus parses the Retry-After hint for rate-limited or
-// unavailable destination responses (403/429/5xx). The date form yields the
-// duration remaining at receipt, never an absolute timestamp; invalid or
-// negative hints return 0 so consumers apply the normal cooldown floor.
+// unavailable destination responses (403/429/5xx); other statuses carry no
+// hint so consumers apply their normal cooldown floor.
 func retryAfterForStatus(status int, hint string, receivedAt time.Time) time.Duration {
 	switch status {
 	case http.StatusForbidden, http.StatusTooManyRequests:
@@ -116,28 +114,5 @@ func retryAfterForStatus(status int, hint string, receivedAt time.Time) time.Dur
 			return 0
 		}
 	}
-	return parseRetryAfter(hint, receivedAt)
-}
-
-// parseRetryAfter parses a Retry-After hint as delta-seconds or an HTTP
-// date. Invalid or negative hints return 0.
-func parseRetryAfter(hint string, receivedAt time.Time) time.Duration {
-	hint = strings.TrimSpace(hint)
-	if hint == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(hint); err == nil {
-		if secs <= 0 {
-			return 0
-		}
-		return time.Duration(secs) * time.Second
-	}
-	if t, err := http.ParseTime(hint); err == nil {
-		d := t.Sub(receivedAt)
-		if d <= 0 {
-			return 0
-		}
-		return d
-	}
-	return 0
+	return httpclient.ParseRetryAfter(hint, receivedAt)
 }

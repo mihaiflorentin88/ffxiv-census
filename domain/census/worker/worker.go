@@ -203,29 +203,15 @@ func (w *Worker) waitForProviders(ctx context.Context, eventType string) error {
 	return nil
 }
 
-// isProxyError returns true if the error indicates a proxy connection failure.
-func isProxyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "host unreachable") ||
-		strings.Contains(msg, "context deadline exceeded") ||
-		strings.Contains(msg, "Client.Timeout") ||
-		strings.Contains(msg, "Service Unavailable") ||
-		strings.Contains(msg, "proxyconnect")
-}
-
-// isRateLimitError returns true if the error indicates a 429 or rate-limit response.
-// Rate-limit errors are provider cooldowns, not proxy failures — they must never
-// trigger a proxy swap.
-func isRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "429") || strings.Contains(msg, "rate limit")
+// isGeneralProxyFailure reports whether the error is a typed conclusive
+// proxy failure (*contract.ProxyCheckError with Kind CheckProxy), possibly
+// wrapped. Only proven proxy dial/negotiation failures kill general health;
+// deadline, TLS and read errors are ambiguous on this unguarded destination
+// path and stay ordinary job errors. Decisions use errors.As on the typed
+// fields, never error text.
+func isGeneralProxyFailure(err error) bool {
+	var checkErr *contract.ProxyCheckError
+	return errors.As(err, &checkErr) && checkErr.Kind == contract.CheckProxy
 }
 
 // It retries on nil results and transient acquisition errors with exponential
@@ -281,8 +267,8 @@ func (w *Worker) waitForProxy(ctx context.Context, owner string, proxyHub *proxy
 // replacement is acquired so a pool with no spare capacity can rotate; a
 // window without a proxy is bounded by the release being local. Release
 // errors are logged but do not prevent the replacement from being used.
-// Failure classification and cooldowns belong to the scan pipeline; the
-// consumer only gives up its claim.
+// A typed general failure is persisted by the caller via Proxy.MarkFailed
+// before the replacement is acquired; this helper only gives up the claim.
 func (w *Worker) replaceProxy(
 	ctx context.Context,
 	previous *proxydomain.Proxy,
@@ -558,18 +544,36 @@ func (w *Worker) proxyWorkerLoop(
 				slog.Any("error", jobErr),
 			)
 
-			// 429/rate-limit is a provider cooldown, not a dead proxy.
-			// The client that received the 429 has already applied its own
-			// provider cooldown via the rate limiter. Return the error for
-			// normal queue retry — do NOT mark the proxy failed or acquire
-			// a replacement, and do NOT infer the provider from event type.
-			if isRateLimitError(jobErr) {
+			// Typed destination rejection (403/429/5xx): cool this proxy's
+			// destination down for at least the Retry-After hint. The client
+			// that saw the response already applied its own provider pause
+			// via the rate limiter. No identity rotation — return the
+			// delivery for a normal queue retry instead of bypassing the
+			// cooldown with another proxy.
+			var checkErr *contract.ProxyCheckError
+			if errors.As(jobErr, &checkErr) && checkErr.Kind == contract.CheckTarget {
+				delay := max(checkErr.RetryAfter, proxyHub.DestinationCooldown())
+				cooldownCtx, cooldownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if cdErr := proxy.CooldownDestination(cooldownCtx, owner, lockTTL, delay); cdErr != nil {
+					cooldownCancel()
+					return fmt.Errorf("destination cooldown: %w", cdErr)
+				}
+				cooldownCancel()
 				return jobErr
 			}
 
-			// Proxy transport error: replace the proxy and retry once.
-			if isProxyError(jobErr) {
+			// Typed conclusive proxy failure: persist the fenced failure on
+			// the version captured before the job, then replace the proxy
+			// and retry once. Ambiguous deadline/TLS/read errors and business
+			// errors stay ordinary job errors — no evidence write, no rotation.
+			if isGeneralProxyFailure(jobErr) {
 				w.logger.InfoContext(ctx, "worker.proxy_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
+				markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if _, err := proxy.MarkFailed(markCtx, owner, lockTTL); err != nil {
+					markCancel()
+					return fmt.Errorf("record proxy failure: %w", err)
+				}
+				markCancel()
 				newProxy, newLodestone, newTomestone, newLimiter, newReg, rerr := w.replaceProxy(
 					ctx, proxy, owner, proxyHub,
 					newLodestoneClient, newTomestoneClient, newRateLimiter, newHandlers,
@@ -616,17 +620,30 @@ func (w *Worker) proxyWorkerLoop(
 				}()
 
 				if retryErr != nil {
-					// If the retry also failed with a proxy error, give up
-					// the claim before returning the delivery to RabbitMQ.
-					if isProxyError(retryErr) {
+					w.logger.WarnContext(
+						ctx, "worker.job_retry_failed",
+						slog.String("event_type", job.Type),
+						slog.Duration("duration", time.Since(retryStart)),
+						slog.Any("error", retryErr),
+					)
+					// A typed general failure on the replacement is persisted
+					// too; either way the claim is given up before the
+					// delivery returns to the queue.
+					if isGeneralProxyFailure(retryErr) {
 						w.logger.InfoContext(ctx, "worker.proxy_retry_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
-						relCtx, relCancel := context.WithTimeout(context.Background(), 10*time.Second)
-						if relErr := proxy.Release(relCtx, owner); relErr != nil {
-							w.logger.WarnContext(relCtx, "worker.proxy_release_error",
-								slog.String("proxy", proxy.Address()), slog.Any("error", relErr))
+						markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						if _, err := proxy.MarkFailed(markCtx, owner, lockTTL); err != nil {
+							markCancel()
+							return fmt.Errorf("record proxy failure: %w", err)
 						}
-						relCancel()
+						markCancel()
 					}
+					relCtx, relCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					if relErr := proxy.Release(relCtx, owner); relErr != nil {
+						w.logger.WarnContext(relCtx, "worker.proxy_release_error",
+							slog.String("proxy", proxy.Address()), slog.Any("error", relErr))
+					}
+					relCancel()
 					return retryErr
 				}
 

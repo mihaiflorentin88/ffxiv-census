@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient/proxytest"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
@@ -37,7 +38,7 @@ func TestParseRetryAfter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseRetryAfter(tt.hint, now)
+			got := httpclient.ParseRetryAfter(tt.hint, now)
 			if tt.name == "future date" {
 				if got < 25*time.Second || got > 30*time.Second {
 					t.Fatalf("parseRetryAfter(future date) = %s, want between 25s and 30s", got)

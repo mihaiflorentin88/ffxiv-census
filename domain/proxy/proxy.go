@@ -8,15 +8,20 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// Proxy wraps a ProxyRecord with domain behavior for lock management.
+// Proxy wraps a ProxyRecord with domain behavior for the consumer lifecycle:
+// ownership/freshness revalidation, fenced failure persistence and
+// destination cooldowns. The scan policy drives the relative failure update
+// the store applies.
 type Proxy struct {
 	record *contract.ProxyRecord
 	repo   contract.ProxyRepository
+	policy contract.ProxyScanPolicy
 }
 
-// New creates a Proxy domain object from a record and repository.
-func New(record *contract.ProxyRecord, repo contract.ProxyRepository) *Proxy {
-	return &Proxy{record: record, repo: repo}
+// New creates a Proxy domain object from a record, repository and the scan
+// policy that governs consumer failure transitions.
+func New(record *contract.ProxyRecord, repo contract.ProxyRepository, policy contract.ProxyScanPolicy) *Proxy {
+	return &Proxy{record: record, repo: repo, policy: policy}
 }
 
 // ID returns the proxy ID.
@@ -51,47 +56,37 @@ func (p *Proxy) LockedAt() *time.Time { return p.record.LockedAt }
 // Record returns the underlying ProxyRecord.
 func (p *Proxy) Record() *contract.ProxyRecord { return p.record }
 
-// IsActive returns true if the proxy status is active.
-func (p *Proxy) IsActive() bool {
-	return p.record.Status == contract.ProxyStatusActive
-}
-
-// CanUse returns true if the proxy is active and locked by the given owner.
-// On success, it extends the lock TTL in the database to prevent expiry while
-// the goroutine is still actively processing jobs. Returns false if the proxy
-// is inactive, unlocked, owned by someone else, or if the lock has already
-// expired (another worker may have claimed it).
+// CanUse revalidates the proxy against the database via RefreshConsumerLock:
+// general freshness, ownership, lock validity and destination cooldown. On
+// success it extends the lock and stores the returned record, so the caller
+// keeps the current observation version for the job duration. It returns
+// false when any validation fails or the row was lost to another consumer.
 func (p *Proxy) CanUse(ctx context.Context, owner string, lockTTL time.Duration) (bool, error) {
-	if p.record.Status != contract.ProxyStatusActive {
-		return false, nil
-	}
-	if p.record.LockedBy == nil {
-		return false, nil
-	}
-	if *p.record.LockedBy != owner {
-		return false, nil
-	}
-	// Check if the in-memory lock has already expired — if so, another worker
-	// may have claimed this proxy via ClaimProxy's FOR UPDATE SKIP LOCKED.
-	if p.record.LockedAt != nil && time.Since(*p.record.LockedAt) > lockTTL {
-		return false, nil
-	}
-	// Ownership confirmed — extend the lock to keep it alive.
-	ok, err := p.repo.ExtendLock(ctx, p.record.ID, owner, lockTTL)
+	fresh, err := p.repo.RefreshConsumerLock(ctx, p.record.ID, owner, lockTTL)
 	if err != nil {
-		return false, fmt.Errorf("extend lock: %w", err)
+		return false, fmt.Errorf("refresh consumer lock: %w", err)
 	}
-	if ok {
-		now := time.Now().UTC()
-		p.record.LockedAt = &now
+	if fresh == nil {
+		return false, nil
 	}
-	return ok, nil
+	p.record = fresh
+	return true, nil
 }
 
-// SetLockTime updates the in-memory lock time without persisting.
-// Used by ProxyHub after acquiring a lock.
-func (p *Proxy) SetLockTime(t time.Time) {
-	p.record.LockedAt = &t
+// MarkFailed persists a conclusive consumer-observed proxy failure. The
+// failure is fenced on the record captured before the job's I/O, the owner
+// and a still-valid lock; a stale observation is rejected with (false, nil)
+// and leaves newer evidence untouched. The lock is not released here — the
+// caller owns release on the accepted path.
+func (p *Proxy) MarkFailed(ctx context.Context, owner string, lockTTL time.Duration) (bool, error) {
+	return p.repo.RecordConsumerFailure(ctx, *p.record, owner, lockTTL, MakeConsumerFailureUpdate(p.policy, *p.record))
+}
+
+// CooldownDestination raises the proxy's destination cooldown to at least
+// now+delay and releases the owned claim without touching general evidence.
+// It is the consumer response to destination rejections such as 403/429/5xx.
+func (p *Proxy) CooldownDestination(ctx context.Context, owner string, lockTTL time.Duration, delay time.Duration) error {
+	return p.repo.CooldownDestination(ctx, p.record.ID, owner, lockTTL, delay)
 }
 
 // Release releases the lock on this proxy.

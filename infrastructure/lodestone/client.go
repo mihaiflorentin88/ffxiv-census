@@ -213,7 +213,9 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			lastErr = err
+			// Proven proxy dial/negotiation failures are re-attributed as a
+			// typed conclusive error; ambiguous failures stay unclassified.
+			lastErr = httpclient.WrapProxyDial(err)
 			backoff := c.backoffBase * time.Duration(1<<uint(attempt))
 			c.logger.WarnContext(ctx, "lodestone.request_retry",
 				slog.String("url", url),
@@ -249,6 +251,15 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 				slog.String("url", url),
 				slog.Int("attempt", attempt+1),
 				slog.Duration("backoff", backoff))
+			// The destination itself is rate limiting this identity: surface a
+			// typed target error carrying the Retry-After hint so consumers
+			// cool the proxy's destination down instead of rotating identity.
+			lastErr = &contract.ProxyCheckError{
+				Kind:       contract.CheckTarget,
+				Reason:     "status 429",
+				RetryAfter: httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+				Err:        fmt.Errorf("HTTP %d from %s", resp.StatusCode, url),
+			}
 			if attempt < c.maxRetries {
 				timer := time.NewTimer(jittered(backoff))
 				select {
@@ -262,6 +273,9 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 		}
 
 		return body, resp.StatusCode, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("request %s: all attempts failed", url)
 	}
 	return nil, 0, fmt.Errorf("request %s: %w", url, lastErr)
 }

@@ -103,7 +103,7 @@ func (s *ServiceContainer) discoveryHTTPClientUnlocked() contract.HTTPClient {
 		}
 	}
 	checker := s.destinationCheckerUnlocked()
-	hub := proxydomain.NewProxyHub(repo, lockTTL, checker)
+	hub := proxydomain.NewProxyHub(repo, lockTTL, checker, s.proxyConsumerCooldownUnlocked(), s.proxyScanPolicyUnlocked())
 	if hub == nil {
 		return s.HTTPClient()
 	}
@@ -593,20 +593,33 @@ func (s *ServiceContainer) ErcinDedeogluProvider() contract.ProxyProvider {
 	return s.infrastructure.ercindedeogluProvider
 }
 
-// ProxyHub creates a ProxyHub for consumer handout. The lock TTL is read
-// from [proxy.consumer] config and handouts are validated with the
-// destination checker; random provider discovery paths on the hub never
-// invoke that checker.
+// ProxyHub creates a ProxyHub for consumer handout. The lock TTL and the
+// destination cooldown floor are read from [proxy.consumer] config and
+// handouts are validated with the destination checker; random provider
+// discovery paths on the hub never invoke that checker.
 func (s *ServiceContainer) ProxyHub() *proxydomain.ProxyHub {
 	repo := s.ProxyRepository()
 	if repo == nil {
 		return nil
 	}
+	s.mu.Lock()
 	lockTTL := 5 * time.Minute
-	if cfg := s.Config().Proxy; cfg != nil && cfg.Consumer.LockTTL != "" {
+	if cfg := s.configUnlocked().Proxy; cfg != nil && cfg.Consumer.LockTTL != "" {
 		if d, err := time.ParseDuration(cfg.Consumer.LockTTL); err == nil && d > 0 {
 			lockTTL = d
 		}
 	}
-	return proxydomain.NewProxyHub(repo, lockTTL, s.DestinationChecker())
+	hub := proxydomain.NewProxyHub(repo, lockTTL, s.destinationCheckerUnlocked(),
+		s.proxyConsumerCooldownUnlocked(), s.proxyScanPolicyUnlocked())
+	s.mu.Unlock()
+	return hub
+}
+
+// proxyConsumerCooldownUnlocked returns the destination cooldown floor from
+// [proxy.consumer].cooldown, defaulting to one minute when unset.
+func (s *ServiceContainer) proxyConsumerCooldownUnlocked() time.Duration {
+	if cfg := s.configUnlocked().Proxy; cfg != nil && cfg.Consumer.Cooldown > 0 {
+		return cfg.Consumer.Cooldown
+	}
+	return time.Minute
 }
