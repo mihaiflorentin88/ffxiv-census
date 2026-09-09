@@ -25,8 +25,8 @@ func TestProxyWorkersPostgresPoolOverrides(t *testing.T) {
 	}
 
 	scan := workerSection(t, src, "proxy-scan")
-	assertWorkerEnvValue(t, "proxy-scan", scan, "POSTGRES_MAX_OPEN_CONNS", "25")
-	assertWorkerEnvValue(t, "proxy-scan", scan, "POSTGRES_MAX_IDLE_CONNS", "20")
+	assertWorkerEnvValue(t, "proxy-scan", scan, "POSTGRES_MAX_OPEN_CONNS", "2")
+	assertWorkerEnvValue(t, "proxy-scan", scan, "POSTGRES_MAX_IDLE_CONNS", "1")
 	assertWorkerKeepsQueueEnv(t, "proxy-scan", scan)
 }
 
@@ -41,7 +41,7 @@ func TestProxyScanResourcesOverride(t *testing.T) {
 
 	for _, want := range []string{
 		"      resources:\n        requests:\n",
-		"        limits:\n          memory: 2Gi\n          cpu: 2500m\n",
+		"        limits:\n          memory: 1Gi\n          cpu: 1000m\n",
 	} {
 		if !strings.Contains(section, want) {
 			t.Fatalf("proxy-scan resources block malformed, want nested block containing %q", want)
