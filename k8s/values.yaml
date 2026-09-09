@@ -191,7 +191,7 @@ workers:
         - id-sweep
         - --proxy
         - -c
-        - "25"
+        - "30"
       env:
         - name: QUEUE_MAX_ATTEMPTS
           value: "50"
@@ -209,7 +209,7 @@ workers:
         - character-census
         - --proxy
         - -c
-        - "15"
+        - "25"
       env:
         - name: QUEUE_MAX_ATTEMPTS
           value: "50"
@@ -227,7 +227,7 @@ workers:
         - achievement-census
         - --proxy
         - -c
-        - "25"
+        - "30"
       env:
         - name: QUEUE_MAX_ATTEMPTS
           value: "50"
@@ -322,19 +322,19 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "300"
+        - "500"
         - --older-than
         - "0"
 
     - name: publish-id-sweep
-      schedule: "*/2 * * * *"
+      schedule: "*/1 * * * *"
       command:
         - /app/ffxiv-census
         - publish
         - id-sweep
         - --auto
         - --count
-        - "350"
+        - "300"
         - --chunk-size
         - "1"
 
