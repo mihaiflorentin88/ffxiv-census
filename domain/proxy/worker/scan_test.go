@@ -1,4 +1,4 @@
-package worker_test
+package worker
 
 import (
 	"context"
@@ -11,649 +11,935 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mihaiflorentin88/ffxiv-census/domain/proxy/worker"
+	"github.com/mihaiflorentin88/ffxiv-census/mock/proxy"
+	"github.com/mihaiflorentin88/ffxiv-census/mock/repository"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// fakeScanner implements the scanner interface for scan worker tests.
-type fakeScanner struct {
-	mu      sync.Mutex
-	calls   []contract.ProxyRecord
-	scanErr error
-	delay   time.Duration
+// The scenario tests drive the real dispatcher end to end: gated checks use
+// channel barriers instead of sleeps, every completion is observed through
+// the store's CompleteScan path, and failure bounds exist only to fail a
+// stuck test, never as correctness evidence.
+
+func testLogger() contract.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func (f *fakeScanner) ProcessScanProxy(_ context.Context, p *contract.ProxyRecord) error {
-	if f.delay > 0 {
-		time.Sleep(f.delay)
+func testPolicy() contract.ProxyScanPolicy {
+	return contract.ProxyScanPolicy{
+		VerifyInterval:    500 * time.Millisecond,
+		FreshnessTTL:      2 * time.Minute,
+		RecoveryBase:      time.Millisecond,
+		RecoveryCap:       5 * time.Millisecond,
+		RecoveryHorizon:   time.Hour,
+		LeaseDuration:     2 * time.Second,
+		MinRepeatInterval: time.Millisecond,
+		InconclusiveRetry: time.Millisecond,
+		DeadAfter:         48 * time.Hour,
+		FailThreshold:     5,
 	}
-	f.mu.Lock()
-	f.calls = append(f.calls, *p)
-	f.mu.Unlock()
-	return f.scanErr
 }
 
-func (f *fakeScanner) CallCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.calls)
+// shortLeasePolicy keeps the lease barely longer than the claim timeout so
+// tests that rely on lease-expiry recovery observe it within milliseconds.
+func shortLeasePolicy() contract.ProxyScanPolicy {
+	p := testPolicy()
+	p.LeaseDuration = 200 * time.Millisecond
+	return p
 }
 
-func (f *fakeScanner) Calls() []contract.ProxyRecord {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]contract.ProxyRecord(nil), f.calls...)
+func seedRecord(t *testing.T, repo *repository.FakeProxyRepository, ip string, rec contract.ProxyRecord) int64 {
+	t.Helper()
+	rec.Protocol = "http"
+	rec.IP = ip
+	rec.Port = 8080
+	rec.Source = "scan-test"
+	id, inserted, err := repo.InsertIfAbsent(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("seed %s: %v", ip, err)
+	}
+	if !inserted {
+		t.Fatalf("seed %s: not inserted", ip)
+	}
+	return id
 }
 
-// fakeScannerFunc is a scanner that calls a function — for flexible test behavior.
-type fakeScannerFunc struct {
-	mu    sync.Mutex
-	count int
-	fn    func(context.Context, *contract.ProxyRecord) error
+func seedVerification(t *testing.T, repo *repository.FakeProxyRepository, ip string) int64 {
+	t.Helper()
+	return seedRecord(t, repo, ip, contract.ProxyRecord{GeneralHealthy: true})
 }
 
-func (f *fakeScannerFunc) ProcessScanProxy(ctx context.Context, p *contract.ProxyRecord) error {
-	err := f.fn(ctx, p)
-	f.mu.Lock()
-	f.count++
-	f.mu.Unlock()
+func seedRecovery(t *testing.T, repo *repository.FakeProxyRepository, ip string, now time.Time) int64 {
+	t.Helper()
+	return seedRecord(t, repo, ip, contract.ProxyRecord{LastVerifiedAt: &now})
+}
+
+func seedBackground(t *testing.T, repo *repository.FakeProxyRepository, ip string, now time.Time) int64 {
+	t.Helper()
+	old := now.Add(-2 * time.Hour)
+	return seedRecord(t, repo, ip, contract.ProxyRecord{LastVerifiedAt: &old})
+}
+
+// gateChecker blocks named endpoints on a channel until the test releases
+// them, records start order, and tracks per-endpoint and total concurrency.
+type gateChecker struct {
+	mu       sync.Mutex
+	gates    map[string]chan struct{}
+	started  chan string
+	behavior func(ip string) (int, error)
+	curTotal int
+	curPerIP map[string]int
+	maxTotal int
+	maxPerIP int
+}
+
+func newGateChecker(behavior func(ip string) (int, error)) *gateChecker {
+	return &gateChecker{
+		gates:    map[string]chan struct{}{},
+		started:  make(chan string, 128),
+		behavior: behavior,
+		curPerIP: map[string]int{},
+	}
+}
+
+func (c *gateChecker) Check(ctx context.Context, _, ip string, _ int) (int, error) {
+	c.mu.Lock()
+	c.curTotal++
+	if c.curTotal > c.maxTotal {
+		c.maxTotal = c.curTotal
+	}
+	c.curPerIP[ip]++
+	if c.curPerIP[ip] > c.maxPerIP {
+		c.maxPerIP = c.curPerIP[ip]
+	}
+	gate := c.gates[ip]
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.curTotal--
+		c.curPerIP[ip]--
+		c.mu.Unlock()
+	}()
+
+	c.started <- ip
+	latency, err := 42, error(nil)
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			latency, err = 0, ctx.Err()
+		}
+	}
+	if err == nil && c.behavior != nil {
+		latency, err = c.behavior(ip)
+	}
+	return latency, err
+}
+
+func (c *gateChecker) gate(ip string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gates[ip] = make(chan struct{})
+}
+
+func (c *gateChecker) release(ip string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gate, ok := c.gates[ip]; ok {
+		close(gate)
+		delete(c.gates, ip)
+	}
+}
+
+func (c *gateChecker) releaseAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for ip, gate := range c.gates {
+		close(gate)
+		delete(c.gates, ip)
+	}
+}
+
+func (c *gateChecker) peak() (total, perIP int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.maxTotal, c.maxPerIP
+}
+
+// attemptRecord is one CompleteScan observation as the store received it.
+type attemptRecord struct {
+	id      int64
+	outcome contract.ScanOutcome
+}
+
+// probeStore wraps the fake repository with error injection and observability
+// for the dispatcher's store interactions.
+type probeStore struct {
+	*repository.FakeProxyRepository
+
+	mu             sync.Mutex
+	claimCalls     int
+	failClaims     int
+	completeCalls  int
+	failCompletes  int
+	discard        bool // delegate the write, then report the fenced (false, nil) result
+	releaseCalls   int
+	failReleases   bool
+	attempts       []attemptRecord
+	completeEvents chan attemptRecord
+	releaseEvents  chan struct{}
+}
+
+func newProbeStore(repo *repository.FakeProxyRepository) *probeStore {
+	return &probeStore{
+		FakeProxyRepository: repo,
+		completeEvents:      make(chan attemptRecord, 64),
+		releaseEvents:       make(chan struct{}, 64),
+	}
+}
+
+func (s *probeStore) ClaimScans(ctx context.Context, queue contract.ScanQueue, limit int) ([]contract.ScanLease, error) {
+	s.mu.Lock()
+	s.claimCalls++
+	fail := s.failClaims > 0
+	if fail {
+		s.failClaims--
+	}
+	s.mu.Unlock()
+	if fail {
+		return nil, errors.New("claim rpc failed")
+	}
+	return s.FakeProxyRepository.ClaimScans(ctx, queue, limit)
+}
+
+func (s *probeStore) CompleteScan(ctx context.Context, lease contract.ScanLease, update contract.ScanUpdate) (bool, error) {
+	rec := attemptRecord{id: lease.Record.ID, outcome: update.Outcome}
+	s.mu.Lock()
+	s.completeCalls++
+	s.attempts = append(s.attempts, rec)
+	fail := s.failCompletes > 0
+	if fail {
+		s.failCompletes--
+	}
+	discard := s.discard
+	s.mu.Unlock()
+	if fail {
+		select {
+		case s.completeEvents <- rec:
+		default:
+		}
+		return false, errors.New("complete rpc failed")
+	}
+	accepted, err := s.FakeProxyRepository.CompleteScan(ctx, lease, update)
+	if discard && err == nil {
+		accepted = false
+	}
+	// Signal only after the fake store applied the write so tests that read
+	// row state after the event observe the persisted outcome.
+	select {
+	case s.completeEvents <- rec:
+	default:
+	}
+	return accepted, err
+}
+
+func (s *probeStore) ReleaseScan(ctx context.Context, lease contract.ScanLease) error {
+	s.mu.Lock()
+	s.releaseCalls++
+	fail := s.failReleases
+	s.mu.Unlock()
+	err := s.FakeProxyRepository.ReleaseScan(ctx, lease)
+	if fail {
+		err = errors.New("release rpc failed")
+	}
+	// Signal only after the fake store cleared the lease.
+	select {
+	case s.releaseEvents <- struct{}{}:
+	default:
+	}
 	return err
 }
 
-func (f *fakeScannerFunc) CallCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.count
+func (s *probeStore) claimCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claimCalls
 }
 
-// fakeScanRepo implements contract.ProxyRepository for scan worker tests.
-// Only ListForScan and ListDeadForScan are used; other methods panic if called.
-type fakeScanRepo struct {
-	mu             sync.Mutex
-	batches        [][]contract.ProxyRecord
-	batchIdx       int
-	pendingRegular []contract.ProxyRecord // unclaimed tail of the current batch
-	deadBatches    [][]contract.ProxyRecord
-	deadBatchIdx   int
-	pendingDead    []contract.ProxyRecord
-	listCalls      int32
-	deadListCalls  int32
-	listErr        error
-	deadListErr    error
-	limitSeen      int
-	deadLimitSeen  int
-	listTimes      []time.Time
-}
-
-func newFakeScanRepo(batches ...[]contract.ProxyRecord) *fakeScanRepo {
-	return &fakeScanRepo{batches: batches, deadBatches: [][]contract.ProxyRecord{nil}}
-}
-
-func newFakeScanRepoWithDead(regularBatches, deadBatches [][]contract.ProxyRecord) *fakeScanRepo {
-	return &fakeScanRepo{batches: regularBatches, deadBatches: deadBatches}
-}
-
-func (f *fakeScanRepo) ListForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
-	atomic.AddInt32(&f.listCalls, 1)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.limitSeen = limit
-	f.listTimes = append(f.listTimes, time.Now())
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	if f.pendingRegular == nil {
-		if f.batchIdx >= len(f.batches) {
-			return nil, nil
+func (s *probeStore) attemptCountFor(id int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, a := range s.attempts {
+		if a.id == id {
+			n++
 		}
-		f.pendingRegular = f.batches[f.batchIdx]
-		f.batchIdx++
 	}
-	out := f.pendingRegular
-	if limit > 0 && len(out) > limit {
-		// LIMIT is a hard cap; unclaimed rows stay eligible for the next call.
-		out = out[:limit]
-		f.pendingRegular = f.pendingRegular[limit:]
-	} else {
-		f.pendingRegular = nil
-	}
-	return out, nil
+	return n
 }
 
-func (f *fakeScanRepo) ListCallCount() int32 {
-	return atomic.LoadInt32(&f.listCalls)
+func (s *probeStore) releaseCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.releaseCalls
 }
 
-// LimitSeen returns the limit passed to the most recent ListForScan call.
-func (f *fakeScanRepo) LimitSeen() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.limitSeen
+// fakeClock drives the fake repository's time source so due-ness recycles
+// without wall-clock waits.
+type fakeClock struct {
+	nanos atomic.Int64
 }
 
-// DeadLimitSeen returns the limit passed to the most recent ListDeadForScan.
-func (f *fakeScanRepo) DeadLimitSeen() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.deadLimitSeen
+func newFakeClock() *fakeClock {
+	c := &fakeClock{}
+	c.nanos.Store(time.Now().UnixNano())
+	return c
 }
 
-// ListCallTime returns when the nth (1-based) ListForScan call happened.
-func (f *fakeScanRepo) ListCallTime(n int) time.Time {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.listTimes[n-1]
+func (c *fakeClock) Now() time.Time { return time.Unix(0, c.nanos.Load()) }
+
+func (c *fakeClock) Advance(d time.Duration) { c.nanos.Add(int64(d)) }
+
+func newWorker(store contract.ProxyScanStore, checker contract.ProxyChecker, guard contract.ProxyEndpointGuard) *ScanWorker {
+	return NewScanWorker(store, checker, guard, testPolicy(), [3]int{10, 45, 45}, testLogger())
 }
 
-func (f *fakeScanRepo) ListDeadForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
-	atomic.AddInt32(&f.deadListCalls, 1)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.deadLimitSeen = limit
-	if f.deadListErr != nil {
-		return nil, f.deadListErr
-	}
-	if f.pendingDead == nil {
-		if f.deadBatchIdx >= len(f.deadBatches) {
-			return nil, nil
-		}
-		f.pendingDead = f.deadBatches[f.deadBatchIdx]
-		f.deadBatchIdx++
-	}
-	out := f.pendingDead
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-		f.pendingDead = f.pendingDead[limit:]
-	} else {
-		f.pendingDead = nil
-	}
-	return out, nil
+func shortPoll(t *testing.T) {
+	t.Helper()
+	original := scanPollInterval
+	scanPollInterval = 15 * time.Millisecond
+	t.Cleanup(func() { scanPollInterval = original })
 }
 
-func (f *fakeScanRepo) DeadListCallCount() int32 {
-	return atomic.LoadInt32(&f.deadListCalls)
-}
-
-// Stub implementations for contract.ProxyRepository.
-func (f *fakeScanRepo) Exists(context.Context, string, string, int) (bool, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) InsertIfAbsent(context.Context, contract.ProxyRecord) (int64, bool, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) Get(context.Context, int64) (*contract.ProxyRecord, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) UpdateStatus(context.Context, int64, string, *int, int, *time.Time) error {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) UpdateScanTime(context.Context, int64) error {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) ListActive(context.Context, int) ([]contract.ProxyRecord, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) Count(context.Context) (int64, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) CountByStatus(context.Context) (map[string]int64, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) ClaimProxy(context.Context, string, time.Duration) (*contract.ProxyRecord, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) ExtendLock(context.Context, int64, string, time.Duration) (bool, error) {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) ReleaseProxy(context.Context, int64, string) error {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) MarkFailedProxy(context.Context, int64, string) error {
-	panic("not implemented")
-}
-
-func (f *fakeScanRepo) RandomActive(context.Context, []int64) (*contract.ProxyRecord, error) {
-	panic("not implemented")
-}
-
-func records(ids ...int64) []contract.ProxyRecord {
-	out := make([]contract.ProxyRecord, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, contract.ProxyRecord{ID: id, Protocol: "http", IP: fmt.Sprintf("10.0.0.%d", id), Port: 80})
-	}
-	return out
-}
-
-func newTestWorker(repo *fakeScanRepo, scanner worker.Scanner, idle time.Duration) *worker.ScanWorker {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return worker.NewScanWorker(repo, scanner, logger, idle)
-}
-
-func TestRunScan_PrefetchLimitIsBufferCap(t *testing.T) {
-	// The prefetcher fetches up to the buffer cap (workers + 30%), not just the
-	// worker count, so workers never wait on a database round trip.
-	repo := newFakeScanRepo(nil) // empty batch → idle loop
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	w.RunScan(ctx, 7, 0)
-
-	// 7 workers → buffer cap = ceil(7 × 1.3) = 10.
-	if repo.LimitSeen() != 10 {
-		t.Errorf("ListForScan limit = %d, want 10 (buffer cap)", repo.LimitSeen())
-	}
-}
-
-func TestRunScan_NormalizesNonPositiveConcurrency(t *testing.T) {
-	repo := newFakeScanRepo(nil)
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	w.RunScan(ctx, 0, 0)
-
-	// Default 4 workers → buffer cap = ceil(4 × 1.3) = 6.
-	if repo.LimitSeen() != 6 {
-		t.Errorf("ListForScan limit = %d, want 6 (default cap)", repo.LimitSeen())
-	}
-}
-
-func TestRunScan_PrefetchStaysWithinBufferCap(t *testing.T) {
-	// While every worker is busy and the buffer is full, the prefetcher must
-	// not fetch more: in-flight + buffered <= workers + 30%.
-	many := records(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
-	repo := newFakeScanRepo(many, nil)
-
-	gate := make(chan struct{})
-	var gated int32
-	scanner := &fakeScannerFunc{fn: func(_ context.Context, _ *contract.ProxyRecord) error {
-		if atomic.AddInt32(&gated, 1) <= 4 { // gate one worker-load; let the rest through
-			<-gate
-		}
-		return nil
-	}}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
+// startWorker runs the worker until test cleanup cancels it and fails the
+// test if the loop does not exit promptly. Shutdown-focused tests manage
+// their own lifecycle to observe the return value themselves.
+func startWorker(t *testing.T, w *ScanWorker, concurrency int) {
+	t.Helper()
+	shortPoll(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		w.RunScan(ctx, 4, 0)
-		close(done)
+		done <- w.RunScan(ctx, concurrency)
 	}()
-
-	// 4 workers → cap 6. The first fetch must be exactly the cap, and while
-	// the gated workers hold records, no further fetch may happen.
-	time.Sleep(150 * time.Millisecond)
-	if got := repo.ListCallCount(); got != 1 {
-		t.Errorf("ListForScan calls = %d, want 1 (buffer full, workers busy)", got)
-	}
-	if repo.LimitSeen() != 6 {
-		t.Errorf("ListForScan limit = %d, want 6 (cap)", repo.LimitSeen())
-	}
-
-	close(gate) // let everything drain
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if scanner.CallCount() >= 10 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunScan did not exit after cancellation")
-	}
-
-	if got := scanner.CallCount(); got != 10 {
-		t.Errorf("scanned = %d, want 10", got)
-	}
-}
-
-func TestRunScan_PrefetchContinuesWhileWorkersScan(t *testing.T) {
-	// The prefetcher must run ahead: the next fetch happens while the previous
-	// batch is still being scanned, instead of waiting for a batch barrier.
-	repo := newFakeScanRepo(records(1, 2), records(3), nil)
-	scanner := &fakeScanner{delay: 60 * time.Millisecond}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		w.RunScan(ctx, 4, 0)
-		close(done)
-	}()
-
-	// Batch 1 has two 60ms scans; a barrier design would still be inside batch
-	// 1 at 30ms. Lookahead must already have fetched batch 2.
-	deadline := time.Now().Add(1 * time.Second)
-	for time.Now().Before(deadline) {
-		if repo.ListCallCount() >= 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := repo.ListCallCount(); got < 2 {
-		t.Errorf("ListForScan calls = %d, want >= 2 while batch 1 still scanning (no lookahead)", got)
-	}
-
-	// Drain everything, then stop the idle loop.
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if scanner.CallCount() >= 3 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunScan did not exit after cancellation")
-	}
-	if got := scanner.CallCount(); got != 3 {
-		t.Errorf("scanned = %d, want 3", got)
-	}
-}
-
-func TestRunScan_ProcessesEachRecordExactlyOnce(t *testing.T) {
-	repo := newFakeScanRepo(records(1, 2, 3), records(4, 5), nil)
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		w.RunScan(ctx, 4, 0)
-		close(done)
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if scanner.CallCount() >= 5 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunScan did not exit after cancellation")
-	}
-
-	seen := map[int64]int{}
-	for _, p := range scanner.Calls() {
-		seen[p.ID]++
-	}
-	for _, id := range []int64{1, 2, 3, 4, 5} {
-		if seen[id] != 1 {
-			t.Errorf("proxy %d processed %d times, want 1", id, seen[id])
-		}
-	}
-}
-
-func TestRunScan_EmptyBatchDoesNotHotPoll(t *testing.T) {
-	// First batch empty → should wait idle, then context cancel stops it.
-	repo := newFakeScanRepo(nil) // always returns empty
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 200*time.Millisecond)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	done := make(chan struct{})
-	go func() {
-		w.RunScan(ctx, 2, 0)
-		close(done)
-	}()
-
-	// Give it time to enter idle wait, then cancel.
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-
-	select {
-	case <-done:
-		// OK — cancelled during idle wait
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunScan did not exit after context cancellation during idle wait")
-	}
-
-	// Should have called ListForScan only once (the empty batch).
-	if got := repo.ListCallCount(); got != 1 {
-		t.Errorf("ListForScan calls = %d, want 1 (no hot-poll)", got)
-	}
-}
-
-func TestRunScan_ListErrorIsReturned(t *testing.T) {
-	repo := newFakeScanRepo()
-	repo.listErr = errors.New("database connection refused")
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
-	err := w.RunScan(context.Background(), 2, 0)
-
-	if err == nil {
-		t.Fatal("expected error from ListForScan")
-	}
-	if !errors.Is(err, repo.listErr) {
-		t.Errorf("error = %v, want %v", err, repo.listErr)
-	}
-}
-
-func TestRunScan_PerRecordFailureIsolated(t *testing.T) {
-	// Batch of 3: first and third succeed, second fails.
-	batch := records(1, 2, 3)
-	// After the first batch (with error), return empty to stop.
-	repo := newFakeScanRepo(batch, nil)
-
-	var scanCount int32
-	scanner := &fakeScannerFunc{
-		fn: func(_ context.Context, p *contract.ProxyRecord) error {
-			atomic.AddInt32(&scanCount, 1)
-			if p.ID == 2 {
-				return errors.New("proxy unreachable")
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("RunScan returned %v", err)
 			}
-			return nil
-		},
-	}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	w.RunScan(ctx, 3, 0)
-
-	// All 3 should have been attempted despite the error on ID 2.
-	if got := atomic.LoadInt32(&scanCount); got != 3 {
-		t.Errorf("scan attempts = %d, want 3 (error isolated)", got)
-	}
-}
-
-func TestRunScan_ScanErrorPausesPrefetch(t *testing.T) {
-	// After a record fails, the pool pauses feeding for the idle delay before
-	// fetching again.
-	repo := newFakeScanRepo(records(1, 2), nil)
-	scanner := &fakeScannerFunc{fn: func(_ context.Context, p *contract.ProxyRecord) error {
-		if p.ID == 1 {
-			// Delay the failure so the prefetcher is parked waiting for a
-			// credit while the record is in flight — the wake must observe
-			// the failure flag before the next fetch.
-			time.Sleep(30 * time.Millisecond)
-			return errors.New("proxy unreachable")
+		case <-time.After(3 * time.Second):
+			t.Error("RunScan did not exit after cancellation")
 		}
-		return nil
-	}}
-	w := newTestWorker(repo, scanner, 80*time.Millisecond)
+	})
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	w.RunScan(ctx, 1, 0) // one worker → buffer cap 1 → prefetcher parked during the scan
-
-	if got := repo.ListCallCount(); got < 2 {
-		t.Fatalf("ListForScan calls = %d, want >= 2", got)
+func recvStarted(t *testing.T, ch <-chan string, timeout time.Duration) string {
+	t.Helper()
+	select {
+	case ip := <-ch:
+		return ip
+	case <-time.After(timeout):
+		t.Fatalf("no check started within %v", timeout)
 	}
-	gap := repo.ListCallTime(2).Sub(repo.ListCallTime(1))
-	if gap < 60*time.Millisecond {
-		t.Errorf("gap between fetches after scan error = %v, want >= ~idle delay (80ms)", gap)
+	return ""
+}
+
+func waitAttempt(t *testing.T, ch <-chan attemptRecord, timeout time.Duration) attemptRecord {
+	t.Helper()
+	select {
+	case rec := <-ch:
+		return rec
+	case <-time.After(timeout):
+		t.Fatalf("no completion persisted within %v", timeout)
+	}
+	return attemptRecord{}
+}
+
+func waitSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		t.Fatalf("expected event did not occur within %v", timeout)
 	}
 }
 
-func TestRunScan_PanicIsContained(t *testing.T) {
-	// A panicking scanner must not take down the pool: the panic is recovered
-	// and the remaining records are still processed.
-	batch := records(1, 2, 3)
-	repo := newFakeScanRepo(batch, nil)
-	scanner := &fakeScannerFunc{fn: func(_ context.Context, p *contract.ProxyRecord) error {
-		if p.ID == 2 {
-			panic("scanner exploded")
+func rowByID(t *testing.T, repo *repository.FakeProxyRepository, id int64) contract.ProxyRecord {
+	t.Helper()
+	rec, err := repo.Get(context.Background(), id)
+	if err != nil || rec == nil {
+		t.Fatalf("row %d lookup: %v", id, err)
+	}
+	return *rec
+}
+
+func TestRunScan_ValidatesConfiguration(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	guard := proxy.NewFakeEndpointGuard()
+	checker := newGateChecker(nil)
+
+	badWeights := [][3]int{{0, 45, 45}, {10, -1, 45}, {10, 45, 0}}
+	for _, weights := range badWeights {
+		w := NewScanWorker(repo, checker, guard, testPolicy(), weights, testLogger())
+		if err := w.RunScan(context.Background(), 4); err == nil {
+			t.Fatalf("RunScan accepted weights %v", weights)
 		}
-		return nil
-	}}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	w.RunScan(ctx, 3, 0)
-
-	if got := scanner.CallCount(); got != 2 {
-		t.Errorf("scanned = %d, want 2 (panic on ID 2 contained)", got)
+	}
+	w := newWorker(repo, checker, guard)
+	for _, concurrency := range []int{0, -3} {
+		if err := w.RunScan(context.Background(), concurrency); err == nil {
+			t.Fatalf("RunScan accepted concurrency %d", concurrency)
+		}
 	}
 }
 
-func TestSplitScanConcurrency(t *testing.T) {
-	tests := []struct {
-		name        string
-		concurrency int
-		percentage  int
-		wantRegular int
-		wantDead    int
-	}{
-		{"20pct of 10", 10, 20, 8, 2},
-		{"0pct", 10, 0, 10, 0},
-		{"90pct of 10", 10, 90, 1, 9},
-		{"91pct capped to 90", 10, 91, 1, 9},
-		{"200pct capped to 90", 10, 200, 1, 9},
-		{"negative pct", 10, -5, 10, 0},
-		{"zero concurrency normalized to 4", 0, 20, 4, 0},
-		{"negative concurrency normalized to 4", -1, 20, 4, 0},
-		{"300 concurrency 20pct", 300, 20, 240, 60},
+func TestRunScan_BlocksAtConfiguredConcurrency(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	const concurrency = 4
+	const rows = 10
+	ips := make([]string, 0, rows)
+	for i := range rows {
+		ip := fmt.Sprintf("10.1.0.%d", i+1)
+		ips = append(ips, ip)
+		seedVerification(t, repo, ip)
+		checker.gate(ip)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotRegular, gotDead := worker.SplitScanConcurrency(tt.concurrency, tt.percentage)
-			if gotRegular != tt.wantRegular {
-				t.Errorf("regular = %d, want %d", gotRegular, tt.wantRegular)
-			}
-			if gotDead != tt.wantDead {
-				t.Errorf("dead = %d, want %d", gotDead, tt.wantDead)
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, concurrency)
+
+	started := make(map[string]bool)
+	for range concurrency {
+		started[recvStarted(t, checker.started, 2*time.Second)] = true
+	}
+	if len(started) != concurrency {
+		t.Fatalf("distinct started checks = %d, want %d", len(started), concurrency)
+	}
+
+	// While every admitted check is gated, no fifth check may start.
+	select {
+	case ip := <-checker.started:
+		t.Fatalf("check %s started beyond the configured concurrency", ip)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	checker.releaseAll()
+	for range rows - concurrency {
+		recvStarted(t, checker.started, 2*time.Second)
+	}
+
+	perIP := map[string]int{}
+	deadline := time.After(3 * time.Second)
+	for len(perIP) < rows {
+		select {
+		case rec := <-probe.completeEvents:
+			perIP[ipOf(t, repo, rec.id)]++
+		case <-deadline:
+			t.Fatalf("only %d/%d rows completed", len(perIP), rows)
+		}
+	}
+	for _, ip := range ips {
+		if perIP[ip] != 1 {
+			t.Fatalf("row %s completed %d times, want exactly 1", ip, perIP[ip])
+		}
+	}
+	if total, _ := checker.peak(); total > concurrency {
+		t.Fatalf("peak concurrent checks = %d, want <= %d", total, concurrency)
+	}
+}
+
+func ipOf(t *testing.T, repo *repository.FakeProxyRepository, id int64) string {
+	t.Helper()
+	rec, err := repo.Get(context.Background(), id)
+	if err != nil || rec == nil {
+		t.Fatalf("row %d lookup: %v", id, err)
+	}
+	return rec.IP
+}
+
+func TestRunScan_AllBackgroundFillsEverySlot(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	const concurrency = 4
+	const rows = 6
+	bgIPs := map[string]bool{}
+	now := time.Now()
+	for i := range rows {
+		ip := fmt.Sprintf("10.2.0.%d", i+1)
+		seedBackground(t, repo, ip, now)
+		bgIPs[ip] = true
+	}
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, concurrency)
+
+	for range concurrency {
+		ip := recvStarted(t, checker.started, 2*time.Second)
+		if !bgIPs[ip] {
+			t.Fatalf("slot filled by non-background row %s", ip)
+		}
+	}
+
+	checker.releaseAll()
+	waitAttempt(t, probe.completeEvents, 2*time.Second)
+}
+
+func TestRunScan_DueVerificationPreemptsBorrowedWork(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	const concurrency = 4
+	now := time.Now()
+	recoveryIP := "10.3.0.1"
+	seedRecovery(t, repo, recoveryIP, now)
+	bgIPs := []string{"10.3.1.1", "10.3.1.2", "10.3.1.3"}
+	for _, ip := range bgIPs {
+		seedBackground(t, repo, ip, now)
+		checker.gate(ip)
+	}
+	checker.gate(recoveryIP)
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, concurrency)
+
+	fillers := map[string]bool{}
+	for range concurrency {
+		fillers[recvStarted(t, checker.started, 2*time.Second)] = true
+	}
+	for _, ip := range append([]string{recoveryIP}, bgIPs...) {
+		if !fillers[ip] {
+			t.Fatalf("expected %s among the initial background/recovery fill, got %v", ip, fillers)
+		}
+	}
+
+	// All slots are busy: introduce a due verification row, then free one
+	// slot. The under-reservation pass must offer the verification row
+	// before any further borrowing.
+	verificationIP := "10.3.2.1"
+	seedVerification(t, repo, verificationIP)
+	checker.release(recoveryIP)
+	if got := recvStarted(t, checker.started, 2*time.Second); got != verificationIP {
+		t.Fatalf("freed slot admitted %s, want due verification %s", got, verificationIP)
+	}
+
+	checker.releaseAll()
+	for range concurrency - 1 {
+		recvStarted(t, checker.started, 2*time.Second)
+	}
+	waitAttempt(t, probe.completeEvents, 2*time.Second)
+}
+
+func TestRunScan_SustainsAllQueuesAtSmallConcurrency(t *testing.T) {
+	for _, concurrency := range []int{1, 2} {
+		t.Run(fmt.Sprintf("concurrency_%d", concurrency), func(t *testing.T) {
+			clock := newFakeClock()
+			repo := repository.NewFakeProxyRepository(testPolicy())
+			repo.Now = clock.Now
+			probe := newProbeStore(repo)
+			guard := proxy.NewFakeEndpointGuard()
+			guard.SetHealthy(true)
+
+			now := clock.Now()
+			queueOf := map[string]string{}
+			verificationIP := "10.4.0.1"
+			seedVerification(t, repo, verificationIP)
+			queueOf[verificationIP] = "verification"
+			recoveryIP := "10.4.1.1"
+			seedRecovery(t, repo, recoveryIP, now)
+			queueOf[recoveryIP] = "recovery"
+			backgroundIP := "10.4.2.1"
+			seedBackground(t, repo, backgroundIP, now)
+			queueOf[backgroundIP] = "background"
+
+			// A target error stays inconclusive: every row keeps its queue
+			// membership and becomes due again after the one-millisecond
+			// inconclusive retry floor.
+			checker := newGateChecker(func(string) (int, error) {
+				return 0, &contract.ProxyCheckError{Kind: contract.CheckTarget, Reason: "status 503"}
+			})
+
+			w := newWorker(probe, checker, guard)
+			startWorker(t, w, concurrency)
+
+			progress := map[string]int{}
+			deadline := time.After(5 * time.Second)
+			for progress["verification"] < 3 || progress["recovery"] < 3 || progress["background"] < 3 {
+				clock.Advance(5 * time.Millisecond)
+				select {
+				case ip := <-checker.started:
+					progress[queueOf[ip]]++
+				case <-deadline:
+					t.Fatalf("queues not sustained: %v", progress)
+				}
 			}
 		})
 	}
 }
 
-func TestRunScan_DeadPercentage_SplitsConcurrency(t *testing.T) {
-	// 10 concurrency, 20% dead → regular=8, dead=2. The first regular fetch is
-	// the buffer cap (8 workers → ceil(8 × 1.3) = 11); dead fetch is its cap (ceil(2 × 1.3) = 3).
-	regularBatch := []contract.ProxyRecord{
-		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
-	}
-	deadBatch := []contract.ProxyRecord{
-		{ID: 100, Protocol: "http", IP: "9.9.9.9", Port: 80, Status: contract.ProxyStatusDead},
-	}
-	repo := newFakeScanRepoWithDead(
-		[][]contract.ProxyRecord{regularBatch, nil},
-		[][]contract.ProxyRecord{deadBatch, nil},
-	)
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func TestRunScan_GuardPauseBlocksClaimsUntilHealthy(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard() // unhealthy at startup
+	checker := newGateChecker(nil)
 
-	w.RunScan(ctx, 10, 20)
+	first := "10.5.0.1"
+	second := "10.5.0.2"
+	seedVerification(t, repo, first)
+	seedVerification(t, repo, second)
 
-	if repo.LimitSeen() != 11 {
-		t.Errorf("regular limit = %d, want 11 (buffer cap)", repo.LimitSeen())
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, 2)
+
+	// The guard is unhealthy at startup: zero claims while due work exists.
+	select {
+	case ip := <-checker.started:
+		t.Fatalf("check %s started while the guard was unhealthy", ip)
+	case <-time.After(150 * time.Millisecond):
 	}
-	if repo.DeadLimitSeen() != 3 {
-		t.Errorf("dead limit = %d, want 3 (buffer cap)", repo.DeadLimitSeen())
+	if calls := probe.claimCount(); calls != 0 {
+		t.Fatalf("claim calls while guard unhealthy = %d, want 0", calls)
 	}
-}
 
-func TestRunScan_ZeroPercentage_NoDeadCalls(t *testing.T) {
-	batch := []contract.ProxyRecord{
-		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
-	}
-	repo := newFakeScanRepo(batch, nil)
-	repo.deadBatches = nil // no dead batches
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	w.RunScan(ctx, 10, 0)
-
-	if repo.DeadListCallCount() != 0 {
-		t.Errorf("dead list calls = %d, want 0 (no dead pool)", repo.DeadListCallCount())
+	guard.SetHealthy(true)
+	started := map[string]bool{recvStarted(t, checker.started, 2*time.Second): true}
+	started[recvStarted(t, checker.started, 2*time.Second)] = true
+	rec := waitAttempt(t, probe.completeEvents, 2*time.Second)
+	if rec.outcome != contract.ScanSuccess {
+		t.Fatalf("outcome after recovery = %v, want success", rec.outcome)
 	}
 }
 
-func TestRunScan_EmptyDeadPoolDoesNotStopRegular(t *testing.T) {
-	regularBatch := []contract.ProxyRecord{
-		{ID: 1, Protocol: "http", IP: "1.1.1.1", Port: 80},
+func TestRunScan_GuardGenerationChangeDowngradesFailure(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(func(string) (int, error) {
+		return 0, &contract.ProxyCheckError{Kind: contract.CheckProxy, Reason: "connection refused"}
+	})
+
+	ip := "10.6.0.1"
+	id := seedVerification(t, repo, ip)
+	checker.gate(ip)
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, 1)
+
+	if got := recvStarted(t, checker.started, 2*time.Second); got != ip {
+		t.Fatalf("started %s, want %s", got, ip)
 	}
-	// Dead pool returns empty then nil to stop.
-	repo := newFakeScanRepoWithDead(
-		[][]contract.ProxyRecord{regularBatch, nil},
-		[][]contract.ProxyRecord{nil},
-	)
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// The endpoint guard restarts while the check is in flight: generation
+	// 0 -> 1 fences conclusive attribution of the proxy failure.
+	guard.SetHealthy(false)
+	checker.release(ip)
 
-	w.RunScan(ctx, 10, 20)
-
-	// Regular pool should have scanned the record.
-	if got := scanner.CallCount(); got < 1 {
-		t.Errorf("scanned = %d, want >= 1 (regular pool should progress)", got)
+	rec := waitAttempt(t, probe.completeEvents, 2*time.Second)
+	if rec.outcome != contract.ScanInconclusive {
+		t.Fatalf("outcome after guard generation change = %v, want inconclusive", rec.outcome)
+	}
+	row := rowByID(t, repo, id)
+	if !row.GeneralHealthy || row.FailCount != 0 {
+		t.Fatalf("inconclusive attempt mutated health evidence: healthy=%v fails=%d", row.GeneralHealthy, row.FailCount)
 	}
 }
 
-func TestRunScan_ContextCancellation_StopsBothPools(t *testing.T) {
-	repo := newFakeScanRepoWithDead(
-		[][]contract.ProxyRecord{nil},
-		[][]contract.ProxyRecord{nil},
-	)
-	scanner := &fakeScanner{}
-	w := newTestWorker(repo, scanner, 200*time.Millisecond)
+func TestRunScan_PersistenceFailurePausesThenRecovers(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(shortLeasePolicy())
+	probe := newProbeStore(repo)
+	probe.mu.Lock()
+	probe.failCompletes = 1
+	probe.mu.Unlock()
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	ip := "10.7.0.1"
+	id := seedVerification(t, repo, ip)
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, 1)
+
+	first := waitAttempt(t, probe.completeEvents, 2*time.Second)
+	if first.outcome != contract.ScanSuccess {
+		t.Fatalf("first attempt outcome = %v, want success", first.outcome)
+	}
+	// The failed write keeps the lease; expiry must hand the row back and the
+	// loop must continue without reclassifying the proxy.
+	second := waitAttempt(t, probe.completeEvents, 3*time.Second)
+	if second.id != first.id {
+		t.Fatalf("retry claimed row %d, want %d", second.id, first.id)
+	}
+	row := rowByID(t, repo, id)
+	if !row.GeneralHealthy {
+		t.Fatal("row not recovered after lease expiry")
+	}
+}
+
+func TestRunScan_ClaimErrorPausesThenContinues(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	probe.mu.Lock()
+	probe.failClaims = 2
+	probe.mu.Unlock()
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	ip := "10.8.0.1"
+	seedVerification(t, repo, ip)
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, 1)
+
+	waitAttempt(t, probe.completeEvents, 3*time.Second)
+	if calls := probe.claimCount(); calls < 3 {
+		t.Fatalf("claim calls = %d, want >= 3 after two failures", calls)
+	}
+}
+
+func TestRunScan_NotifierOnlyOnAcceptedSuccess(t *testing.T) {
+	t.Run("accepted success notifies", func(t *testing.T) {
+		repo := repository.NewFakeProxyRepository(testPolicy())
+		probe := newProbeStore(repo)
+		guard := proxy.NewFakeEndpointGuard()
+		guard.SetHealthy(true)
+		checker := newGateChecker(nil)
+
+		ip := "10.9.0.1"
+		seedVerification(t, repo, ip)
+		w := newWorker(probe, checker, guard)
+		var notifications atomic.Int32
+		w.SetNotifier(func() { notifications.Add(1) })
+		startWorker(t, w, 1)
+
+		rec := waitAttempt(t, probe.completeEvents, 2*time.Second)
+		if rec.outcome != contract.ScanSuccess {
+			t.Fatalf("outcome = %v, want success", rec.outcome)
+		}
+		if notifications.Load() != 1 {
+			t.Fatalf("notifications = %d, want 1", notifications.Load())
+		}
+	})
+
+	t.Run("accepted failure does not notify", func(t *testing.T) {
+		repo := repository.NewFakeProxyRepository(testPolicy())
+		probe := newProbeStore(repo)
+		guard := proxy.NewFakeEndpointGuard()
+		guard.SetHealthy(true)
+		now := time.Now()
+		ip := "10.9.1.1"
+		id := seedRecovery(t, repo, ip, now)
+		checker := newGateChecker(func(string) (int, error) {
+			return 0, &contract.ProxyCheckError{Kind: contract.CheckProxy, Reason: "connection refused"}
+		})
+
+		w := newWorker(probe, checker, guard)
+		var notifications atomic.Int32
+		w.SetNotifier(func() { notifications.Add(1) })
+		startWorker(t, w, 1)
+
+		rec := waitAttempt(t, probe.completeEvents, 2*time.Second)
+		if rec.outcome != contract.ScanFailure {
+			t.Fatalf("outcome = %v, want conclusive failure", rec.outcome)
+		}
+		if notifications.Load() != 0 {
+			t.Fatalf("notifications = %d, want 0 for accepted failure", notifications.Load())
+		}
+		row := rowByID(t, repo, id)
+		if row.GeneralHealthy || row.FailCount != 1 {
+			t.Fatalf("failure not persisted: healthy=%v fails=%d", row.GeneralHealthy, row.FailCount)
+		}
+	})
+
+	t.Run("discarded completion does not notify", func(t *testing.T) {
+		repo := repository.NewFakeProxyRepository(testPolicy())
+		probe := newProbeStore(repo)
+		probe.mu.Lock()
+		probe.discard = true
+		probe.mu.Unlock()
+		guard := proxy.NewFakeEndpointGuard()
+		guard.SetHealthy(true)
+		ip := "10.9.2.1"
+		seedVerification(t, repo, ip)
+		checker := newGateChecker(func(string) (int, error) {
+			return 0, &contract.ProxyCheckError{Kind: contract.CheckTarget, Reason: "status 503"}
+		})
+
+		w := newWorker(probe, checker, guard)
+		var notifications atomic.Int32
+		w.SetNotifier(func() { notifications.Add(1) })
+		startWorker(t, w, 1)
+
+		for range 3 {
+			waitAttempt(t, probe.completeEvents, 2*time.Second)
+		}
+		if notifications.Load() != 0 {
+			t.Fatalf("notifications = %d, want 0 for discarded completions", notifications.Load())
+		}
+	})
+}
+
+func TestRunScan_ShutdownReleasesLeasesWithoutFailureAttribution(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	ips := []string{"10.10.0.1", "10.10.0.2"}
+	ids := map[string]int64{}
+	for _, ip := range ips {
+		ids[ip] = seedVerification(t, repo, ip)
+		checker.gate(ip)
+	}
+
+	shortPoll(t)
 	ctx, cancel := context.WithCancel(context.Background())
-
-	done := make(chan struct{})
+	done := make(chan error, 1)
+	w := newWorker(probe, checker, guard)
 	go func() {
-		w.RunScan(ctx, 10, 20)
-		close(done)
+		done <- w.RunScan(ctx, 2)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-
+	for range ips {
+		recvStarted(t, checker.started, 2*time.Second)
+	}
+	cancel() // process-style cancellation while checks are blocked
 	select {
-	case <-done:
-		// OK
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunScan did not exit after context cancellation")
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunScan returned %v on cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunScan did not exit after cancellation")
+	}
+
+	for _, ip := range ips {
+		row := rowByID(t, repo, ids[ip])
+		if row.ScanToken != nil {
+			t.Fatalf("row %s still leased after shutdown", ip)
+		}
+		if !row.GeneralHealthy || row.FailCount != 0 {
+			t.Fatalf("shutdown attributed a failure to %s: healthy=%v fails=%d", ip, row.GeneralHealthy, row.FailCount)
+		}
+	}
+}
+
+func TestRunScan_ShutdownReleaseFailureStillExits(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	probe.mu.Lock()
+	probe.failReleases = true
+	probe.mu.Unlock()
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+	checker := newGateChecker(nil)
+
+	ip := "10.11.0.1"
+	seedVerification(t, repo, ip)
+	checker.gate(ip)
+
+	shortPoll(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	w := newWorker(probe, checker, guard)
+	go func() {
+		done <- w.RunScan(ctx, 1)
+	}()
+
+	recvStarted(t, checker.started, 2*time.Second)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunScan returned %v despite a release error", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunScan hung after a release persistence failure")
+	}
+	if calls := probe.releaseCount(); calls == 0 {
+		t.Fatal("shutdown did not attempt to release the outstanding lease")
+	}
+}
+
+func TestRunScan_PanicReleasesLeaseAndCapacity(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+
+	panicIP := "10.12.0.1"
+	okIP := "10.12.0.2"
+	panicID := seedVerification(t, repo, panicIP)
+	seedVerification(t, repo, okIP)
+	checker := newGateChecker(func(ip string) (int, error) {
+		if ip == panicIP {
+			panic("checker exploded")
+		}
+		return 42, nil
+	})
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, 2)
+
+	recvStarted(t, checker.started, 2*time.Second)
+	recvStarted(t, checker.started, 2*time.Second)
+
+	rec := waitAttempt(t, probe.completeEvents, 2*time.Second)
+	if rec.id == 0 || rec.outcome != contract.ScanSuccess {
+		t.Fatalf("sibling check did not complete normally: %+v", rec)
+	}
+	if attempts := probe.attemptCountFor(panicID); attempts != 0 {
+		t.Fatalf("panicked check persisted %d attempts, want 0", attempts)
+	}
+	row := rowByID(t, repo, panicID)
+	if !row.GeneralHealthy || row.FailCount != 0 {
+		t.Fatalf("panic marked the proxy dead: healthy=%v fails=%d", row.GeneralHealthy, row.FailCount)
+	}
+}
+
+func TestRunScan_NoDoubleOwnershipUnderContinuousReadmission(t *testing.T) {
+	repo := repository.NewFakeProxyRepository(testPolicy())
+	probe := newProbeStore(repo)
+	guard := proxy.NewFakeEndpointGuard()
+	guard.SetHealthy(true)
+
+	const concurrency = 4
+	const rows = 8
+	now := time.Now()
+	for i := range rows {
+		seedBackground(t, repo, fmt.Sprintf("10.13.0.%d", i+1), now)
+	}
+	checker := newGateChecker(func(string) (int, error) {
+		return 0, &contract.ProxyCheckError{Kind: contract.CheckTarget, Reason: "status 503"}
+	})
+
+	w := newWorker(probe, checker, guard)
+	startWorker(t, w, concurrency)
+
+	for range 4 * rows {
+		waitAttempt(t, probe.completeEvents, 2*time.Second)
+	}
+
+	total, perIP := checker.peak()
+	if total > concurrency {
+		t.Fatalf("peak concurrent checks = %d, want <= %d", total, concurrency)
+	}
+	if perIP != 1 {
+		t.Fatalf("peak concurrent checks of one row = %d, want 1", perIP)
 	}
 }

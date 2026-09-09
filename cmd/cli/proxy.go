@@ -15,6 +15,7 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/container"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/proxy/handler"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/proxy/worker"
+	proxyinfra "github.com/mihaiflorentin88/ffxiv-census/infrastructure/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -155,13 +156,89 @@ var proxyDiscoverCmd = &cobra.Command{
 	},
 }
 
+// scanWeights reserves long-run capacity shares for verification, recovery
+// and background scanning. Task 6 replaces these literals with parsed
+// [proxy.scan] configuration.
+var scanWeights = [3]int{10, 45, 45}
+
+// The guard and general-availability literals below move into the parsed
+// [proxy.scan] configuration in Task 6.
+const (
+	generalAvailabilityURL = "https://api64.ipify.org?format=json"
+	generalCheckTimeout    = 10 * time.Second
+	guardControlInterval   = 30 * time.Second
+)
+
+// defaultProxyScanPolicy is the scheduler policy the scanner runs with until
+// Task 6 wires the parsed configuration through.
+func defaultProxyScanPolicy() contract.ProxyScanPolicy {
+	return contract.ProxyScanPolicy{
+		VerifyInterval:    time.Minute,
+		FreshnessTTL:      2 * time.Minute,
+		RecoveryBase:      time.Minute,
+		RecoveryCap:       15 * time.Minute,
+		RecoveryHorizon:   time.Hour,
+		LeaseDuration:     30 * time.Second,
+		MinRepeatInterval: time.Second,
+		InconclusiveRetry: time.Minute,
+		DeadAfter:         48 * time.Hour,
+		FailThreshold:     5,
+	}
+}
+
+// generalAvailabilityCheck binds the guard's control callback to a strict
+// direct egress validation: no proxy, complete JSON response required.
+func generalAvailabilityCheck(logger contract.Logger) func(context.Context) error {
+	health := proxyinfra.NewHealthChecker(generalAvailabilityURL, generalCheckTimeout, logger)
+	return health.CheckDirect
+}
+
+// runScanWorker wires the scan store, checker and endpoint guard and runs
+// the scan worker until the context is cancelled.
+func runScanWorker(ctx context.Context, concurrency, deadScanPercentage int) error {
+	logger := container.Load.Logger()
+	logger.InfoContext(ctx, "proxy.scan.start",
+		"concurrency", concurrency,
+		"dead_scan_percentage", deadScanPercentage)
+
+	repo := container.Load.ProxyRepository()
+	if repo == nil {
+		return fmt.Errorf("proxy repository not initialised")
+	}
+	store, ok := repo.(contract.ProxyScanStore)
+	if !ok {
+		return fmt.Errorf("proxy repository does not support the scan store contract")
+	}
+
+	guard := proxyinfra.NewEndpointGuard(generalAvailabilityCheck(logger), guardControlInterval, logger)
+	guardDone := make(chan error, 1)
+	go func() {
+		guardDone <- guard.Run(ctx)
+	}()
+
+	scanWorker := worker.NewScanWorker(store, container.Load.ProxyChecker(), guard,
+		defaultProxyScanPolicy(), scanWeights, logger)
+	if hub := container.Load.ProxyHub(); hub != nil {
+		scanWorker.SetNotifier(hub.NotifyAvailable)
+	}
+
+	err := scanWorker.RunScan(ctx, concurrency)
+	// RunScan returns only on cancellation, so the guard has observed the
+	// same cancellation and its Run loop is winding down.
+	if guardErr := <-guardDone; guardErr != nil {
+		logger.ErrorContext(ctx, "proxy_scan.guard_exit", slog.Any("error", guardErr))
+	}
+	return err
+}
+
 var proxyScanCmd = &cobra.Command{
 	Use:   "scan",
-	Short: "Run a long-running proxy scan worker (direct database batches)",
-	Long: `Run a long-running scan worker that reads priority-ordered proxy batches
-directly from the database and scans them concurrently. Concurrency controls
-both the goroutine limit per batch and the SQL LIMIT. Waits one minute after
-empty batches or per-record errors before querying again.`,
+	Short: "Run a long-running proxy scan worker (guarded, lease-based)",
+	Long: `Run a long-running scan worker that leases due proxy rows from the
+verification, recovery and background queues and scans them within the
+configured concurrency. Claims are bounded by free capacity and a claim
+timeout shorter than the lease; the endpoint guard pauses claims while this
+replica's own egress is unhealthy.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		deadScanPercentage, _ := cmd.Flags().GetInt("dead-scan-percentage")
@@ -169,26 +246,7 @@ empty batches or per-record errors before querying again.`,
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		logger := container.Load.Logger()
-		logger.InfoContext(ctx, "proxy.scan.start",
-			"concurrency", concurrency,
-			"dead_scan_percentage", deadScanPercentage)
-
-		repo := container.Load.ProxyRepository()
-		if repo == nil {
-			return fmt.Errorf("proxy repository not initialised")
-		}
-
-		svc := container.Load.ProxyService()
-		if svc == nil {
-			return fmt.Errorf("proxy service not initialised")
-		}
-
-		scanWorker := worker.NewScanWorker(repo, svc, logger, time.Minute)
-		if hub := container.Load.ProxyHub(); hub != nil {
-			scanWorker.SetNotifier(hub.NotifyAvailable)
-		}
-		return scanWorker.RunScan(ctx, concurrency, deadScanPercentage)
+		return runScanWorker(ctx, concurrency, deadScanPercentage)
 	},
 }
 

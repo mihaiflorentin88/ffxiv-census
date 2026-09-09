@@ -3,301 +3,512 @@ package worker
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// Scanner is the narrow interface the scan worker needs from the proxy service.
-type Scanner interface {
-	ProcessScanProxy(ctx context.Context, p *contract.ProxyRecord) error
-}
+// The scan worker leases due rows from the three scan queues and runs them
+// inside a bounded executor. One dispatcher goroutine owns every scheduling
+// counter — free capacity, per-queue in-flight work and the admission state
+// — so no helper goroutine ever picks work on its own. Guard health gates
+// claiming only; in-flight checks always run to completion.
 
-// scanListFunc is the function signature for fetching proxy batches.
-type scanListFunc func(context.Context, int) ([]contract.ProxyRecord, error)
+const (
+	// claimPauseFloor is the first pause after a store error; each further
+	// error doubles it up to claimPauseCeiling. Pauses are context-aware:
+	// the dispatcher keeps draining completions and stops on cancellation.
+	claimPauseFloor = 100 * time.Millisecond
+	claimPauseCeil  = time.Second
+	// shutdownDrainBound bounds the wait for in-flight checks to deliver
+	// their results after the parent context was cancelled.
+	shutdownDrainBound = 5 * time.Second
+	// shutdownCleanupBound bounds the fresh context that releases leases the
+	// dispatcher still owns after the drain. A release whose persistence
+	// fails is recovered by lease expiry, never retried in a loop.
+	shutdownCleanupBound = 5 * time.Second
+	// executorExitBound bounds the final wait for executor goroutines that
+	// are not stuck inside a checker call.
+	executorExitBound = time.Second
+	// defaultStoreTimeout applies when the policy carries no usable lease
+	// duration to derive store-call bounds from.
+	defaultStoreTimeout = 5 * time.Second
+)
 
-// ScanWorker reads priority-ordered database batches through a prefetcher and
-// scans them concurrently, without going through RabbitMQ.
+// scanPollInterval bounds how often an idle dispatcher re-polls queues that
+// returned no due rows, re-checks the guard and resumes after a store-error
+// pause. Completions trigger admission passes immediately; the timer only
+// guarantees progress while nothing completes. It is a variable so tests can
+// tighten it.
+var scanPollInterval = time.Second
+
+// ScanWorker leases scan work through a ProxyScanStore, runs each check
+// against a ProxyChecker and persists guard-fenced observations.
 type ScanWorker struct {
-	repo      contract.ProxyRepository
-	scanner   Scanner
-	logger    contract.Logger
-	idleDelay time.Duration
-	notifier  func() // called after a proxy becomes active (best-effort)
+	store   contract.ProxyScanStore
+	checker contract.ProxyChecker
+	guard   contract.ProxyEndpointGuard
+	policy  contract.ProxyScanPolicy
+	weights [3]int
+	logger  contract.Logger
+
+	mu       sync.Mutex
+	notifier func()
 }
 
-// NewScanWorker creates a ScanWorker. The idleDelay controls how long the
-// worker waits after an empty batch or per-record error before querying again.
-// Production callers should pass time.Minute.
-func NewScanWorker(repo contract.ProxyRepository, scanner Scanner, logger contract.Logger, idleDelay time.Duration) *ScanWorker {
+// NewScanWorker creates a ScanWorker. The weights reserve long-run capacity
+// shares for verification, recovery and background scanning; all three must
+// be positive. The caller owns the guard lifecycle and must run Guard.Run
+// for health observations to advance.
+func NewScanWorker(store contract.ProxyScanStore, checker contract.ProxyChecker,
+	guard contract.ProxyEndpointGuard, policy contract.ProxyScanPolicy,
+	weights [3]int, logger contract.Logger,
+) *ScanWorker {
 	return &ScanWorker{
-		repo:      repo,
-		scanner:   scanner,
-		logger:    logger,
-		idleDelay: idleDelay,
+		store:   store,
+		checker: checker,
+		guard:   guard,
+		policy:  policy,
+		weights: weights,
+		logger:  logger,
 	}
 }
 
-// SetNotifier registers a callback invoked after a proxy is successfully scanned
-// and marked active. Used to wake waiting workers via ProxyHub.NotifyAvailable.
+// SetNotifier registers a callback invoked once per accepted successful
+// completion, after the store accepted the observation. Used to wake waiting
+// workers via ProxyHub.NotifyAvailable.
 func (w *ScanWorker) SetNotifier(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.notifier = fn
 }
 
-// SplitScanConcurrency divides total concurrency into regular and dead pools.
-// Non-positive concurrency defaults to 4. Negative percentages clamp to 0;
-// values above 90 cap to 90. Integer-floor division is used for the dead pool.
-func SplitScanConcurrency(concurrency, deadScanPercentage int) (regular, dead int) {
+func (w *ScanWorker) fireNotifier() {
+	w.mu.Lock()
+	notify := w.notifier
+	w.mu.Unlock()
+	if notify != nil {
+		notify()
+	}
+}
+
+// scanJob is one claimed row handed to the executor.
+type scanJob struct {
+	lease contract.ScanLease
+	queue contract.ScanQueue
+}
+
+// scanResult reports one finished check back to the dispatcher.
+type scanResult struct {
+	lease      contract.ScanLease
+	queue      contract.ScanQueue
+	latency    int
+	err        error
+	startSnap  contract.GuardSnapshot
+	finishSnap contract.GuardSnapshot
+	cancelled  bool // the parent context ended while the check ran
+	panicked   bool // the checker panicked; the lease is released, never classified
+}
+
+// dispatcher is the single owner of the scheduling state. All its fields are
+// confined to the dispatcher goroutine: executors only touch the job and
+// result channels.
+type dispatcher struct {
+	jobs      chan scanJob
+	results   chan scanResult
+	drainDone chan struct{}
+
+	targets  [3]int // reserved capacity per queue; zeros in small mode
+	small    bool   // concurrency below three: persistent round robin owns admission
+	free     int
+	inFlight [3]int
+	adm      admission
+	owned    map[int64]contract.ScanLease
+}
+
+func newDispatcher(concurrency int, targets [3]int) *dispatcher {
+	return &dispatcher{
+		jobs:      make(chan scanJob, concurrency),
+		results:   make(chan scanResult, concurrency),
+		drainDone: make(chan struct{}),
+		targets:   targets,
+		small:     concurrency < scanQueueCount,
+		free:      concurrency,
+		owned:     make(map[int64]contract.ScanLease, concurrency),
+	}
+}
+
+// RunScan runs the dispatch loop until the context is cancelled and returns
+// nil on cancellation. Concurrency must be positive; it bounds both the
+// executor population and every claim. Store failures pause claiming
+// briefly and are otherwise never fatal: the worker keeps its observations
+// to itself rather than reclassifying proxies on a broken database.
+func (w *ScanWorker) RunScan(ctx context.Context, concurrency int) error {
 	if concurrency <= 0 {
-		concurrency = 4
+		return fmt.Errorf("proxy scan: concurrency must be positive, got %d", concurrency)
 	}
-	if deadScanPercentage < 0 {
-		deadScanPercentage = 0
+	for i, weight := range w.weights {
+		if weight <= 0 {
+			return fmt.Errorf("proxy scan: queue weight %d must be positive, got %d", i, weight)
+		}
 	}
-	if deadScanPercentage > 90 {
-		deadScanPercentage = 90
+
+	checkCtx, cancelChecks := context.WithCancel(ctx)
+	defer cancelChecks()
+
+	d := newDispatcher(concurrency, reservationTargets(concurrency, w.weights))
+	var executors sync.WaitGroup
+	executors.Add(concurrency)
+	for range concurrency {
+		go func() {
+			defer executors.Done()
+			w.execute(checkCtx, d)
+		}()
 	}
-	dead = concurrency * deadScanPercentage / 100
-	regular = concurrency - dead
-	return regular, dead
-}
 
-// prefetchBufferCap returns how many records one pool keeps in memory — queued
-// in the buffer or in flight inside a worker: ceil(workers × 1.3). The
-// headroom keeps every worker fed while the prefetcher round-trips to the
-// database for the next batch, and stays above the worker count even for
-// small pools so there is always at least one record ready to feed.
-func prefetchBufferCap(workers int) int {
-	if workers <= 0 {
-		workers = 1
+	w.dispatchLoop(ctx, d)
+
+	// Shutdown: stop claims, cancel checks, wait a bounded time for network
+	// completion, then release every lease we still own on a fresh bounded
+	// context.
+	close(d.jobs)
+	cancelChecks()
+	d.drain(w)
+	d.releaseOutstanding(w)
+	close(d.drainDone)
+
+	exited := make(chan struct{})
+	go func() {
+		executors.Wait()
+		close(exited)
+	}()
+	select {
+	case <-exited:
+	case <-time.After(executorExitBound):
+		// A check stuck inside the checker beyond the drain bound leaves its
+		// executor parked on drainDone; RunScan still returns on time.
 	}
-	return (workers*13 + 9) / 10
+	return nil
 }
 
-// creditPool is an exact counting semaphore: avail + credits held by the
-// prefetcher or workers always equals the initial capacity. A channel was
-// tried first, but worker releases could refill it while the prefetcher still
-// held drained credits, deadlocking the blocking refunds — a mutex counter
-// cannot overflow or lose credits.
-type creditPool struct {
-	mu    sync.Mutex
-	wake  chan struct{} // signaled on release; spurious wakeups are fine
-	avail int
+// execute is the fixed executor body: one goroutine per concurrency slot,
+// reused across jobs, with no per-result goroutine accumulation.
+func (w *ScanWorker) execute(ctx context.Context, d *dispatcher) {
+	for job := range d.jobs {
+		res := w.runCheck(ctx, job)
+		select {
+		case d.results <- res:
+		case <-d.drainDone:
+			return
+		}
+	}
 }
 
-func newCreditPool(n int) *creditPool {
-	return &creditPool{wake: make(chan struct{}, 1), avail: n}
+// runCheck performs the network attempt. A panic in the checker is recovered
+// and reported as a local error so one bad record can neither take down the
+// loop nor mark the proxy dead.
+func (w *ScanWorker) runCheck(ctx context.Context, job scanJob) (res scanResult) {
+	res = scanResult{lease: job.lease, queue: job.queue}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			res.panicked = true
+			res.err = nil
+			w.logger.ErrorContext(ctx, "proxy_scan.panic_recovered",
+				"proxy_id", job.lease.Record.ID,
+				"panic", fmt.Sprint(recovered))
+		}
+	}()
+	res.startSnap = w.guard.Snapshot()
+	res.latency, res.err = w.checker.Check(ctx, job.lease.Record.Protocol, job.lease.Record.IP, job.lease.Record.Port)
+	res.finishSnap = w.guard.Snapshot()
+	res.cancelled = ctx.Err() != nil
+	return res
 }
 
-func (c *creditPool) take() int {
-	c.mu.Lock()
-	n := c.avail
-	c.avail = 0
-	c.mu.Unlock()
-	return n
+// claimPause is the brief context-aware backoff after store errors. A paused
+// dispatcher keeps draining completions; the poll timer ends the pause.
+type claimPause struct {
+	until   time.Time
+	backoff time.Duration
 }
 
-// release returns credits; never blocks, never loses count.
-func (c *creditPool) release(n int) {
-	if n <= 0 {
+func (p *claimPause) active() bool { return time.Now().Before(p.until) }
+
+func (p *claimPause) engage() {
+	if p.backoff <= 0 {
+		p.backoff = claimPauseFloor
+	} else {
+		p.backoff *= 2
+		if p.backoff > claimPauseCeil {
+			p.backoff = claimPauseCeil
+		}
+	}
+	p.until = time.Now().Add(p.backoff)
+}
+
+func (p *claimPause) lift() {
+	p.backoff = 0
+	p.until = time.Time{}
+}
+
+func (w *ScanWorker) dispatchLoop(ctx context.Context, d *dispatcher) {
+	ticker := time.NewTicker(scanPollInterval)
+	defer ticker.Stop()
+	var pause claimPause
+	for ctx.Err() == nil {
+		d.handlePending(w, &pause)
+		w.admit(ctx, d, &pause)
+		select {
+		case <-ctx.Done():
+			return
+		case res := <-d.results:
+			d.handle(w, res, &pause)
+		case <-ticker.C:
+		}
+	}
+}
+
+// handlePending processes completions that arrived without blocking.
+func (d *dispatcher) handlePending(w *ScanWorker, pause *claimPause) {
+	for {
+		select {
+		case res := <-d.results:
+			d.handle(w, res, pause)
+		default:
+			return
+		}
+	}
+}
+
+// admit runs one admission pass: fill under-reservation queues with due rows
+// first, then lend the remaining free capacity by round-robin borrowing. An
+// empty queue never blocks the others; its re-poll is bounded by the poll
+// timer and triggered early by every completion. The guard gates claiming
+// only — in-flight checks continue unaffected.
+func (w *ScanWorker) admit(ctx context.Context, d *dispatcher, pause *claimPause) {
+	if d.free <= 0 || pause.active() {
 		return
 	}
-	c.mu.Lock()
-	c.avail += n
-	c.mu.Unlock()
-	select {
-	case c.wake <- struct{}{}:
-	default:
+	if snap := w.guard.Snapshot(); !snap.Healthy {
+		return
 	}
+	empty := [3]bool{}
+	w.fillReservations(ctx, d, pause, &empty)
+	w.borrow(ctx, d, pause, &empty)
 }
 
-// wait blocks until a credit may be available, the context ends, or a failure
-// wake arrives. The caller must re-check with take().
-func (c *creditPool) wait(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-c.wake:
-		return true
-	}
-}
-
-// RunScan runs the scan loop until the context is cancelled.
-// Concurrency controls the number of scan workers per pool; each pool also
-// keeps prefetchBufferCap(workers) records in memory (workers + 30%) so the
-// workers never wait on a database round trip. The prefetcher claims batches
-// ahead of the workers, and claimed rows are stamped last_scanned_at at claim
-// time so in-flight rows can never be re-fetched.
-// deadScanPercentage (0-90) reserves a portion of concurrency for dead proxy
-// scanning. Values below 0 are treated as 0; values above 90 are capped to 90.
-func (w *ScanWorker) RunScan(ctx context.Context, concurrency, deadScanPercentage int) error {
-	regular, dead := SplitScanConcurrency(concurrency, deadScanPercentage)
-
-	w.logger.InfoContext(ctx, "scan_worker.pool_allocation",
-		"regular_workers", regular,
-		"dead_workers", dead,
-		"regular_buffer", prefetchBufferCap(regular),
-		"dead_buffer", prefetchBufferCap(dead))
-
-	poolCtx, poolCancel := context.WithCancel(ctx)
-	defer poolCancel()
-
-	// Count launched pools for the result channel.
-	poolCount := 1 // regular pool always launches
-	if dead > 0 {
-		poolCount++
-	}
-	results := make(chan error, poolCount)
-
-	// Regular pool — always launches.
-	go func() {
-		results <- w.runScanPool(poolCtx, "regular", regular, w.repo.ListForScan)
-	}()
-
-	// Dead pool — only when dead > 0.
-	if dead > 0 {
-		go func() {
-			results <- w.runScanPool(poolCtx, "dead", dead, w.repo.ListDeadForScan)
-		}()
-	}
-
-	// Collect results; cancel sibling on first error.
-	var firstErr error
-	for range poolCount {
-		if err := <-results; err != nil && firstErr == nil {
-			firstErr = err
-			poolCancel()
+// fillReservations tops up queues whose in-flight work is below their
+// reservation, verification first.
+func (w *ScanWorker) fillReservations(ctx context.Context, d *dispatcher, pause *claimPause, empty *[3]bool) {
+	for queue := range d.targets {
+		deficit := d.targets[queue] - d.inFlight[queue]
+		if deficit <= 0 || d.free <= 0 {
+			continue
+		}
+		if limit := min(deficit, d.free); limit > 0 {
+			if !w.claimDue(ctx, d, pause, contract.ScanQueue(queue), limit, empty) {
+				return
+			}
 		}
 	}
-	return firstErr
 }
 
-// runScanPool feeds persistent workers from a prefetcher-owned buffer. Credits
-// bound produced-but-unfinished records to prefetchBufferCap(workers): the
-// prefetcher consumes one credit per record it fetches, and each worker
-// releases its credit after the record's scan and write complete. The database
-// is only touched by the prefetcher (reads) and by workers between scans
-// (writes) — never held open during a proxy check.
-func (w *ScanWorker) runScanPool(ctx context.Context, pool string, workers int, list scanListFunc) error {
-	capacity := prefetchBufferCap(workers)
-	jobs := make(chan contract.ProxyRecord, capacity)
-	credits := newCreditPool(capacity)
-	// failFlag records that a worker saw a record failure since the last
-	// fetch, so the prefetcher can pause feeding for the idle delay. failWake
-	// wakes the prefetcher when it is waiting for credits; the flag is the
-	// source of truth (the wake is best-effort).
-	var failFlag atomic.Bool
-	failWake := make(chan struct{}, 1)
-
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case rec, ok := <-jobs:
-					if !ok {
-						return
-					}
-					w.scanOne(ctx, pool, rec, credits, &failFlag, failWake)
-				}
+// borrow lends free capacity beyond the reservations. At concurrency below
+// three the persistent small-worker round robin owns every admission;
+// otherwise a round-robin cursor rotates one claim at a time across the
+// queues that still returned rows in this pass.
+func (w *ScanWorker) borrow(ctx context.Context, d *dispatcher, pause *claimPause, empty *[3]bool) {
+	for d.free > 0 {
+		if d.small {
+			available := [3]bool{}
+			for i := range empty {
+				available[i] = !empty[i]
 			}
-		}()
-	}
-
-	defer func() {
-		close(jobs)
-		wg.Wait()
-	}()
-
-	for {
-		// Consume available credits; each fetched record spends one.
-		free := credits.take()
-		if free == 0 {
-			// Buffer full and all workers busy — wait for a completion.
-			if !credits.wait(ctx) {
-				return nil
+			queue, ok := d.adm.chooseSmall(available, w.weights)
+			if !ok {
+				return
 			}
-			free = credits.take()
-		}
-
-		// Pause after record failures — backpressure for database trouble.
-		// Refund the drained credits first: the fetch they reserved will not
-		// happen this iteration.
-		if failFlag.CompareAndSwap(true, false) {
-			credits.release(free)
-			if !w.waitIdle(ctx) {
-				return nil
+			if !w.claimDue(ctx, d, pause, contract.ScanQueue(queue), 1, empty) {
+				return
 			}
 			continue
 		}
-
-		batch, err := list(ctx, free)
-		if err != nil {
-			return fmt.Errorf("list proxies for scan [%s]: %w", pool, err)
-		}
-
-		for _, rec := range batch {
-			select {
-			case <-ctx.Done():
-				return nil
-			case jobs <- rec:
+		advanced := false
+		for step := 0; step < scanQueueCount && d.free > 0; step++ {
+			queue := (d.adm.borrower + 1 + step) % scanQueueCount
+			if empty[queue] {
+				continue
 			}
-		}
-		// Refund unconsumed credits: short batch or empty batch. This must
-		// run for every fetch — including empty ones — or the pool slowly
-		// leaks its credits and starves.
-		credits.release(free - len(batch))
-
-		if len(batch) == 0 {
-			if !w.waitIdle(ctx) {
-				return nil
+			if !w.claimDue(ctx, d, pause, contract.ScanQueue(queue), 1, empty) {
+				return
 			}
+			d.adm.borrower = queue
+			advanced = true
+			break
+		}
+		if !advanced {
+			return
 		}
 	}
 }
 
-// scanOne runs a single scan and write, recovering panics so one bad record
-// cannot take down the pool, and releasing the record's credit afterwards.
-func (w *ScanWorker) scanOne(ctx context.Context, pool string, rec contract.ProxyRecord, credits *creditPool, failFlag *atomic.Bool, failWake chan struct{}) {
-	defer credits.release(1)
-	defer func() {
-		if r := recover(); r != nil {
-			w.logger.ErrorContext(ctx, "scan_worker.panic",
-				"pool", pool,
-				"proxy_id", rec.ID,
-				"error", fmt.Sprintf("%v", r),
-				"stack", string(debug.Stack()))
+// claimDue leases up to limit due rows from one queue and starts them
+// immediately: claimed rows count against free capacity and are handed to
+// the executor channel without buffering beyond concurrency. The claim is
+// bounded by the caller's context and a timeout shorter than the lease. It
+// reports whether the store interaction succeeded; a failure engages the
+// pause and aborts the pass.
+func (w *ScanWorker) claimDue(ctx context.Context, d *dispatcher, pause *claimPause,
+	queue contract.ScanQueue, limit int, empty *[3]bool,
+) bool {
+	claimCtx, cancel := context.WithTimeout(ctx, w.claimTimeout())
+	leases, err := w.store.ClaimScans(claimCtx, queue, limit)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil {
+			w.logger.ErrorContext(ctx, "proxy_scan.claim_error",
+				"queue", int(queue), "error", err)
+			pause.engage()
 		}
-	}()
-
-	if err := w.scanner.ProcessScanProxy(ctx, &rec); err != nil {
-		w.logger.WarnContext(ctx, "scan_worker.scan_error",
-			"pool", pool,
-			"proxy_id", rec.ID,
-			"error", err)
-		failFlag.Store(true)
-		select {
-		case failWake <- struct{}{}:
-		default:
-		}
-	} else if w.notifier != nil {
-		w.notifier()
-	}
-}
-
-// waitIdle blocks for the idle delay, returning false if the context ended.
-func (w *ScanWorker) waitIdle(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
 		return false
-	case <-time.After(w.idleDelay):
+	}
+	pause.lift()
+	if len(leases) == 0 {
+		empty[queue] = true
 		return true
 	}
+	for _, lease := range leases {
+		d.inFlight[queue]++
+		d.free--
+		d.owned[lease.Record.ID] = lease
+		d.jobs <- scanJob{lease: lease, queue: queue}
+	}
+	return true
+}
+
+// handle returns one finished check to the scheduler: capacity is freed
+// immediately, then the outcome is persisted, released or discarded.
+func (d *dispatcher) handle(w *ScanWorker, res scanResult, pause *claimPause) {
+	d.inFlight[res.queue]--
+	d.free++
+	delete(d.owned, res.lease.Record.ID)
+	switch {
+	case res.panicked:
+		w.releaseLease(res.lease)
+	case res.cancelled:
+		// The parent context ended mid-check: release ownership and never
+		// claim a network failure for a cancelled attempt.
+		w.releaseLease(res.lease)
+	default:
+		w.finish(res, pause)
+	}
+}
+
+// finish attributes one completed attempt and persists it.
+//
+// The guard is re-checked immediately before persistence: a generation
+// change anywhere between the attempt's start snapshot and this latest local
+// observation fences conclusive failure attribution. This fences on local
+// observation only — it is deliberately not globally synchronized outage
+// detection. A guard change landing in the small window between the finish
+// snapshot and this recheck downgrades the attempt exactly like one landing
+// during the check itself; two replicas may briefly attribute the same
+// endpoint differently, and the conservative outcome (inconclusive) never
+// increments failure history.
+func (w *ScanWorker) finish(res scanResult, pause *claimPause) {
+	effectiveFinish := res.finishSnap
+	if recheck := w.guard.Snapshot(); recheck.Generation != res.startSnap.Generation {
+		effectiveFinish = recheck
+	}
+	update := proxy.MakeScanUpdate(w.policy, res.lease.Record, res.latency, res.err, res.startSnap, effectiveFinish)
+
+	completeCtx, cancel := context.WithTimeout(context.Background(), w.storeTimeout())
+	accepted, err := w.store.CompleteScan(completeCtx, res.lease, update)
+	cancel()
+	if err != nil {
+		// The write failed; the lease expires and the row is retried later.
+		// Never fabricate a completed attempt from a failed write.
+		w.logger.ErrorContext(context.Background(), "proxy_scan.complete_error",
+			"proxy_id", res.lease.Record.ID, "error", err)
+		pause.engage()
+		return
+	}
+	pause.lift()
+	if !accepted {
+		// Fenced or discarded: the observation lost its lease in the
+		// meantime. Nothing to persist, nobody to notify.
+		w.logger.DebugContext(context.Background(), "proxy_scan.completion_discarded",
+			"proxy_id", res.lease.Record.ID)
+		return
+	}
+	if update.Outcome == contract.ScanSuccess {
+		w.fireNotifier()
+	}
+}
+
+// releaseLease hands one owned lease back on a fresh bounded context so it
+// also works after the parent context was cancelled.
+func (w *ScanWorker) releaseLease(lease contract.ScanLease) {
+	ctx, cancel := context.WithTimeout(context.Background(), w.storeTimeout())
+	defer cancel()
+	if err := w.store.ReleaseScan(ctx, lease); err != nil {
+		w.logger.ErrorContext(ctx, "proxy_scan.release_error",
+			"proxy_id", lease.Record.ID, "error", err)
+	}
+}
+
+// drain waits a bounded time for in-flight checks to deliver their results
+// after cancellation and processes them like normal completions.
+func (d *dispatcher) drain(w *ScanWorker) {
+	var pause claimPause
+	timer := time.NewTimer(shutdownDrainBound)
+	defer timer.Stop()
+	for len(d.owned) > 0 {
+		select {
+		case res := <-d.results:
+			d.handle(w, res, &pause)
+		case <-timer.C:
+			w.logger.WarnContext(context.Background(), "proxy_scan.shutdown_incomplete",
+				"outstanding", len(d.owned))
+			return
+		}
+	}
+}
+
+// releaseOutstanding releases every lease the dispatcher still owns after
+// the drain, bounded by one fresh cleanup context. Failures are logged once;
+// lease expiry recovers the rows.
+func (d *dispatcher) releaseOutstanding(w *ScanWorker) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownCleanupBound)
+	defer cancel()
+	for id, lease := range d.owned {
+		if err := w.store.ReleaseScan(ctx, lease); err != nil {
+			w.logger.ErrorContext(ctx, "proxy_scan.release_error",
+				"proxy_id", id, "error", err)
+		}
+	}
+}
+
+// claimTimeout bounds each claim RPC to half the lease so a claim that
+// finishes still leaves its holder time to complete the check.
+func (w *ScanWorker) claimTimeout() time.Duration {
+	if w.policy.LeaseDuration <= 0 {
+		return defaultStoreTimeout
+	}
+	return w.policy.LeaseDuration / 2
+}
+
+// storeTimeout bounds persistence calls well inside the lease so a timed-out
+// write still leaves the lease-expiry path room to recover the row.
+func (w *ScanWorker) storeTimeout() time.Duration {
+	limit := defaultStoreTimeout
+	if w.policy.LeaseDuration > 0 {
+		limit = min(w.policy.LeaseDuration/2, 2*time.Second)
+	}
+	if limit < 250*time.Millisecond {
+		limit = 250 * time.Millisecond
+	}
+	return limit
 }
