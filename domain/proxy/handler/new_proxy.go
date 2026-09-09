@@ -9,7 +9,10 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// NewProxy handles new-proxy events: inserts a discovered proxy and tests it.
+// NewProxy handles new-proxy events: insertion-only ingestion. The delivery
+// is acknowledged once the row is inserted (deduplicated); verification is
+// owned by the guarded, lease-bound background scan worker, so the handler
+// performs no health-check I/O of its own.
 type NewProxy struct {
 	service *proxy.Service
 	logger  contract.Logger

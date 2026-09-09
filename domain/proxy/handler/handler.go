@@ -14,7 +14,9 @@ const (
 	EventNewProxy = "new-proxy"
 )
 
-// NewProxyPayload carries the data needed to register and test a new proxy.
+// NewProxyPayload carries the data needed to insert a discovered proxy.
+// Scanning does not happen here: the background scan worker verifies the
+// row.
 type NewProxyPayload struct {
 	Protocol      string   `json:"protocol"`
 	IP            string   `json:"ip"`
