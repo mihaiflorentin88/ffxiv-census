@@ -24,10 +24,18 @@ type Config struct {
 	Metrics   *MetricsConfig   `mapstructure:"metrics"`
 	Postgres  *PostgresConfig  `mapstructure:"postgres"`
 	RabbitMQ  *RabbitMQConfig  `mapstructure:"rabbitmq"`
+	Queue     *QueueConfig     `mapstructure:"queue"`
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
 	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
 	Census    *CensusConfig    `mapstructure:"census"`
 	Proxy     *ProxyConfig     `mapstructure:"proxy"`
+}
+
+// QueueConfig holds the broker-agnostic delivery attempt budget. maxAttempts
+// bounds how many times a message may fail before it parks permanently in
+// its failed queue.
+type QueueConfig struct {
+	MaxAttempts int `mapstructure:"max_attempts"`
 }
 
 type AppConfig struct {

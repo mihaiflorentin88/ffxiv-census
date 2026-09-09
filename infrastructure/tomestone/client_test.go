@@ -12,6 +12,7 @@ import (
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient/proxytest"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -673,5 +674,39 @@ func TestFetchCharacterProfile_ProxyDialFailureIsTypedCheckProxy(t *testing.T) {
 	var checkErr *contract.ProxyCheckError
 	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckProxy {
 		t.Fatalf("expected typed CheckProxy error, got %v", err)
+	}
+}
+
+func TestFetchCharacterProfile_429ReturnsPromptlyWithPause(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message": "Too Many Requests."}`))
+	}))
+	defer server.Close()
+
+	lim := mock.NewProviderRateLimiter()
+	cfg := &config.TomestoneConfig{
+		BaseURL:   server.URL,
+		APIToken:  "token",
+		RateLimit: 50.0,
+		Timeout:   "5s",
+	}
+	client, err := NewClient(cfg, nil, WithProviderRateLimiter(lim))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.FetchCharacterProfile(context.Background(), 123, false)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error on 429 response")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("429 handling blocked the caller inline for %v; expected a prompt return with the pause delegated to the provider limiter", elapsed)
+	}
+	if lim.IsAvailable(contract.ProviderTomestone) {
+		t.Fatal("expected Tomestone to be paused for the Retry-After window")
 	}
 }

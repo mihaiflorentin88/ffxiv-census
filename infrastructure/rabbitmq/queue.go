@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -16,7 +15,6 @@ import (
 const (
 	exchangeMain      = "census"
 	headerAttempts    = "x-attempts"
-	maxAttempts       = 5
 	maxFailedAttempts = 100
 	backoffBaseSec    = 5
 	maxBackoffSec     = 3600
@@ -24,12 +22,13 @@ const (
 
 // Queue is a RabbitMQ-backed work queue implementing contract.Queue.
 type Queue struct {
-	url     string
-	conn    *amqp.Connection
-	ch      *amqp.Channel
-	returns <-chan amqp.Return
-	mu      sync.Mutex
-	logger  contract.Logger
+	url         string
+	conn        *amqp.Connection
+	ch          *amqp.Channel
+	returns     <-chan amqp.Return
+	mu          sync.Mutex
+	logger      contract.Logger
+	maxAttempts int
 }
 
 // openSession dials the broker, opens a channel, declares the full topology,
@@ -67,9 +66,14 @@ func (q *Queue) openSession() (*amqp.Connection, *amqp.Channel, <-chan amqp.Retu
 
 // New creates a new RabbitMQ Queue. It dials the broker, declares the full
 // topology (exchanges, queues, bindings), enables publisher confirms, and
-// returns a ready-to-use Queue.
-func New(url string, logger contract.Logger) (*Queue, error) {
-	q := &Queue{url: url, logger: logger}
+// returns a ready-to-use Queue. maxAttempts is the per-delivery attempt
+// budget before a message parks permanently in its failed queue; it must
+// be at least 1.
+func New(url string, logger contract.Logger, maxAttempts int) (*Queue, error) {
+	if maxAttempts < 1 {
+		return nil, fmt.Errorf("rabbitmq max attempts must be >= 1, got %d", maxAttempts)
+	}
+	q := &Queue{url: url, logger: logger, maxAttempts: maxAttempts}
 	conn, ch, rets, err := q.openSession()
 	if err != nil {
 		return nil, err
@@ -382,13 +386,34 @@ func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.C
 	return nil
 }
 
+// failureAction returns the retry backoff in seconds for a failing delivery
+// after the given number of attempts, or (0, true) when the attempt budget
+// is exhausted and the message must park permanently in its failed queue.
+func failureAction(attempts, maxAttempts int) (backoffSec int, permanent bool) {
+	if attempts >= maxAttempts {
+		return 0, true
+	}
+	// 5s * 2^shift saturates the 3600s cap from shift 10 onwards; clamping
+	// early keeps the shift well inside every int width.
+	shift := attempts - 1
+	if shift > 10 {
+		return maxBackoffSec, false
+	}
+	backoff := backoffBaseSec * (1 << shift)
+	if backoff > maxBackoffSec {
+		backoff = maxBackoffSec
+	}
+	return backoff, false
+}
+
 // handleFailure publishes the failed message to the per-event-type failed queue.
 func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr error) {
 	attempts := getAttempts(msg.Headers) + 1
 	eventType := msg.RoutingKey
 	failedQueue := "census." + eventType + ".failed"
 
-	if attempts >= maxAttempts {
+	backoff, permanent := failureAction(attempts, q.maxAttempts)
+	if permanent {
 		q.logger.WarnContext(
 			ctx, "rabbitmq.permanent_failure",
 			slog.String("event_type", eventType),
@@ -399,10 +424,6 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 			q.logger.ErrorContext(ctx, "rabbitmq.failed_publish_error", slog.Any("error", err))
 		}
 	} else {
-		backoff := backoffBaseSec * int(math.Pow(2, float64(attempts-1)))
-		if backoff > maxBackoffSec {
-			backoff = maxBackoffSec
-		}
 		q.logger.WarnContext(
 			ctx, "rabbitmq.retry",
 			slog.String("event_type", eventType),

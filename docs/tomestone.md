@@ -90,7 +90,8 @@ Used by `consume --proxy` — each worker goroutine creates its own proxy-aware 
 
 - `401 Unauthorized` / `403 Forbidden` → maps to `contract.ErrTomestoneUnauthenticated`.
 - `404 Not Found` → maps to `contract.ErrCharacterNotFound`.
-- `429 Too Many Requests` → logs a warning and returns rate limit error.
+- `429 Too Many Requests` → records the consecutive-429 count (adaptive token-bucket halving, floor 0.5), pauses Tomestone in the per-worker `ProviderRateLimiter` for the `Retry-After` window (30s floor), logs a warning, and returns the rate-limit error **immediately** — there is no inline `Retry-After` sleep, so the delivery returns to the queue without being held unacked and the queue's own backoff spaces the redelivery. Dual-source handlers see the paused limiter and route to Lodestone for the cooldown.
+
 ## Response Memory Bounds
 
 Success responses are decoded via bounded streaming (`json.NewDecoder` with `io.LimitedReader`):

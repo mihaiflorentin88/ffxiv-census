@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-	"time"
 
 	"golang.org/x/time/rate"
 
@@ -106,20 +105,4 @@ func (c *RequestRateController) Rate() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return float64(c.limiter.Limit())
-}
-
-// WaitWithRetryAfter applies a retry-after pause in addition to the token
-// bucket wait. Used for429 responses with Retry-After headers.
-func (c *RequestRateController) WaitWithRetryAfter(ctx context.Context, retryAfter time.Duration) error {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	if retryAfter > 0 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(retryAfter):
-		}
-	}
-	return nil
 }

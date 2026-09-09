@@ -12,6 +12,7 @@ import (
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"golang.org/x/time/rate"
 )
@@ -656,5 +657,65 @@ func TestDoRequest_429ExhaustedIsTypedCheckTargetWithRetryAfter(t *testing.T) {
 	var dialErr *httpclient.ProxyDialError
 	if errors.As(err, &dialErr) {
 		t.Fatal("a target 429 must not be classified as a proxy dial failure")
+	}
+}
+
+func TestDoRequest_ProxyDialFailureAbortsLadder(t *testing.T) {
+	attempts := 0
+	c := &CustomClient{
+		httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			return nil, &url.Error{
+				Op:  "Get",
+				URL: "https://na.finalfantasyxiv.com/lodestone/character/1/",
+				Err: &httpclient.ProxyDialError{Reason: "dial", Err: errors.New("connection refused")},
+			}
+		})},
+		limiter:     rate.NewLimiter(rate.Inf, 1),
+		logger:      loggerOrDiscard(nil),
+		maxRetries:  3,
+		backoffBase: time.Millisecond,
+	}
+
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckProxy {
+		t.Fatalf("expected typed CheckProxy error, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("a conclusive proxy dial failure must abort the ladder after 1 attempt, got %d", attempts)
+	}
+}
+
+func TestDoRequest_AcceptedStatusPausesProviderAndFailsFast(t *testing.T) {
+	attempts := 0
+	lim := mock.NewProviderRateLimiter()
+	c := &CustomClient{
+		httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Body:       io.NopCloser(strings.NewReader("challenge interstitial")),
+			}, nil
+		})},
+		limiter:     rate.NewLimiter(rate.Inf, 1),
+		logger:      loggerOrDiscard(nil),
+		maxRetries:  3,
+		backoffBase: time.Millisecond,
+		rateLimiter: lim,
+	}
+
+	_, code, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	if err == nil {
+		t.Fatal("a 202 challenge response must surface as an error, not a usable body")
+	}
+	if code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", code)
+	}
+	if attempts != 1 {
+		t.Fatalf("a 202 challenge must not be retried in-ladder, got %d attempts", attempts)
+	}
+	if lim.IsAvailable(contract.ProviderLodestone) {
+		t.Fatal("expected Lodestone provider to be paused after a 202 challenge")
 	}
 }

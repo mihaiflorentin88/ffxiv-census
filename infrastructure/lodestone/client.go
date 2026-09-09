@@ -216,6 +216,16 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 			// Proven proxy dial/negotiation failures are re-attributed as a
 			// typed conclusive error; ambiguous failures stay unclassified.
 			lastErr = httpclient.WrapProxyDial(err)
+			// A conclusive proxy death cannot recover by retrying through the
+			// same proxy: return immediately so the worker rotates identities
+			// instead of burning attempts and rate tokens.
+			var dialCheck *contract.ProxyCheckError
+			if errors.As(lastErr, &dialCheck) && dialCheck.Kind == contract.CheckProxy {
+				c.logger.WarnContext(ctx, "lodestone.proxy_failure",
+					slog.String("url", url),
+					slog.String("error", err.Error()))
+				return nil, 0, fmt.Errorf("request %s: %w", url, lastErr)
+			}
 			backoff := c.backoffBase * time.Duration(1<<uint(attempt))
 			c.logger.WarnContext(ctx, "lodestone.request_retry",
 				slog.String("url", url),
@@ -270,6 +280,21 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 				}
 			}
 			continue
+		}
+
+		if resp.StatusCode == http.StatusAccepted {
+			// A 202 from The Lodestone is a Cloudflare challenge/queued
+			// response, not page content. Pause the provider so dual-source
+			// workers reroute and the request budget stops feeding the
+			// challenge, then fail fast for a queue retry — the challenge
+			// will not clear inside the backoff ladder.
+			if c.rateLimiter != nil {
+				c.rateLimiter.Pause(contract.ProviderLodestone, rateLimitPause, "lodestone 202 challenge")
+			}
+			c.logger.WarnContext(ctx, "lodestone.challenge",
+				slog.String("url", url),
+				slog.Int("status", resp.StatusCode))
+			return nil, resp.StatusCode, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 		}
 
 		return body, resp.StatusCode, nil

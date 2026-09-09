@@ -55,10 +55,10 @@ When a handler returns an error, the adapter inspects the `x-attempts` header an
 
 | Condition | Action | TTL | Result |
 |-----------|--------|-----|--------|
-| `attempts < 5` | Publish to `census.<type>.failed` | `min(5 × 2^(attempts-1), 3600)` seconds | Auto-dead-letters back to main queue after TTL |
-| `attempts >= 5` | Publish to `census.<type>.failed` | None | Stays in failed queue permanently |
+| `attempts < max_attempts` | Publish to `census.<type>.failed` | `min(5 × 2^(attempts-1), 3600)` seconds | Auto-dead-letters back to main queue after TTL |
+| `attempts >= max_attempts` | Publish to `census.<type>.failed` | None | Stays in failed queue permanently |
 
-Backoff schedule (seconds): **5, 10, 20, 40, 80**. After 5 failed attempts the message is parked permanently in the failed queue.
+`max_attempts` comes from `[queue] max_attempts` (default **50** in the embedded `config.toml`, overridable via `QUEUE_MAX_ATTEMPTS` — the value Kubernetes already sets on every worker). The first backoff steps follow the same schedule: **5, 10, 20, 40, 80** … capped at 3600s. After `max_attempts` failed deliveries the message is parked permanently in the failed queue for manual inspection.
 
 The attempt count is tracked in the `x-attempts` message header. On each retry the header is incremented. The original message is always acked after being forwarded to the failed queue — there is no requeue.
 
@@ -125,7 +125,16 @@ port     = 5672
 user     = "guest"
 password = "guest"
 vhost    = "ffxiv-census"
+
+[queue]
+max_attempts = 50
 ```
+
+[queue]
+
+| Field | Purpose |
+|-------|---------|
+| `max_attempts` | Delivery attempt budget before a message parks permanently in its failed queue |
 
 | Field | Purpose |
 |-------|---------|

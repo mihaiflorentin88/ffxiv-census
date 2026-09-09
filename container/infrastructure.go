@@ -205,12 +205,17 @@ func (s *ServiceContainer) Queue() contract.Queue {
 	if s.infrastructure.queue != nil {
 		return s.infrastructure.queue
 	}
-	cfg := s.configUnlocked().RabbitMQ
+	full := s.configUnlocked()
+	cfg := full.RabbitMQ
 	if cfg == nil {
 		logging.Warn("container.queue", "rabbitmq config missing")
 		return nil
 	}
-	q, err := rabbitmq.New(cfg.GetURL(), s.Logger())
+	maxAttempts := 5
+	if full.Queue != nil && full.Queue.MaxAttempts > 0 {
+		maxAttempts = full.Queue.MaxAttempts
+	}
+	q, err := rabbitmq.New(cfg.GetURL(), s.Logger(), maxAttempts)
 	if err != nil {
 		logging.Error("container.queue", fmt.Sprintf("failed to create rabbitmq queue: %v", err))
 		return nil

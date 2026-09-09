@@ -43,6 +43,9 @@ user     = "guest"
 password = "guest"
 vhost    = "ffxiv-census"
 
+[queue]
+max_attempts = 50
+
 [lodestone]
 rate_limit = 1.0
 max_retries = 3
@@ -95,12 +98,10 @@ hproxy_url       = "https://raw.githubusercontent.com/hproxy-com/free-proxy-list
 sage520          = true
 sage520_url      = "https://raw.githubusercontent.com/Sage520/Proxy-List/main"
 ercindedeoglu    = true
-ercindedeoglu_url = "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies"
-
 [proxy.consumer]
 lock_ttl              = "5m"
 lodestone_rate_limit  = 1.0
-request_timeout       = "30s"
+request_timeout       = "15s"
 test_url              = "https://na.finalfantasyxiv.com/lodestone/"
 test_timeout          = "10s"
 cooldown              = "60s"

@@ -351,15 +351,10 @@ func (c *Client) fetchProfile(ctx context.Context, rawURL string) (*contract.Tom
 			slog.Duration("retry_after", retryAfterDuration),
 		)
 
-		if retryAfterDuration > 0 {
-			timer := time.NewTimer(retryAfterDuration)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, ctx.Err()
-			case <-timer.C:
-			}
-		}
+		// No inline Retry-After sleep: the provider pause above already
+		// reroutes dual-source callers, and the queue's own backoff spaces
+		// the redelivery. Blocking here would hold an unacked delivery
+		// hostage without retrying in place.
 		return nil, errors.New("tomestone api rate limit exceeded (HTTP 429)")
 	default:
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxTomestoneErrorBytes))

@@ -155,11 +155,13 @@ control_interval      = "30s"   # guard control cadence
 [proxy.consumer]
 lock_ttl             = "5m"                                    # consumer lock TTL
 lodestone_rate_limit = 1.0                                     # req/s override in proxy mode
-request_timeout      = "30s"                                   # proxy-aware client timeout
+request_timeout      = "15s"                                   # proxy-aware client timeout
 test_url             = "https://na.finalfantasyxiv.com/lodestone/"  # destination check
 test_timeout         = "10s"
 cooldown             = "60s"                                   # destination cooldown floor
 ```
+
+`request_timeout` (15s) bounds how long one consumer HTTP attempt may hang on a stalled proxy. Scanner evidence budgets use the tighter `test_timeout` (10s) everywhere; 15s keeps consumer requests strictly bounded while still tolerating slow-but-alive proxies, and halves the worst-case cost of a mid-job proxy death versus the previous 30s.
 
 Every field overrides through an environment variable named by upper-casing the key path with `.` → `_` (viper `AutomaticEnv`): `PROXY_TEST_URL`, `PROXY_SCAN_LEASE_DURATION`, `PROXY_SCAN_WEIGHT_BACKGROUND`, `PROXY_CONSUMER_LOCK_TTL`, and so on. Startup validation fails closed on impossible combinations (freshness vs verification+timeout, lease vs timeout, weights sum, nonpositive durations).
 
