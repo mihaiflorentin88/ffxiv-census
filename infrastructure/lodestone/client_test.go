@@ -687,7 +687,7 @@ func TestDoRequest_ProxyDialFailureAbortsLadder(t *testing.T) {
 	}
 }
 
-func TestDoRequest_AcceptedStatusPausesProviderAndFailsFast(t *testing.T) {
+func TestDoRequest_AcceptedReturnsBodyWithoutPause(t *testing.T) {
 	attempts := 0
 	lim := mock.NewProviderRateLimiter()
 	c := &CustomClient{
@@ -705,17 +705,23 @@ func TestDoRequest_AcceptedStatusPausesProviderAndFailsFast(t *testing.T) {
 		rateLimiter: lim,
 	}
 
-	_, code, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
-	if err == nil {
-		t.Fatal("a 202 challenge response must surface as an error, not a usable body")
+	// A 202 challenge interstitial is surfaced to the caller with its body
+	// and status: handlers reject non-200 statuses and the queue's own
+	// backoff spaces the retry. No provider pause, no in-ladder retry.
+	body, code, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	if err != nil {
+		t.Fatalf("expected 202 to pass through without an error, got %v", err)
 	}
 	if code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", code)
 	}
-	if attempts != 1 {
-		t.Fatalf("a 202 challenge must not be retried in-ladder, got %d attempts", attempts)
+	if body == nil {
+		t.Fatal("expected the response body to be returned")
 	}
-	if lim.IsAvailable(contract.ProviderLodestone) {
-		t.Fatal("expected Lodestone provider to be paused after a 202 challenge")
+	if attempts != 1 {
+		t.Fatalf("expected exactly 1 attempt, got %d", attempts)
+	}
+	if !lim.IsAvailable(contract.ProviderLodestone) {
+		t.Fatal("a 202 must not pause the provider")
 	}
 }

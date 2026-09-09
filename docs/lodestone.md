@@ -57,8 +57,6 @@ Tokens are charged per HTTP attempt, including every achievement detail request 
 
 Non-existent or banned/terminated character profiles (HTTP 404 "Not Found" and HTTP 403 "Forbidden") are immediately recognized as `contract.ErrCharacterNotFound` and are **never retried**. Conclusive proxy failures (typed `*contract.ProxyCheckError` with kind `CheckProxy`: dial refusal, SOCKS/CONNECT negotiation death, proxy-side TLS failure, stalled handshake) **abort the retry ladder on the first attempt** — retrying through a proven-dead proxy cannot succeed, and the immediate typed return lets the worker rotate to a fresh identity right away. All other scraper errors are treated as transient and retried with exponential backoff: `500 ms · 2^attempt` (500 ms, 1 s, 2 s, …). With the default `max_retries = 3` a transient error makes up to 4 attempts.
 
-**HTTP 202 responses** (Cloudflare challenge/queued interstitial) are never accepted as page content: the client pauses Lodestone in the `ProviderRateLimiter` for 30s so dual-source workers reroute to Tomestone and the shared request budget stops feeding the challenge, then fails the request immediately for a queue retry — a challenge will not clear inside the backoff ladder.
-
 The `backoffBase` is set to **500 ms** by default in `newClient()`. Combined with ±10% jitter and the 1 req/s token bucket, retry timing is:
 
 | Attempt | Backoff Delay | Cumulative |

@@ -101,7 +101,7 @@ ercindedeoglu    = true
 [proxy.consumer]
 lock_ttl              = "5m"
 lodestone_rate_limit  = 1.0
-request_timeout       = "15s"
+request_timeout       = "30s"
 test_url              = "https://na.finalfantasyxiv.com/lodestone/"
 test_timeout          = "10s"
 cooldown              = "60s"

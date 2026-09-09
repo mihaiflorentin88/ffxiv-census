@@ -282,21 +282,6 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 			continue
 		}
 
-		if resp.StatusCode == http.StatusAccepted {
-			// A 202 from The Lodestone is a Cloudflare challenge/queued
-			// response, not page content. Pause the provider so dual-source
-			// workers reroute and the request budget stops feeding the
-			// challenge, then fail fast for a queue retry — the challenge
-			// will not clear inside the backoff ladder.
-			if c.rateLimiter != nil {
-				c.rateLimiter.Pause(contract.ProviderLodestone, rateLimitPause, "lodestone 202 challenge")
-			}
-			c.logger.WarnContext(ctx, "lodestone.challenge",
-				slog.String("url", url),
-				slog.Int("status", resp.StatusCode))
-			return nil, resp.StatusCode, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
-		}
-
 		return body, resp.StatusCode, nil
 	}
 	if lastErr == nil {
