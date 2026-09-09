@@ -119,7 +119,7 @@ Distinguish destination rejection from general failure:
 - Ambiguous target errors withhold handout and apply destination cooldown, without inventing a general-health failure.
 - Application parsing/business errors are not proxy-health observations.
 
-Consumer-detected general failures use the same observation-version discipline as scanner results. Update every caller of the existing failure API so destination responses cannot silently become global proxy death.
+Consumer-detected general failures use the same observation-version discipline as scanner results. Capture the general-health version before the consumer check and require that version when persisting a failure; discard an observation superseded by an accepted newer result. An accepted failure increments the version and invalidates older scan ownership. Update every caller of the existing failure API so destination responses cannot silently become global proxy death.
 
 ## Claims, observations and crash recovery
 
@@ -139,7 +139,7 @@ Claim protocol:
 1. In a short transaction, select available candidates in queue order using `FOR UPDATE SKIP LOCKED`, excluding unexpired scan leases and per-proxy attempt cooldowns.
 2. Persist a new token, captured observation version, and lease expiry; return claimed records.
 3. Commit before network work. Never hold a database connection across a check.
-4. Complete using a compare-and-set requiring the same token, captured version and an unexpired lease. Atomically update observation, timestamps, retry state and lease release.
+4. Complete using a compare-and-set requiring the same token, captured version and an unexpired lease. Atomically update observation, timestamps, retry state and lease release. Increment the observation version for an accepted conclusive result; an inconclusive result preserves the conclusive observation and its version.
 5. A superseding consumer general failure increments the version and invalidates the older claim. A late completion cannot overwrite it.
 
 Default lease duration is 30 seconds. Claim only for currently free executor capacity; do not preserve the old large claimed prefetch buffer. A database persistence stall may cause lease expiry and discard a result; it must not make stale ownership valid. An expired claim is available for retry without a separate reaper. Never count a claim or discarded completion as a completed observation.
