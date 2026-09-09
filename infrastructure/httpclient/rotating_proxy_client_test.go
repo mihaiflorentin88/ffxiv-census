@@ -16,7 +16,7 @@ import (
 
 func TestRotatingProxyClient_GetStream_NoProxy_Fallback(t *testing.T) {
 	// No proxies in the repo — should fall back to direct.
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	hub := proxy.NewProxyHub(repo, 5*time.Minute, nil)
 
 	direct := &mockhttpclient.Client{
@@ -41,7 +41,7 @@ func TestRotatingProxyClient_GetStream_NoProxy_Fallback(t *testing.T) {
 }
 
 func TestRotatingProxyClient_GetStream_SwapActiveReturnsDifferentProxy(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	for i := 1; i <= 3; i++ {
 		repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 			Protocol: "http",
@@ -73,7 +73,7 @@ func TestRotatingProxyClient_GetStream_SwapActiveReturnsDifferentProxy(t *testin
 
 func TestRotatingProxyClient_GetStream_ConsumerError_NoRotate(t *testing.T) {
 	// A consumer error (not a retryable status) should propagate immediately.
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http",
 		IP:       "10.0.0.1",

@@ -28,7 +28,7 @@ func newTestService(checker contract.ProxyChecker, providers []contract.ProxyPro
 }
 
 func TestService_ProcessNewProxy_Success(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	providers := []contract.ProxyProvider{
 		mockproxy.NewFakeProvider("test", nil),
 	}
@@ -57,7 +57,7 @@ func TestService_ProcessNewProxy_Success(t *testing.T) {
 }
 
 func TestService_ProcessNewProxy_Duplicate(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	country := "US"
 	rec := contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test", Country: &country,
@@ -89,7 +89,7 @@ func TestService_ProcessNewProxy_Duplicate(t *testing.T) {
 }
 
 func TestService_ProcessScanProxy_BecomesActive(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	_, inserted, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
@@ -138,7 +138,7 @@ func TestService_ProcessScanProxy_BecomesActive(t *testing.T) {
 }
 
 func TestService_ProcessScanProxy_BecomesDead(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
@@ -168,7 +168,7 @@ func TestService_ProcessScanProxy_BecomesDead(t *testing.T) {
 }
 
 func TestService_ProcessScanProxy_DeadlineExceeded(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
@@ -197,7 +197,7 @@ func TestService_ProcessScanProxy_DeadlineExceeded(t *testing.T) {
 }
 
 func TestService_ProcessNewProxy_DeadlineExceeded(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	checker := &fakeChecker{err: context.DeadlineExceeded}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
@@ -253,7 +253,7 @@ func TestFakeProvider_FetchProxies_Error(t *testing.T) {
 }
 
 func TestFakeRepo_ListForScan_ExcludesDead(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 
 	// Insert 3 proxies: 1 inactive, 1 active (old enough), 1 dead (old enough).
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
@@ -287,7 +287,7 @@ func TestFakeRepo_ListForScan_ExcludesDead(t *testing.T) {
 }
 
 func TestFakeRepo_ListDeadForScan_PriorityOrder(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 
 	// Insert 3 proxies: 1 inactive, 1 active, 1 dead (all eligible).
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
@@ -322,7 +322,7 @@ func TestFakeRepo_ListDeadForScan_PriorityOrder(t *testing.T) {
 func intPtr(v int) *int { return &v }
 
 func TestService_ProcessNewProxy_SkipsExistingWithoutWrite(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	// Seed one tuple via InsertIfAbsent.
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
@@ -345,7 +345,7 @@ func TestService_ProcessNewProxy_SkipsExistingWithoutWrite(t *testing.T) {
 }
 
 func TestService_ProcessNewProxy_ExistsError(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.ExistsErr = errors.New("db connection refused")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

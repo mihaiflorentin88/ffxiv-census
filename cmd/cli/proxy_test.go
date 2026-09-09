@@ -42,7 +42,7 @@ func (p *fakeProvider) FetchProxies(_ context.Context, emit func(contract.ProxyR
 func TestPublishDiscoveredProxies_EmptyProviderSet(t *testing.T) {
 	q := &errorQueue{failOn: 0} // never fails
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 
 	published, err := publishDiscoveredProxies(context.Background(), q, repo, logger, nil, 0)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestPublishDiscoveredProxies_EmptyProviderSet(t *testing.T) {
 func TestPublishDiscoveredProxies_PartialProviderFailure(t *testing.T) {
 	q := &errorQueue{failOn: 0} // never fails
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 
 	providers := []contract.ProxyProvider{
 		&fakeProvider{name: "bad", err: errors.New("fetch failed")},
@@ -77,7 +77,7 @@ func TestPublishDiscoveredProxies_PartialProviderFailure(t *testing.T) {
 func TestPublishDiscoveredProxies_AllProvidersFail(t *testing.T) {
 	q := &errorQueue{failOn: 0}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 
 	providers := []contract.ProxyProvider{
 		&fakeProvider{name: "bad1", err: errors.New("fail1")},
@@ -93,7 +93,7 @@ func TestPublishDiscoveredProxies_AllProvidersFail(t *testing.T) {
 func TestPublishDiscoveredProxies_QueuePublishFailure(t *testing.T) {
 	q := &errorQueue{failOn: 1} // fail on first publish
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 
 	providers := []contract.ProxyProvider{
 		&fakeProvider{name: "ok", records: []contract.ProxyRecord{
@@ -113,7 +113,7 @@ func TestPublishDiscoveredProxies_QueuePublishFailure(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_SkipsExisting(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	// Seed the repo with http/1.2.3.4/8080.
 	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
@@ -148,7 +148,7 @@ func TestPublishDiscoveredProxies_SkipsExisting(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_PublishesNew(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	// Seed with http/1.2.3.4/8080.
 	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
@@ -177,7 +177,7 @@ func TestPublishDiscoveredProxies_PublishesNew(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_LookupFailureFailsClosed(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.ExistsErr = errors.New("connection refused")
 
 	q := &errorQueue{failOn: 0}
@@ -202,7 +202,7 @@ func TestPublishDiscoveredProxies_LookupFailureFailsClosed(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_AllExistingSucceeds(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
 	}); err != nil {
@@ -230,7 +230,7 @@ func TestPublishDiscoveredProxies_AllExistingSucceeds(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_LimitCountsPublishedAfterDeduplication(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	// Seed one existing tuple — it must not consume the limit.
 	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",
@@ -268,7 +268,7 @@ func TestPublishDiscoveredProxies_LimitCountsPublishedAfterDeduplication(t *test
 }
 
 func TestPublishDiscoveredProxies_ZeroLimitIsUnlimited(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	q := &errorQueue{failOn: 0}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -290,7 +290,7 @@ func TestPublishDiscoveredProxies_ZeroLimitIsUnlimited(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_LimitStopsProviderEarly(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	q := &errorQueue{failOn: 0}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -328,7 +328,7 @@ func TestPublishDiscoveredProxies_LimitStopsProviderEarly(t *testing.T) {
 }
 
 func TestPublishDiscoveredProxies_LimitCrossProviderFallback(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	// Seed one existing tuple — it must not consume the limit.
 	if _, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "seed",

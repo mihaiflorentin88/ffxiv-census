@@ -9,10 +9,11 @@ import (
 	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/proxy/handler"
 	"github.com/mihaiflorentin88/ffxiv-census/mock/repository"
+	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
 func TestNewProxy_Handle_BadPayload(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	svc := proxydomain.NewService(nil, repo, nil, nil, 48*time.Hour, 5)
 	h := handler.NewNewProxy(svc, nil)
 

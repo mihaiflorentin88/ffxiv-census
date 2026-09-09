@@ -88,3 +88,11 @@ func sqlTimePtr(nt sql.NullTime) *time.Time {
 	t := nt.Time
 	return &t
 }
+
+func sqlInt64Ptr(ni sql.NullInt64) *int64 {
+	if !ni.Valid {
+		return nil
+	}
+	v := ni.Int64
+	return &v
+}

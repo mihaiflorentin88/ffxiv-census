@@ -10,36 +10,81 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// ProxyRepository is a PostgreSQL implementation of contract.ProxyRepository.
+// ProxyRepository is a PostgreSQL implementation of contract.ProxyRepository
+// and contract.ProxyScanStore. The policy carries the scheduler settings
+// storage needs (freshness TTL, lease duration, recovery horizon); storage
+// converts relative durations to absolute timestamps from database time.
 type ProxyRepository struct {
 	driver contract.DatabaseDriver
+	policy contract.ProxyScanPolicy
 }
 
-func NewProxyRepository(driver contract.DatabaseDriver) contract.ProxyRepository {
-	return &ProxyRepository{driver: driver}
+// Storage defaults for unset policy fields so a zero ProxyScanPolicy keeps
+// behaving sanely until configuration wiring lands.
+const (
+	defaultFreshnessTTL    = 2 * time.Minute
+	defaultLeaseDuration   = 30 * time.Second
+	defaultRecoveryHorizon = time.Hour
+)
+
+// normalizeScanPolicy fills the policy fields storage evaluates with
+// config-free defaults when they are unset.
+func normalizeScanPolicy(p contract.ProxyScanPolicy) contract.ProxyScanPolicy {
+	if p.FreshnessTTL <= 0 {
+		p.FreshnessTTL = defaultFreshnessTTL
+	}
+	if p.LeaseDuration <= 0 {
+		p.LeaseDuration = defaultLeaseDuration
+	}
+	if p.RecoveryHorizon <= 0 {
+		p.RecoveryHorizon = defaultRecoveryHorizon
+	}
+	return p
+}
+
+func NewProxyRepository(driver contract.DatabaseDriver, policy contract.ProxyScanPolicy) *ProxyRepository {
+	return &ProxyRepository{driver: driver, policy: normalizeScanPolicy(policy)}
 }
 
 const proxyColumns = `id, protocol, ip, port, country, anonymity, latency_ms, uptime_percent,
-	status, last_scanned_at, last_alive_at, first_seen_at, source, fail_count, locked_by, locked_at, created_at, updated_at`
+	status, last_scanned_at, last_alive_at, first_seen_at, source, fail_count, locked_by, locked_at, created_at, updated_at,
+	general_healthy, last_completed_at, last_verified_at, next_attempt_at, scan_not_before, recovery_step,
+	observation_version, scan_token, scan_lease_until, claimed_version, destination_cooldown_until`
 
 // proxyColumnsClaimed mirrors proxyColumns with the p alias used by the
-// claiming UPDATE ... RETURNING in listForScan.
+// claiming UPDATE ... RETURNING in listForScan and ClaimScans.
 const proxyColumnsClaimed = `p.id, p.protocol, p.ip, p.port, p.country, p.anonymity, p.latency_ms, p.uptime_percent,
-	p.status, p.last_scanned_at, p.last_alive_at, p.first_seen_at, p.source, p.fail_count, p.locked_by, p.locked_at, p.created_at, p.updated_at`
+	p.status, p.last_scanned_at, p.last_alive_at, p.first_seen_at, p.source, p.fail_count, p.locked_by, p.locked_at, p.created_at, p.updated_at,
+	p.general_healthy, p.last_completed_at, p.last_verified_at, p.next_attempt_at, p.scan_not_before, p.recovery_step,
+	p.observation_version, p.scan_token, p.scan_lease_until, p.claimed_version, p.destination_cooldown_until`
+
+// freshPredicate is the single general-health availability predicate shared
+// by ListActive, RandomActive, CountByStatus, ClaimProxy and
+// RefreshConsumerLock: healthy AND verified within the freshness TTL. $N is
+// the TTL in seconds; n is database time taken inside the statement.
+const freshPredicate = `general_healthy AND last_verified_at > statement_timestamp() - ($%d * interval '1 second')`
 
 func scanProxy(row rowScanner) (*contract.ProxyRecord, error) {
 	var p contract.ProxyRecord
-	var country, anonymity, lockedBy sql.NullString
+	var country, anonymity, lockedBy, scanToken sql.NullString
 	var latencyMS sql.NullInt64
 	var uptimePercent sql.NullFloat64
 	var lastScannedAt, lastAliveAt, lockedAt sql.NullTime
+	var lastCompletedAt, lastVerifiedAt, nextAttemptAt, scanNotBefore sql.NullTime
+	var scanLeaseUntil, destinationCooldownUntil sql.NullTime
+	var claimedVersion sql.NullInt64
 
+	// Keep this column order exactly in sync with proxyColumns and
+	// proxyColumnsClaimed — a mismatch only surfaces at runtime row scans.
 	err := row.Scan(
 		&p.ID, &p.Protocol, &p.IP, &p.Port,
 		&country, &anonymity, &latencyMS, &uptimePercent,
 		&p.Status, &lastScannedAt, &lastAliveAt, &p.FirstSeenAt,
 		&p.Source, &p.FailCount, &lockedBy, &lockedAt,
 		&p.CreatedAt, &p.UpdatedAt,
+		&p.GeneralHealthy, &lastCompletedAt, &lastVerifiedAt, &nextAttemptAt,
+		&scanNotBefore, &p.RecoveryStep, &p.ObservationVersion, &scanToken,
+		&scanLeaseUntil, &claimedVersion, &destinationCooldownUntil,
 	)
 	if err != nil {
 		return nil, err
@@ -53,6 +98,14 @@ func scanProxy(row rowScanner) (*contract.ProxyRecord, error) {
 	p.LastAliveAt = sqlTimePtr(lastAliveAt)
 	p.LockedBy = sqlStringPtr(lockedBy)
 	p.LockedAt = sqlTimePtr(lockedAt)
+	p.LastCompletedAt = sqlTimePtr(lastCompletedAt)
+	p.LastVerifiedAt = sqlTimePtr(lastVerifiedAt)
+	p.NextAttemptAt = sqlTimePtr(nextAttemptAt)
+	p.ScanNotBefore = sqlTimePtr(scanNotBefore)
+	p.ScanToken = sqlStringPtr(scanToken)
+	p.ScanLeaseUntil = sqlTimePtr(scanLeaseUntil)
+	p.ClaimedVersion = sqlInt64Ptr(claimedVersion)
+	p.DestinationCooldownUntil = sqlTimePtr(destinationCooldownUntil)
 	return &p, nil
 }
 
@@ -221,6 +274,9 @@ func (r *ProxyRepository) listForScan(ctx context.Context, limit int, where, ord
 	return proxies, rows.Err()
 }
 
+// ListActive returns fresh healthy proxies ordered by latency. Availability
+// is general evidence (healthy AND verified within the freshness TTL), never
+// the historical status column.
 func (r *ProxyRepository) ListActive(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
@@ -228,9 +284,9 @@ func (r *ProxyRepository) ListActive(ctx context.Context, limit int) ([]contract
 	}
 	rows, err := db.QueryContext(ctx,
 		`SELECT `+proxyColumns+` FROM proxies
-		WHERE status = 'active'
+		WHERE `+fmt.Sprintf(freshPredicate, 2)+`
 		ORDER BY latency_ms ASC NULLS LAST
-		LIMIT $1`, limit)
+		LIMIT $1`, limit, r.policy.FreshnessTTL.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("proxy list active: %w", err)
 	}
@@ -260,12 +316,20 @@ func (r *ProxyRepository) Count(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+// CountByStatus classifies rows by general evidence: active means the fresh
+// predicate holds; a historically active but non-fresh row counts as stale.
+// The historical inactive/dead categories are preserved.
 func (r *ProxyRepository) CountByStatus(ctx context.Context) (map[string]int64, error) {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT status, COUNT(*) FROM proxies GROUP BY status`)
+	rows, err := db.QueryContext(ctx, `SELECT CASE
+			WHEN `+fmt.Sprintf(freshPredicate, 1)+` THEN 'active'
+			WHEN status = 'active' THEN 'stale'
+			ELSE status
+		END AS bucket, COUNT(*)
+		FROM proxies GROUP BY 1`, r.policy.FreshnessTTL.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("proxy count by status: %w", err)
 	}
@@ -283,6 +347,11 @@ func (r *ProxyRepository) CountByStatus(ctx context.Context) (map[string]int64, 
 	return counts, rows.Err()
 }
 
+// ClaimProxy claims one fresh, unlocked, protocol-supported proxy for a
+// consumer (FOR UPDATE SKIP LOCKED). Availability uses the same general
+// freshness predicate as every other read; a live destination cooldown
+// excludes the row here (and only here). The historical stale fallback is
+// gone: a non-fresh proxy is never handed to a consumer.
 func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL time.Duration) (*contract.ProxyRecord, error) {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
@@ -295,53 +364,29 @@ func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL 
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is a no-op after commit
 
-	now := time.Now().UTC()
-	expireThreshold := now.Add(-lockTTL)
-
-	// Prefer proxies confirmed alive within the last hour, ordered by uptime (highest)
-	// then latency (lowest). Fall back to any active proxy if none are recently scanned.
-	recentThreshold := now.Add(-1 * time.Hour)
-
 	row := tx.QueryRowContext(ctx,
 		`SELECT `+proxyColumns+` FROM proxies
-		WHERE status = 'active'
+		WHERE `+fmt.Sprintf(freshPredicate, 1)+`
 			AND protocol IN ('http', 'https', 'socks4', 'socks5')
-			AND (locked_at IS NULL OR locked_at < $1)
-			AND last_alive_at >= $2
+			AND (locked_at IS NULL OR locked_at < statement_timestamp() - ($2 * interval '1 second'))
+			AND (destination_cooldown_until IS NULL OR destination_cooldown_until <= statement_timestamp())
 		ORDER BY uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST, fail_count ASC
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`, expireThreshold, recentThreshold)
+		FOR UPDATE SKIP LOCKED`, r.policy.FreshnessTTL.Seconds(), lockTTL.Seconds())
 
 	p, err := scanProxy(row)
-	if err == sql.ErrNoRows {
-		// Fallback: any active proxy (not recently scanned)
-		row = tx.QueryRowContext(ctx,
-			`SELECT `+proxyColumns+` FROM proxies
-			WHERE status = 'active'
-				AND protocol IN ('http', 'https', 'socks4', 'socks5')
-				AND (locked_at IS NULL OR locked_at < $1)
-			ORDER BY uptime_percent DESC NULLS LAST, latency_ms ASC NULLS LAST, fail_count ASC
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED`, expireThreshold)
-		p, err = scanProxy(row)
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("proxy claim fallback: %w", err)
-		}
-	}
-
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("proxy claim: %w", err)
 	}
 
-	_, err = tx.ExecContext(ctx,
-		`UPDATE proxies SET locked_by = $1, locked_at = $2, updated_at = $3 WHERE id = $4`,
-		owner, now, now, p.ID)
+	lockRow := tx.QueryRowContext(ctx,
+		`UPDATE proxies SET locked_by = $1, locked_at = statement_timestamp(), updated_at = statement_timestamp()
+		WHERE id = $2
+		RETURNING `+proxyColumns, owner, p.ID)
+	p, err = scanProxy(lockRow)
 	if err != nil {
 		return nil, fmt.Errorf("proxy claim lock: %w", err)
 	}
@@ -349,9 +394,6 @@ func (r *ProxyRepository) ClaimProxy(ctx context.Context, owner string, lockTTL 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("proxy claim commit: %w", err)
 	}
-
-	p.LockedBy = &owner
-	p.LockedAt = &now
 	return p, nil
 }
 
@@ -409,6 +451,10 @@ func (r *ProxyRepository) MarkFailedProxy(ctx context.Context, id int64, owner s
 	return nil
 }
 
+// RandomActive returns a random fresh healthy proxy for provider discovery,
+// honoring ID exclusions and protocol support. It applies no destination
+// cooldown filter — cooldowns gate consumers, not discovery — and does not
+// claim or lock the row.
 func (r *ProxyRepository) RandomActive(ctx context.Context, excludeIDs []int64) (*contract.ProxyRecord, error) {
 	db, err := r.driver.Acquire(ctx)
 	if err != nil {
@@ -416,12 +462,13 @@ func (r *ProxyRepository) RandomActive(ctx context.Context, excludeIDs []int64) 
 	}
 	row := db.QueryRowContext(ctx,
 		`SELECT `+proxyColumns+` FROM proxies
-		WHERE status = 'active'
+		WHERE `+fmt.Sprintf(freshPredicate, 2)+`
 		  AND protocol IN ('http', 'https', 'socks4', 'socks5')
-		  AND (cardinality($1::bigint[]) = 0 OR id <> ALL($1::bigint[]))
+		  AND (cardinality(COALESCE($1::bigint[], '{}'::bigint[])) = 0
+		       OR id <> ALL(COALESCE($1::bigint[], '{}'::bigint[])))
 		ORDER BY RANDOM()
 		LIMIT 1`,
-		excludeIDs)
+		excludeIDs, r.policy.FreshnessTTL.Seconds())
 	rec, err := scanProxy(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

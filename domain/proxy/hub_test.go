@@ -10,7 +10,7 @@ import (
 )
 
 func TestProxyHub_NewProxy_Success(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	latency := 50
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol:  "http",
@@ -38,7 +38,7 @@ func TestProxyHub_NewProxy_Success(t *testing.T) {
 }
 
 func TestProxyHub_NewProxy_NoAvailable(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.NewProxy(context.Background(), "test-g1")
 	if err != nil {
@@ -50,7 +50,7 @@ func TestProxyHub_NewProxy_NoAvailable(t *testing.T) {
 }
 
 func TestProxyHub_NewProxy_AllLocked(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	latency := 50
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol:  "http",
@@ -80,7 +80,7 @@ func TestProxyHub_NewProxy_AllLocked(t *testing.T) {
 }
 
 func TestProxyHub_LockTTL(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	ttl := 10 * time.Minute
 	hub := NewProxyHub(repo, ttl, nil)
 	if hub.LockTTL() != ttl {
@@ -89,7 +89,7 @@ func TestProxyHub_LockTTL(t *testing.T) {
 }
 
 func TestProxyHub_RandomActive_ReturnsProxy(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	latency := 50
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol:  "http",
@@ -114,7 +114,7 @@ func TestProxyHub_RandomActive_ReturnsProxy(t *testing.T) {
 }
 
 func TestProxyHub_RandomActive_NoAvailable(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.RandomActive(context.Background())
 	if err != nil {
@@ -126,7 +126,7 @@ func TestProxyHub_RandomActive_NoAvailable(t *testing.T) {
 }
 
 func TestProxyHub_RandomActive_SkipsInactiveAndLocked(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	latency := 50
 	// Insert active proxy (eligible).
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
@@ -159,7 +159,7 @@ func TestProxyHub_RandomActive_SkipsInactiveAndLocked(t *testing.T) {
 }
 
 func TestProxyHub_SwapActive_DifferentProxy(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	latency := 50
 	// Insert two active proxies.
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
@@ -200,7 +200,7 @@ func TestProxyHub_SwapActive_DifferentProxy(t *testing.T) {
 }
 
 func TestProxyHub_SwapActive_NilCurrent(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	latency := 50
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol:  "http",

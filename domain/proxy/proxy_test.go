@@ -10,7 +10,7 @@ import (
 )
 
 func TestProxy_CanUse_ActiveAndOwned(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	now := time.Now().UTC()
 	rec := contract.ProxyRecord{
@@ -35,7 +35,7 @@ func TestProxy_CanUse_ActiveAndOwned(t *testing.T) {
 }
 
 func TestProxy_CanUse_ActiveAndStolen(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	other := "test-g2"
 	now := time.Now().UTC()
@@ -61,7 +61,7 @@ func TestProxy_CanUse_ActiveAndStolen(t *testing.T) {
 }
 
 func TestProxy_CanUse_Inactive(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	rec := contract.ProxyRecord{
 		ID:       1,
@@ -83,7 +83,7 @@ func TestProxy_CanUse_Inactive(t *testing.T) {
 }
 
 func TestProxy_CanUse_Unlocked(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	rec := contract.ProxyRecord{
 		ID:       1,
@@ -105,7 +105,7 @@ func TestProxy_CanUse_Unlocked(t *testing.T) {
 }
 
 func TestProxy_CanUse_ExpiredLock(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	// Lock was acquired 10 minutes ago — exceeds the 5-minute TTL.
 	expiredTime := time.Now().UTC().Add(-10 * time.Minute)
@@ -131,7 +131,7 @@ func TestProxy_CanUse_ExpiredLock(t *testing.T) {
 }
 
 func TestProxy_CanUse_ExtendsLock(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	// Lock was acquired 4 minutes ago — within the 5-minute TTL but close to expiry.
 	oldTime := time.Now().UTC().Add(-4 * time.Minute)
@@ -164,7 +164,7 @@ func TestProxy_CanUse_ExtendsLock(t *testing.T) {
 }
 
 func TestProxy_CanUse_WrongOwner(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	other := "test-g2"
 	now := time.Now().UTC()
@@ -190,7 +190,7 @@ func TestProxy_CanUse_WrongOwner(t *testing.T) {
 }
 
 func TestProxy_Release(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	owner := "test-g1"
 	now := time.Now().UTC()
 	rec := contract.ProxyRecord{

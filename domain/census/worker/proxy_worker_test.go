@@ -112,7 +112,7 @@ func newTestHandlers() func(contract.LodestoneClient, contract.TomestoneClient, 
 
 func TestProxyWorkerLoop_WaitsForProxy(t *testing.T) {
 	// Start with no proxies. Worker should wait, then proceed when one appears.
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	q := &fakeProxyQueue{}
 
@@ -184,7 +184,7 @@ func TestProxyWorkerLoop_WaitsForProxy(t *testing.T) {
 }
 
 func TestReplaceProxy_MarksBadBeforeReplacement(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.1.1.1", Port: 8080, Source: "test",
 	})
@@ -246,7 +246,7 @@ func TestReplaceProxy_MarksBadBeforeReplacement(t *testing.T) {
 }
 
 func TestReplaceProxy_ReplacementTransportError(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.1.1.1", Port: 8080, Source: "test",
 	})
@@ -301,7 +301,7 @@ func TestReplaceProxy_ReplacementTransportError(t *testing.T) {
 }
 
 func TestProxyWorkerLoop_CancellationWhileWaiting(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	q := &fakeProxyQueue{}
 	w := newTestCensusWorker(q, logger)
@@ -344,7 +344,7 @@ type trackingLimiter struct {
 
 func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
 	// Set up two active proxies so two goroutines can each acquire one.
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	for _, ip := range []string{"10.0.0.1", "10.0.0.2"} {
 		repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 			Protocol: "http", IP: ip, Port: 8080, Source: "test",
@@ -468,7 +468,7 @@ func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
 }
 
 func TestWaitForProxy_ExponentialBackoff(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := newTestCensusWorker(nil, logger)
 	proxyHub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil)
@@ -511,7 +511,7 @@ func TestWaitForProxy_ExponentialBackoff(t *testing.T) {
 }
 
 func TestWaitForProxy_NotificationChannel(t *testing.T) {
-	repo := repository.NewFakeProxyRepository()
+	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := newTestCensusWorker(nil, logger)
 	proxyHub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil)

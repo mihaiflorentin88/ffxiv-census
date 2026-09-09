@@ -92,7 +92,7 @@ func (s *ServiceContainer) discoveryHTTPClientUnlocked() contract.HTTPClient {
 	}
 	repo := s.infrastructure.proxyRepository
 	if repo == nil {
-		repo = repository.NewProxyRepository(driver)
+		repo = repository.NewProxyRepository(driver, contract.ProxyScanPolicy{})
 		s.infrastructure.proxyRepository = repo
 	}
 	lockTTL := 5 * time.Minute
@@ -346,7 +346,7 @@ func (s *ServiceContainer) ProxyRepository() contract.ProxyRepository {
 		logging.Warn("container.proxy_repository", "database driver unavailable")
 		return nil
 	}
-	s.infrastructure.proxyRepository = repository.NewProxyRepository(driver)
+	s.infrastructure.proxyRepository = repository.NewProxyRepository(driver, contract.ProxyScanPolicy{})
 	return s.infrastructure.proxyRepository
 }
 
