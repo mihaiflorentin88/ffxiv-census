@@ -683,6 +683,28 @@ func TestIDSweep_ProxyMode_LodestonePaused_TomestoneDirect_HiddenProfileSkipped(
 	}
 }
 
+func TestIDSweep_ProxyMode_LodestoneError_Tomestone404_RetriesInsteadOfSkip(t *testing.T) {
+	h, ls, ts, _, chars := newTestDualIDSweepWithLimiter(t)
+	h = h.WithProxyMode()
+	// Lodestone answers with an ambiguous error (e.g. an HTTP 202 challenge),
+	// so existence is unknown; Tomestone not indexing the ID proves nothing.
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return nil, errors.New("fetch character 11: HTTP 202")
+	}
+	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+
+	// The delivery must fail so the queue moves it to census.id-sweep.failed
+	// with a retry TTL instead of silently skipping the ID.
+	if _, err := h.Handle(context.Background(), idsweepPayload(11, 11)); err == nil {
+		t.Fatal("ambiguous Lodestone error with a Tomestone 404 must return an error for queue retry, not skip the ID")
+	}
+	if got, _ := chars.Get(context.Background(), 11); got != nil {
+		t.Errorf("character was stored despite provider errors: %+v", got)
+	}
+}
+
 func BenchmarkIDSweepNotFoundInfo(b *testing.B) {
 	ls := mocklodestone.NewFake()
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {

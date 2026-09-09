@@ -143,9 +143,15 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 							}
 							next = append(next, jobs...)
 						} else if errors.Is(terr, contract.ErrCharacterNotFound) {
-							if h.logger.Enabled(ctx, slog.LevelDebug) {
-								h.logger.DebugContext(ctx, "handler.id_sweep.probe", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.String("status", "not_found"))
-							}
+							// Tomestone's 404 is not authoritative for existence:
+							// the character may live on Lodestone but be missing
+							// from Tomestone's index, and Lodestone itself just
+							// failed ambiguously (challenge, timeout). Fail the
+							// delivery so the queue moves it to
+							// census.id-sweep.failed with a retry TTL instead of
+							// silently skipping the ID.
+							h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)))
+							return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone error (%v), retrying on lodestone", id, err)
 						} else {
 							h.logger.WarnContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.Any("error", terr))
 							return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, terr)
