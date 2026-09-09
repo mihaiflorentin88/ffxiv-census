@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -106,6 +107,8 @@ type scanResult struct {
 	queue      contract.ScanQueue
 	latency    int
 	err        error
+	started    time.Time     // wall clock at the network attempt
+	duration   time.Duration // check duration measured around the checker call
 	startSnap  contract.GuardSnapshot
 	finishSnap contract.GuardSnapshot
 	cancelled  bool // the parent context ended while the check ran
@@ -220,8 +223,11 @@ func (w *ScanWorker) runCheck(ctx context.Context, job scanJob) (res scanResult)
 				"panic", fmt.Sprint(recovered))
 		}
 	}()
+	started := time.Now()
+	res.started = started
 	res.startSnap = w.guard.Snapshot()
 	res.latency, res.err = w.checker.Check(ctx, job.lease.Record.Protocol, job.lease.Record.IP, job.lease.Record.Port)
+	res.duration = time.Since(started)
 	res.finishSnap = w.guard.Snapshot()
 	res.cancelled = ctx.Err() != nil
 	return res
@@ -251,6 +257,48 @@ func (p *claimPause) engage() {
 func (p *claimPause) lift() {
 	p.backoff = 0
 	p.until = time.Time{}
+}
+
+// queueName returns a bounded diagnostic label for a scan queue.
+func queueName(q contract.ScanQueue) string {
+	switch q {
+	case contract.ScanVerification:
+		return "verification"
+	case contract.ScanRecovery:
+		return "recovery"
+	case contract.ScanBackground:
+		return "background"
+	default:
+		return "unknown"
+	}
+}
+
+// outcomeName returns a bounded diagnostic label for a scan outcome.
+func outcomeName(o contract.ScanOutcome) string {
+	switch o {
+	case contract.ScanSuccess:
+		return "success"
+	case contract.ScanFailure:
+		return "failure"
+	default:
+		return "inconclusive"
+	}
+}
+
+// checkReason returns the bounded reason carried by a typed check failure.
+// Successes and untyped errors carry no parsed reason text.
+func checkReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	var checkErr *contract.ProxyCheckError
+	if errors.As(err, &checkErr) {
+		if checkErr.Reason != "" {
+			return checkErr.Reason
+		}
+		return checkErr.Kind.String()
+	}
+	return "untyped"
 }
 
 func (w *ScanWorker) dispatchLoop(ctx context.Context, d *dispatcher) {
@@ -364,12 +412,14 @@ func (w *ScanWorker) claimDue(ctx context.Context, d *dispatcher, pause *claimPa
 	queue contract.ScanQueue, limit int, empty *[3]bool,
 ) bool {
 	claimCtx, cancel := context.WithTimeout(ctx, w.claimTimeout())
+	claimStart := time.Now()
 	leases, err := w.store.ClaimScans(claimCtx, queue, limit)
+	claimDuration := time.Since(claimStart)
 	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
 			w.logger.ErrorContext(ctx, "proxy_scan.claim_error",
-				"queue", int(queue), "error", err)
+				"queue", queueName(queue), "error", err, "duration", claimDuration)
 			pause.engage()
 		}
 		return false
@@ -379,6 +429,9 @@ func (w *ScanWorker) claimDue(ctx context.Context, d *dispatcher, pause *claimPa
 		empty[queue] = true
 		return true
 	}
+	w.logger.DebugContext(ctx, "proxy_scan.claim",
+		"queue", queueName(queue), "requested", limit, "claimed", len(leases),
+		"duration", claimDuration)
 	for _, lease := range leases {
 		d.inFlight[queue]++
 		d.free--
@@ -436,15 +489,33 @@ func (w *ScanWorker) finish(res scanResult, pause *claimPause) {
 		return
 	}
 	pause.lift()
-	if !accepted {
-		// Fenced or discarded: the observation lost its lease in the
-		// meantime. Nothing to persist, nobody to notify.
-		w.logger.DebugContext(context.Background(), "proxy_scan.completion_discarded",
-			"proxy_id", res.lease.Record.ID)
-		return
-	}
-	if update.Outcome == contract.ScanSuccess {
+	if accepted && update.Outcome == contract.ScanSuccess {
+		// Wake waiting consumers before anything else: the notification is
+		// a liveness signal, logging must not delay it.
 		w.fireNotifier()
+	}
+	// One structured event per persisted attempt: only accepted=true
+	// observations count as evidence; accepted=false reports a fenced
+	// write that changed nothing.
+	attrs := []any{
+		"proxy_id", res.lease.Record.ID,
+		"queue", queueName(res.queue),
+		"outcome", outcomeName(update.Outcome),
+		"reason", checkReason(res.err),
+		"duration", res.duration,
+		"accepted", accepted,
+		"recovery_step", update.RecoveryStep,
+		"previously_healthy", res.lease.Record.GeneralHealthy,
+	}
+	if due := res.lease.Record.NextAttemptAt; due != nil {
+		if late := time.Since(*due); late > 0 {
+			attrs = append(attrs, "verify_late", late.Truncate(time.Millisecond))
+		}
+	}
+	if accepted {
+		w.logger.InfoContext(context.Background(), "proxy_scan.completion", attrs...)
+	} else {
+		w.logger.DebugContext(context.Background(), "proxy_scan.completion", attrs...)
 	}
 }
 
