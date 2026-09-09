@@ -164,33 +164,21 @@ Each event type runs as a **separate Deployment** with its own replica count and
 # k8s/values.yaml — worker instances
 workers:
   instances:
-    - name: id-sweep
-      replicaCount: 1
-      command: [/app/ffxiv-census, consume, id-sweep, -c, "10"]
-    - name: character-census
-      replicaCount: 1
-      command: [/app/ffxiv-census, consume, character-census, -c, "10"]
-    - name: achievement-census
-      replicaCount: 1
-      command: [/app/ffxiv-census, consume, achievement-census, -c, "10"]
+    - name: census-consumer
+      command: [/app/ffxiv-census, consume, --events, "id-sweep,character-census,achievement-census,id-sweep.failed,character-census.failed,achievement-census.failed", -c, "10"]
     - name: proxy-id-sweep
-      replicaCount: 1
-      command: [/app/ffxiv-census, consume, id-sweep, --proxy, -c, "10"]
+      command: [/app/ffxiv-census, consume, id-sweep, --proxy, -c, "25"]
     - name: proxy-character-census
-      replicaCount: 1
-      command: [/app/ffxiv-census, consume, character-census, --proxy, -c, "10"]
+      command: [/app/ffxiv-census, consume, character-census, --proxy, -c, "15"]
     - name: proxy-achievement-census
-      replicaCount: 1
-      command: [/app/ffxiv-census, consume, achievement-census, --proxy, -c, "10"]
+      command: [/app/ffxiv-census, consume, achievement-census, --proxy, -c, "25"]
     - name: proxy-new
-      replicaCount: 1
-      command: [/app/ffxiv-census, proxy, consume, -c, "10"]
-    - name: proxy-scan
-      replicaCount: 1
-      command: [/app/ffxiv-census, proxy, consume, scan-proxy, -c, "5"]
+      command: [/app/ffxiv-census, proxy, consume, -c, "30"]
+    - name: census-retry
+      command: [/app/ffxiv-census, consume, failed, --events, "id-sweep,character-census,achievement-census", -c, "1"]
 ```
 
-Concurrency is set per-deployment via the `-c` flag. The default is 4 if not specified. Each worker goroutine opens its own AMQP channel with `prefetch(1)`.
+Proxy scanning (`proxy scan`) is a separate lease-based worker that reads due rows directly from PostgreSQL and bypasses RabbitMQ entirely; see [docs/proxy.md](proxy.md). Concurrency is set per-deployment via the `-c` flag. The default is 4 if not specified. Each worker goroutine opens its own AMQP channel with `prefetch(1)`.
 
 **Scaling:** Increase `replicaCount` or `-c` to handle higher throughput. RabbitMQ distributes messages across consumers automatically (round-robin with prefetch=1). There is no risk of double-delivery — each message is delivered to exactly one consumer.
 

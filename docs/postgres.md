@@ -70,6 +70,8 @@ No separate migration step is needed. The schema is always current when the proc
 | `00013` | Drops `avatar_url` and `portrait_url` columns from `characters`. These fields are no longer extracted from Lodestone or stored. Down migration re-adds both columns as `TEXT`.
 | `00014` | Adds the singleton persistent cursor used by automatic ID sweeps.
 | `00015` | Adds the denormalized `characters.max_job_level` value and the single-row `ui_stats_snapshots` JSONB read model. Existing character job levels are backfilled during migration.
+| `00016` | Widens the `ui_stats_snapshots` schema-version check to `2` so the daily new-character series can carry the 60-day comparison window. Stored v1 snapshots are rejected by readers until the next refresh.
+| `00017` | Adds the proxy scan-scheduling evidence columns (`general_healthy`, completion/verification/deadline and cooldown timestamps, recovery step, observation version, lease token/version) plus four partial indexes for queue eligibility and freshness reads. No success is backfilled: every proxy starts unproven and becomes fresh only after a new scan. Down migration drops the indexes and columns in reverse order.
 
 ### Aggregate read model
 

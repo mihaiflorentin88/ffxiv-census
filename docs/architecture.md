@@ -67,7 +67,7 @@ Durable async work is managed by RabbitMQ (see [docs/queue.md](queue.md) and [do
 
 The queue adapter is resolved via `container.Load.Queue()`.
 
-**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy. This ensures workers quickly rotate through bad proxies until they find working ones from the scan pool. See [docs/proxy.md](proxy.md) for the full design.
+**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. Only fresh, evidence-backed rows are handed out (claim, destination check, and freshness/ownership revalidation against the database). A typed conclusive proxy failure is persisted as a version-fenced observation via `Proxy.MarkFailed()` before a replacement is acquired; destination rejections such as 429 raise only a destination cooldown and never mark the proxy unhealthy. See [docs/proxy.md](proxy.md) for the full design.
 
 **Graceful Shutdown:** On SIGTERM, workers stop consuming new messages but in-flight deliveries continue processing. The queue adapter handles ack/nack semantics — successfully processed messages are acknowledged; failures trigger retry with backoff or permanent failure routing. Worker errors don't cancel other workers' in-flight jobs — each goroutine exits independently.
 ## Future Hooks

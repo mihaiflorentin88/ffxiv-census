@@ -1,327 +1,227 @@
 # Proxy Pool
 
-The proxy pool discovers, scans, and maintains a database of working proxies that can be used by census workers to rotate outbound IPs when hitting The Lodestone, reducing rate-limit pressure.
+The proxy pool discovers, validates, and maintains a database of proxies that census workers use to rotate outbound IPs when hitting The Lodestone, reducing rate-limit pressure. Availability is decided by **fresh, persisted evidence** from a lease-based scanner, never by a stored status column or a wall-clock deadline computed in the application.
 
 ## Architecture
 
-The proxy feature is a separate bounded context (`domain/proxy/`) with its own CLI commands, event handlers, and worker. It follows the same hexagonal architecture as the census pipeline.
-
-### Components
+The proxy feature is a separate bounded context (`domain/proxy/`) with its own CLI commands, worker, and store. It follows the same hexagonal architecture as the census pipeline.
 
 | Layer | Path | Purpose |
 |-------|------|---------|
-| Port contracts | `port/contract/proxy.go` | `ProxyProvider`, `ProxyRepository`, `ProxyRecord` |
-| Domain service | `domain/proxy/service.go` | Business logic for proxy check and status management |
-| Domain objects | `domain/proxy/proxy.go` | `Proxy` — wraps `ProxyRecord` with lock management, `CanUse()`, `MarkFailed()` |
-| Domain objects | `domain/proxy/hub.go` | `ProxyHub` — atomic proxy acquisition with `NewProxy()` |
-| Domain handlers | `domain/proxy/handler/` | `new-proxy` event handler |
-| Domain worker | `domain/proxy/worker/worker.go` | Queue consumer for new-proxy events |
-| Domain worker | `domain/proxy/worker/scan.go` | Direct database scan worker |
-| Infrastructure | `infrastructure/proxy/` | Proxy checker (HTTP/SOCKS GET through proxy to Lodestone) |
-| Infrastructure | `infrastructure/proxyscrape/` | ProxyScrape API v4 client |
-| Infrastructure | `infrastructure/geonode/` | Geonode API client |
-| Infrastructure | `infrastructure/httpclient/proxy_client.go` | Proxy-aware HTTP client (HTTP/SOCKS4/SOCKS5) |
-| Infrastructure | `infrastructure/provider/proxy_limiter.go` | Goroutine-local rate limiter for proxy mode |
-| Infrastructure | `infrastructure/postgres/repository/proxy.go` | PostgreSQL repository |
+| Port contracts | `port/contract/proxy.go` | `ProxyProvider`, `ProxyRepository`, `ProxyRecord` (scheduling columns) |
+| Port contracts | `port/contract/proxy_scan.go` | `ProxyScanStore`, `ProxyScanPolicy`, `ScanLease`, `ScanUpdate`, `ProxyChecker` typed errors, `ProxyEndpointGuard` |
+| Domain service | `domain/proxy/service.go` | New-proxy ingestion |
+| Domain objects | `domain/proxy/proxy.go` | `Proxy` — consumer lifecycle over `RefreshConsumerLock`, fenced `MarkFailed`, `CooldownDestination` |
+| Domain scheduling | `domain/proxy/scheduling.go` | `ClassifyCheck`, `MakeScanUpdate`, `MakeConsumerFailureUpdate`, `RecoveryDelay` |
+| Domain hub | `domain/proxy/hub.go` | `ProxyHub` — tested, fenced, owner-locked handout (`NewProxy`), random discovery selection |
+| Domain scanner | `domain/proxy/worker/scan.go` | Single-dispatcher lease-based scan worker |
+| Domain admission | `domain/proxy/worker/admission.go` | Persistent round-robin admission state |
+| Domain consumer | `domain/proxy/worker/worker.go` | `new-proxy` event consumer |
+| Infrastructure | `infrastructure/proxy/health.go` | General checker: strict JSON IP-echo GET through the proxy (ipify) |
+| Infrastructure | `infrastructure/proxy/checker.go` | Destination checker: complete-response GET to The Lodestone with `Retry-After` parsing |
+| Infrastructure | `infrastructure/proxy/guard.go` | `EndpointGuard` — per-replica egress circuit breaker |
+| Infrastructure | `infrastructure/proxyscrape/`, `infrastructure/geonode/`, … | Discovery providers (streaming) |
+| Infrastructure | `infrastructure/httpclient/proxy_client.go` | Proxy transport construction (HTTP, HTTPS, SOCKS4, SOCKS5), cancellation-safe |
+| Infrastructure | `infrastructure/postgres/repository/proxy.go`, `proxy_scan.go` | One adapter serving both `ProxyRepository` and `ProxyScanStore` |
 | Mock | `mock/repository/proxy.go`, `mock/proxy/provider.go` | In-memory fakes for tests |
 
 ## CLI
 
 ```bash
-# Discover proxies from all configured providers, publish new-proxy events
-./bin/ffxiv-census proxy discover [--limit 0]   # 0 = no limit (publish all)
+# Discover proxies from configured providers, publish new-proxy events
+./bin/ffxiv-census proxy discover [--limit 0]   # 0 = unlimited
 
-# Run a long-running scan worker (direct database batches)
-./bin/ffxiv-census proxy scan [--concurrency 4]   # concurrency = workers per pool
+# Run a long-running guarded, lease-based scan worker
+./bin/ffxiv-census proxy scan -c 150            # -c = total per-replica check concurrency
 
 # Consume new-proxy events (long-running)
-./bin/ffxiv-census proxy consume [--concurrency 4]
+./bin/ffxiv-census proxy consume -c 30
 ```
 
-### Cronjob Scheduling
+`proxy scan` takes no scheduling flags other than `-c`; invalid nonpositive explicit values fail startup. In Kubernetes `proxy-scan` runs as a Deployment with 5 replicas × `-c 150`; `proxy-discover` runs as a CronJob every two minutes.
 
-In Kubernetes:
-- `proxy discover` runs as a CronJob every two minutes (`*/2 * * * *`) with `--limit 600`
-- `proxy scan` runs as a long-running Deployment with `-c 50`
-- `proxy consume` runs as a long-running Deployment for new-proxy events
+## Scan pipeline
 
-## Events
+The scan worker leases due rows from three queues and runs each check inside a bounded executor. One dispatcher goroutine owns every scheduling counter, so no helper goroutine picks work on its own.
 
-| Event | Payload | Purpose |
-|-------|---------|---------|
-| `new-proxy` | `{"protocol", "ip", "port", "country", "anonymity", "source", "uptime_percent"}` | Register and test a newly discovered proxy |
+### Queues
 
-Recurring scans are performed directly by the `proxy scan` database worker, not via queue events.
+| Queue | Eligible rows | Order | Deadline honored |
+|-------|---------------|-------|------------------|
+| verification | `general_healthy` | `next_attempt_at` (oldest first) | yes |
+| recovery | not healthy, completed at least once | `next_attempt_at` (oldest first) | yes |
+| background | not healthy | `last_completed_at` (oldest/NULL first) | no — ignores the recovery deadline, honors the common cooldown |
 
-## Proxy Status Lifecycle
+Long-run capacity shares default to 10/45/45 (`weight_verification`, `weight_recovery`, `weight_background`; must sum to 100). Reservations are filled verification-first; remaining free capacity is lent by round-robin borrowing. Below three slots a persistent small-worker round robin owns every admission. An empty queue never blocks the others: completions trigger immediate re-admission and a 1 s poll timer guarantees progress while nothing completes.
 
+### Leasing and fencing
+
+`ClaimScans` runs in one short transaction: eligible rows are locked with `FOR UPDATE SKIP LOCKED` and stamped with a fresh 128-bit hex token, the claimed `observation_version`, and a lease expiry computed from database time. Claims are bounded by free capacity and a claim timeout of half the lease (lease default 30 s). A crashed process therefore holds rows only until its lease expires; expired rows are reclaimed lazily by the next eligible claim — there is no reaper, and leftover expired-lease rows are normal. `ReleaseScan` matches the captured claim version so an old process cannot clear a lease the row no longer carries.
+
+`CompleteScan` persists one observation only if the lease token, the captured claim version, and an unexpired lease (measured against the post-lock database timestamp) all still match. A failed CAS returns `(false, nil)` and leaves every evidence column untouched; a persistence error returns an error, engages a brief exponential claim pause (100 ms doubling to 1 s ceiling), and never fabricates a completed attempt.
+
+### Checks and classification
+
+The general checker (`infrastructure/proxy/health.go`) performs one GET of the configured JSON IP-echo target through the proxy. Success requires HTTP 200 plus a complete, bounded (≤1 KiB) body that parses as exactly one JSON object with a string `ip` field. Every check runs under the check timeout (default 10 s); there is no direct fallback.
+
+Outcomes are typed (`ProxyCheckKind`: `local`, `proxy`, `target`, `deadline`, `cancelled`) and decisions use `errors.As`/`errors.Is`, never error text:
+
+- nil error → **success**
+- caller cancellation or untyped errors → **inconclusive** (fail closed)
+- proven proxy dial/negotiation failure → **failure**, only while the guard was healthy and unchanged across the attempt
+- deadline failures → **failure** under the same guard condition, otherwise **inconclusive**
+- target errors (HTTP status, payload, target TLS) → always **inconclusive**
+
+The dispatcher re-reads the guard immediately before persistence: a guard generation change anywhere between the attempt's start snapshot and that recheck fences conclusive failure attribution into an inconclusive result. Inconclusive attempts never increment failure history; they reschedule no sooner than `inconclusive_retry` (default 60 s) and preserve the recovery step.
+
+### Transitions
+
+- **success** — `general_healthy = true`, latency recorded, next verification scheduled at `verification_interval` (default 60 s), recovery sequence reset.
+- **failure** — `general_healthy = false`, recovery step advances (delay doubles from `recovery_base` 1 m to `recovery_cap` 15 m, bounded by `recovery_horizon` 1 h), the common repeat position moves by `min_repeat_interval` only so recovery backoff never widens the background cooldown. The historical `status` column still dead-ends at `fail_count_threshold` (5) or `dead_threshold_days` (48 h since last success, first-seen fallback); it is bookkeeping, not availability.
+- **inconclusive** — no history change; retried after the floor.
+
+Shutdown releases leases it still owns on bounded fresh contexts after a ≤5 s drain of in-flight results; anything unreleased expires and is reclaimed lazily.
+
+### Endpoint guard
+
+Each scan replica owns an `EndpointGuard` observing its own egress with a bounded direct request to the same IP-echo target (`control_interval`, default 30 s, ±10 % jitter, serial controls, 10 s control budget). A failed control pauses claiming until a later success; the generation counter increments on each healthy→unhealthy transition and is never reset. A healthy control never mutates proxy state. The guard gates claiming only — in-flight checks always run to completion and are fenced by generation as described above.
+
+## Fresh availability (general vs destination health)
+
+All consumer-facing reads share one general-health predicate:
+
+```sql
+general_healthy AND last_verified_at > <database time> - freshness_ttl
 ```
-discover → inactive (new-proxy event)
-inactive → active (scan: proxy works)
-inactive → dead (scan: fail_count >= threshold OR inactive > 2 days)
-active → inactive (scan: proxy fails)
-active → inactive (census worker: proxy connection fails → MarkFailed)
-active → dead (scan: inactive > 2 days)
-dead → inactive (scan: 3-day window elapsed, re-scan succeeds)
-dead → dead (scan: still dead, update last_scanned_at)
-```
 
-### Status Definitions
+`freshness_ttl` defaults to 120 s and must exceed `verification_interval + test_timeout` (validated at startup). The predicate gates `ListActive`, `CountByStatus`, `ClaimProxy`, `RefreshConsumerLock`, and `RandomActive`:
 
-- **active**: Proxy successfully reached The Lodestone on last scan
-- **inactive**: Proxy failed last scan but hasn't exceeded failure thresholds, or was marked as failed by a census worker
-- **dead**: Proxy inactive for >2 days OR fail_count >= threshold (default: 5). Re-scanned at most once every 3 days.
+- `active` = the fresh predicate holds; a historically active but non-fresh row counts as `stale`; historical `inactive`/`dead` categories are preserved.
+- `ClaimProxy` and `RefreshConsumerLock` additionally require an expired/absent destination cooldown and an unlocked (or TTL-expired) row.
+- `RandomActive` applies the fresh predicate and ID exclusions but no destination-cooldown filter — cooldowns gate consumers, not provider discovery.
+- There is no stale fallback: a non-fresh proxy is never handed to a consumer.
 
-## Proxy Testing (Checker)
+When every scanner stops, fresh lists, counts, and acquisitions decay to zero within `freshness_ttl` of each row's last verification — measured at exactly this staggered 120 s boundary in the local exercise.
 
-Proxies are tested by making an HTTP GET request through the proxy to `https://na.finalfantasyxiv.com/lodestone/`. If the request returns HTTP 200, the proxy is considered functional. Latency is measured as round-trip time.
+**Destination cooldowns** are independent: a consumer rejection from the destination (Lodestone 403/429/5xx) raises `destination_cooldown_until` to at least `database now + Retry-After` (floor `proxy.consumer.cooldown`, default 60 s) via `GREATEST`, and releases only the caller's own lock. General evidence and the scan observation version are untouched, so a 429 never marks a proxy unhealthy and never blocks scanner claims or provider discovery.
 
-### Protocol Support
+## Consumer integration (`consume --proxy`)
 
-The proxy checker (`infrastructure/proxy/checker.go`) supports all proxy protocols:
+`ProxyHub.NewProxy(ctx, owner)` hands out a proxy only after three steps, and returns `nil` (caller retries with backoff) when any step fails:
 
-- **HTTP/HTTPS**: Uses `http.Transport.Proxy` for standard HTTP proxy tunneling
-- **SOCKS4/SOCKS5**: Uses `golang.org/x/net/proxy` to create a SOCKS dialer, wrapped in `http.Transport.DialContext`
+1. `ClaimProxy` — fresh, uncooldowned, unlocked, protocol-supported row (`FOR UPDATE SKIP LOCKED`), ordered by recency of proof, uptime, latency, failure count.
+2. Destination check — the `DestinationChecker` (`proxy.consumer.test_url`, default The Lodestone) must return 200 with a complete body.
+3. `RefreshConsumerLock` — revalidates freshness, ownership, lock validity and cooldown, extends the lock, and returns the record with the **live observation version** the consumer must present later.
 
-This ensures that proxies of all protocols discovered by the providers can be tested and used by the census workers.
+Every goroutine owns exactly one proxy (`census-consume-<host>-p<pid>-w<workerID>`). Per job:
 
-## Providers
+- `Proxy.CanUse` revalidates through `RefreshConsumerLock` — the historical local-status shortcut is gone; a lock lost or a freshness lapse mid-job is detected against the database.
+- A typed conclusive proxy failure is persisted by `Proxy.MarkFailed` → `RecordConsumerFailure` under a CAS on the version captured **before** the job's I/O, the owner, and a still-valid lock; a stale observation is rejected and only its own lock is released. The failure transition mirrors the scanner's (recovery delay, common-cooldown move, dead thresholds) and invalidates any older scan lease.
+- A typed destination rejection (`CheckTarget`, e.g. 429 with `Retry-After`) applies `CooldownDestination` and returns the delivery for a normal queue retry — no identity rotation, no failure history. Provider 429 handling keeps its existing limiter pause and never rotates the proxy.
+- Local errors and cancellation release without evidence writes.
+- Replacement claims are acquired before the previous lock is released (release-before-reacquire at cleanup, no hold-and-wait).
 
-### ProxyScrape (Primary)
+`NotifyAvailable` (wired as the scan worker's success notifier) wakes waiting consumers as soon as a scanner accepts a success.
 
-- **API**: `https://api.proxyscrape.com/v4/free-proxy-list/get`
-- **No API key required**
-- Returns JSON with IP, port, protocol, country, anonymity, uptime
-- Refreshes every minute
-- Filter by protocol, country, anonymity, timeout
+`RandomActive`/`SwapActive` remain for the discovery pipeline only: unlocked, untested random selection over the fresh pool. They must not be used for Lodestone APIs.
 
-### Geonode (Secondary)
+### Removed interfaces
 
-- **API**: `https://proxylist.geonode.com/api/proxy-list`
-- **No API key required**
-- Returns JSON with pagination
-- Fields: IP, port, protocols, anonymityLevel, country, upTime
+The rewrite removed, with all callers and fakes migrated: `UpdateStatus`, `UpdateScanTime`, `ListForScan`, `ListDeadForScan`, `MarkFailedProxy`, the `ExtendLock` port method (superseded by `RefreshConsumerLock`), the old narrow `Scanner`, split-pool helpers, `dead_scan_interval_days` configuration, and the `--dead-scan-percentage` CLI flag. `cmd/http` intentionally exposes no live proxy view.
 
 ## Configuration
 
 ```toml
 [proxy]
-test_url                = "https://na.finalfantasyxiv.com/lodestone/"
-test_timeout            = "5s"
-dead_threshold_days     = 2
-dead_scan_interval_days = 3
-fail_count_threshold    = 5
+test_url             = "https://api64.ipify.org?format=json"  # JSON IP-echo target (general checks + guard)
+test_timeout         = "10s"                                  # per-check budget (also the stall deadline)
+dead_threshold_days  = 2                                      # historical dead classification
+fail_count_threshold = 5                                      # historical dead classification
 
-[proxy.providers]
-proxyscrape = true
-geonode     = true
-```
+[proxy.scan]
+verification_interval = "60s"   # healthy-row re-verification cadence
+freshness_ttl         = "120s"  # general-freshness window (> verification_interval + test_timeout)
+recovery_base         = "1m"    # first failure retry delay
+recovery_cap          = "15m"   # saturated failure retry delay
+recovery_horizon      = "1h"    # bound on the stored recovery progression
+weight_verification   = 10      # capacity shares (must sum to 100)
+weight_recovery       = 45
+weight_background     = 45
+lease_duration        = "30s"   # scan lease (> test_timeout)
+min_repeat_interval   = "1s"    # common minimum-repeat cooldown (scan_not_before)
+inconclusive_retry    = "60s"   # floor for retrying inconclusive attempts
+control_interval      = "30s"   # guard control cadence
 
-| Field | Default | Env Override | Description |
-|-------|---------|-------------|-------------|
-| `test_url` | `https://na.finalfantasyxiv.com/lodestone/` | `PROXY_TEST_URL` | URL to test proxies against |
-| `test_timeout` | `5s` | `PROXY_TEST_TIMEOUT` | Timeout per proxy test request |
-| `dead_threshold_days` | `2` | `PROXY_DEAD_THRESHOLD_DAYS` | Days inactive before marking dead |
-| `dead_scan_interval_days` | `3` | `PROXY_DEAD_SCAN_INTERVAL_DAYS` | Days between dead proxy re-scans |
-| `fail_count_threshold` | `5` | `PROXY_FAIL_COUNT_THRESHOLD` | Consecutive failures before dead |
-
-## Worker
-
-The proxy consumer (`proxy consume`) uses push-based consumption via RabbitMQ for `new-proxy` events only:
-
-- **Push-based**: The queue delivers messages directly to the handler — no polling, no `pollInterval`
-- **Concurrency**: Sized by the `--concurrency` flag
-- **Retry/fail**: Handled internally by the queue adapter (retry exchange with TTL backoff, dead-letter for permanent failures)
-- **Graceful shutdown**: Cancels the consumption context, finishes in-flight jobs
-
-The `proxy scan` worker is a separate long-running process that reads batches directly from the database, bypassing RabbitMQ entirely. Each pool runs a prefetcher goroutine that claims and buffers records ahead of the workers, so workers never wait on a database round trip; workers only touch the database to write results between scans, never while holding a proxy check open.
-
-## Scan Priority
-
-The `proxy scan` worker queries the database with priority ordering:
-
-1. **Inactive** proxies (oldest scan first)
-2. **Active** proxies not scanned in 10 minutes
-3. **Dead** proxies not scanned in 7 days
-
-Each pool keeps `concurrency + 30%` records in memory (queued or in flight). The prefetcher claims up to that headroom per query — claimed rows are stamped `last_scanned_at = NOW()` atomically (single `FOR UPDATE SKIP LOCKED` statement), so rows in flight are never re-fetched, and a crash mid-batch leaves claimed rows invisible until their regular scan window passes. After empty batches or per-record errors, the worker waits one minute before querying again. Cancellation during the idle wait returns cleanly.
-
----
-
-## Census Consumer Integration
-
-The `consume` command supports a `--proxy` flag for per-goroutine proxy isolation:
-
-```bash
-# Standard mode (direct requests)
-./bin/ffxiv-census consume --concurrency 8
-
-# Proxy mode (each goroutine acquires its own proxy)
-./bin/ffxiv-census consume --proxy --concurrency 8
-```
-
-### How It Works
-
-1. Each worker goroutine calls `ProxyHub.NewProxy(ctx, owner)` to acquire an available proxy from the database. The `owner` is constructed as `census-consume-<hostname>-p<pid>-w<workerID>` (e.g. `census-consume-worker-pod-abc-p43-w2`)
-2. The proxy is locked to that goroutine by owner name
-3. Proxy-aware Lodestone and Tomestone clients are created for that goroutine
-4. The `CensusService` is prewarmed on the command goroutine before launching workers, ensuring milestone sync and service construction happen once
-5. ALL requests route through the proxy — no direct requests
-5. If a proxy fails (connection refused, timeout, host unreachable), the goroutine immediately marks it as failed via `Proxy.MarkFailed()` and acquires a fresh proxy
-6. If `CanUse()` returns false (ownership changed by lock expiry), the goroutine acquires a new proxy
-
-### ProxyHub — Atomic Proxy Acquisition with Test-Before-Handout
-
-`ProxyHub` (`domain/proxy/hub.go`) manages proxy acquisition for worker goroutines. Each call to `NewProxy(ctx, owner)` atomically claims the best available proxy using `FOR UPDATE SKIP LOCKED` in PostgreSQL, then **tests it before handing it to the worker**. The `owner` parameter is the command-constructed worker identity (e.g. `census-consume-<hostname>-p<pid>-w<workerID>`); the hub itself does not generate owner names.
-
-**Replacement and cooldown:** When a proxy fails during use, `replaceProxy` acquires a replacement through `NewProxy` *before* releasing or marking-failed the previous proxy. This ordering prevents a window where the worker holds no proxy at all. If building new clients from the replacement fails, the replacement claim is released and the previous proxy state is preserved for cleanup. `MarkFailed` and `Release` errors on the old proxy are logged but do not prevent the replacement from being used. A 429/rate-limit error is a provider cooldown, not a dead proxy — it pauses the provider in the goroutine-local rate limiter and never triggers a swap.
-
-**Test-before-handout flow** (up to 3 attempts):
-
-1. Claim a proxy from the database (`ClaimProxy`)
-2. If no proxy is available, return `nil` immediately
-3. Run a live check against the Lodestone URL via the proxy checker
-4. If the check passes, return the proxy to the worker
-5. If the check fails, call `MarkFailed` on the proxy and try another
-6. After 3 failed attempts, return `nil` (no working proxy available)
-
-**ClaimProxy priority** (implemented in `infrastructure/postgres/repository/proxy.go`):
-
-1. **Recently alive** — proxies confirmed alive within the last hour (`last_alive_at >= NOW() - 1h`) are preferred
-2. **Highest uptime** — ordered by `uptime_percent DESC NULLS LAST`
-3. **Lowest latency** — tiebreaker by `latency_ms ASC NULLS LAST`
-4. **Lowest failure count** — final tiebreaker by `fail_count ASC`
-5. **Fallback** — if no recently-scanned proxy is available, any active proxy is returned
-
-This ensures workers get the most reliable proxies from the scan pool. The scan (`proxy scan`) tests proxies against the Lodestone URL and updates `last_alive_at`, `latency_ms`, and `status` — so the ClaimProxy query always has fresh data.
-
-**Why test-before-handout:** Previously, `NewProxy` returned proxies from the database without verifying they still work. Workers would receive dead proxies and waste time on connection failures before marking them failed. Now the proxy is tested at claim time — if it can't reach the Lodestone, it's immediately marked failed and the next candidate is tried. This eliminates the "dead proxy on first job" problem entirely.
-
-**Why this design:** Free proxies are inherently unreliable. The scan identifies which proxies can reach Lodestone right now. The ClaimProxy query prioritizes those, reducing wasted time on dead proxies. When a proxy fails during use, `MarkFailed` increments its `fail_count` and sets it to `inactive`, preventing other workers from picking it up until the next scan re-validates it.
-
-### Random Unlocked Discovery Selection
-
-`ProxyHub` also exposes `RandomActive(ctx)` and `SwapActive(ctx, current)` for public proxy-list provider scraping. These methods return an unlocked, untested proxy selected at random from the active pool. They intentionally neither claim nor mutate locks and do not mark a proxy inactive when an external provider blocks it.
-
-- `RandomActive` returns any active proxy (no exclusion).
-- `SwapActive` returns a different active proxy than `current`, falling back to `RandomActive` when `current` is nil.
-
-**These methods must not be used for Lodestone APIs.** Lodestone workers must use `NewProxy` so proxies are checked and atomically owner-locked. The random selection is only for the discovery pipeline, where the rotating discovery HTTP client (`DiscoveryHTTPClient`) routes provider requests through active proxies and swaps on 403/429/5xx or transport failure.
-
-**Discovery streaming:** The `proxy discover` command streams each provider's response directly to RabbitMQ via a callback. Providers are invoked sequentially in configured order. Providers never accumulate complete response bodies or record lists in memory. This keeps the discovery job's memory footprint bounded regardless of provider response size, fitting within the existing 1 GiB Kubernetes pod limit.
-
-**Discovery deduplication:** Each emitted tuple is checked read-only against PostgreSQL before RabbitMQ publication. Existing rows are counted as `skipped_existing` and never published; database-existing tuples do not consume the global publication limit. Lookup errors fail closed per provider — a failed `Exists` query stops that provider's callback without publishing. The consumer independently checks then inserts conflict-safely via `INSERT ... ON CONFLICT DO NOTHING`. Migration `00012_deduplicate_proxies.sql` removes any legacy exact duplicates and restores the `(protocol, ip, port)` tuple uniqueness invariant, keeping the newest row by `updated_at DESC, id DESC`.
-
-**Discovery limit semantics:** The `--limit` flag sets a global publication cap across the entire discovery run (not per provider). When the limit is reached, the current provider's stream is aborted and all remaining providers are skipped entirely. When a provider exhausts its records below the limit, the next provider in configured order is invoked to fill the remaining quota. `--limit 0` disables the cap (unlimited).
-
-### Proxy Domain Object
-
-`Proxy` (`domain/proxy/proxy.go`) wraps a `ProxyRecord` with domain behavior:
-
-- **`CanUse(owner)`** — returns true if the proxy is active and locked by the given owner
-- **`ExtendLock(ctx, owner, lockTTL)`** — extends the lock TTL, but only if the lock hasn't expired (checks `locked_at >= NOW() - lockTTL`)
-- **`MarkFailed(ctx, owner)`** — releases the lock AND increments `fail_count`, sets status to `inactive`. This prevents the same bad proxy from being immediately re-acquired by another worker
-- **`Release(ctx, owner)`** — releases the lock without marking as failed (used during graceful shutdown)
-
-**Why MarkFailed instead of just Release:** When a proxy fails, simply releasing it would make it available again immediately. Since it has the best latency/uptime score (it was just claimed), the same or another worker would pick it up again — wasting time on a known-bad proxy. `MarkFailed` increments the fail count and sets status to `inactive`, so the proxy goes to the back of the queue until the next scan re-validates it.
-
-### Immediate Proxy Switching
-
-When a proxy fails during a job, the worker switches to a fresh proxy **immediately** — not after N consecutive failures. The flow:
-
-1. Handler returns an error that indicates a proxy issue (connection refused, timeout, host unreachable, service unavailable, proxyconnect error)
-2. `processJobWithHandlers` returns `true` (bad proxy signal)
-3. Worker calls `proxy.MarkFailed()` to prevent re-acquisition
-4. Worker calls `proxyHub.NewProxy()` to get a fresh proxy
-5. Worker recreates proxy-aware clients with the new proxy
-6. Worker continues claiming and processing jobs with the new proxy
-
-**Why immediate switching:** Free proxies fail frequently. Waiting for multiple failures wastes time — each failure costs 10-15 seconds (timeout). Switching on the first failure means the worker quickly rotates through bad proxies until it finds a working one.
-
-### Graceful Shutdown
-
-On SIGTERM, the shutdown sequence is:
-
-1. The consumption context is canceled — the queue adapter stops delivering new messages
-2. In-flight jobs continue processing until their handlers complete
-3. Each worker goroutine exits independently when its current job finishes
-4. `wg.Wait()` blocks until all workers have completed
-
-**Key decisions:**
-- **Handler errors trigger retry/fail via the queue adapter** — the queue handles dead-letter and retry-exchange routing internally, so handlers just return errors
-- **Worker errors don't cancel sibling workers** — each worker exits independently and the WaitGroup waits for all to finish naturally
-
-### Protocol Support
-
-All proxy protocols are supported end-to-end:
-
-| Protocol | Checker | Tomestone Client | Lodestone (`CustomClient`) |
-|----------|---------|------------------|----------------------|
-| HTTP | `http.Transport.Proxy` | `http.Transport.Proxy` | `newProxyTransport` → `http.Transport.Proxy` |
-| HTTPS | `http.Transport.Proxy` | `http.Transport.Proxy` | `newProxyTransport` → `http.Transport.Proxy` |
-| SOCKS4 | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` | `newProxyTransport` → `golang.org/x/net/proxy` |
-| SOCKS5 | `golang.org/x/net/proxy` | `golang.org/x/net/proxy` | `newProxyTransport` → `golang.org/x/net/proxy` |
-
-`CustomClient` receives `WithProxy(proxyURL)` and uses `newProxyTransport` to configure its direct HTTP transport. Each proxy worker owns its client and transport.
-
-### Container Accessors
-
-- `container.Load.ProxyHub()` — creates a ProxyHub (reads lock TTL from `[proxy.consumer]` config). The owner is constructed by the CLI command (e.g. `census-consume-<hostname>-p<pid>-w<workerID>`) and passed to `RunEventsWithProxy`, not to the hub accessor
-- `container.Load.ProxyCensusHandlers(lodestone, tomestone, rateLimiter)` — handler registry wired to proxy-aware clients
-- `container.Load.ProxyRepository()` — proxy persistence layer
-- `container.Load.ProxyScrapeProvider()` / `GeonodeProvider()` — proxy discovery providers
-- `container.Load.ProxyChecker()` — proxy health checker
-- `container.Load.DiscoveryHTTPClient()` — rotating-proxy HTTP client for public proxy-list providers. Falls back to the direct client when no active proxy exists. Must not be used for Lodestone or Tomestone APIs
-
-### Configuration
-
-```toml
 [proxy.consumer]
-lock_ttl              = "5m"     # How long a goroutine holds a proxy lock
-lodestone_rate_limit  = 1.0     # Override Lodestone rate limit (req/s) in proxy mode
-request_timeout       = "30s"   # Override HTTP timeout for proxy-aware clients
+lock_ttl             = "5m"                                    # consumer lock TTL
+lodestone_rate_limit = 1.0                                     # req/s override in proxy mode
+request_timeout      = "30s"                                   # proxy-aware client timeout
+test_url             = "https://na.finalfantasyxiv.com/lodestone/"  # destination check
+test_timeout         = "10s"
+cooldown             = "60s"                                   # destination cooldown floor
 ```
 
-| Field | Default | Env Override | Description |
-|-------|---------|-------------|-------------|
-| `lock_ttl` | `5m` | `PROXY_CONSUMER_LOCK_TTL` | Duration a goroutine holds exclusive proxy lock |
-| `lodestone_rate_limit` | `1.0` | `PROXY_CONSUMER_LODESTONE_RATE_LIMIT` | Lodestone rate limit override (req/s) — overrides base `[lodestone].rate_limit` for proxy-mode clients |
-| `request_timeout` | `30s` | `PROXY_CONSUMER_REQUEST_TIMEOUT` | HTTP client timeout override — overrides base `[tomestone].timeout` for proxy-mode clients |
+Every field overrides through an environment variable named by upper-casing the key path with `.` → `_` (viper `AutomaticEnv`): `PROXY_TEST_URL`, `PROXY_SCAN_LEASE_DURATION`, `PROXY_SCAN_WEIGHT_BACKGROUND`, `PROXY_CONSUMER_LOCK_TTL`, and so on. Startup validation fails closed on impossible combinations (freshness vs verification+timeout, lease vs timeout, weights sum, nonpositive durations).
 
-**Why separate config:** Proxy-mode consumers operate through different IPs than the non-proxy consumer. The rate limit and timeout may need to be different — proxies add latency, and rate limits may be more relaxed since each goroutine uses a different IP.
-
-### Kubernetes Deployment
-
-The Helm chart deploys three types of census workers:
+## Kubernetes deployment
 
 ```yaml
-# Standard consumer (direct requests, no proxy)
-- name: consumer
-  replicaCount: 1
-  command: [/app/ffxiv-census, consume, all, -c, "30"]
-
-# Proxy event consumer (new-proxy, scan-proxy events)
-- name: proxy-consumer
-  replicaCount: 1
-  command: [/app/ffxiv-census, proxy, consume, -c, "30"]
-
-# Proxy-mode census consumer (all events through proxies)
-- name: census-proxy
-  replicaCount: 2
-  command: [/app/ffxiv-census, consume, all, --proxy, -c, "30"]
+- name: proxy-scan
+  replicaCount: 5
+  command: [/app/ffxiv-census, proxy, scan, -c, "150"]
+  env:
+    - name: POSTGRES_MAX_OPEN_CONNS   # instance env replaces chart defaults
+      value: "2"
+    - name: POSTGRES_MAX_IDLE_CONNS
+      value: "1"
+  resources:
+    requests: { memory: 100Mi, cpu: 500m }
+    limits:   { memory: 1Gi,  cpu: 1000m }
 ```
 
-The `census-proxy` workers run with `--proxy` flag — each goroutine acquires its own proxy from the database and routes ALL requests through it. The standard `consumer` runs without proxies for direct access.
+**Connection budgeting is bounded by design**: each scan replica opens at most 2 database connections (1 idle), so 5 replicas contribute at most 10 backends regardless of the 750-slot check capacity. Instance `env` lists replace the chart defaults; the required queue entries (`QUEUE_MAX_ATTEMPTS`, `RABBITMQ_URL`) stay in the list even though scanning bypasses RabbitMQ.
 
-### Diagnostic Logging
+## Observability
 
-When troubleshooting proxy issues, the following diagnostic fields are logged:
+The scanner logs one structured event per persisted attempt on the existing `slog` logger — only `accepted=true` observations are evidence, and only they count toward throughput:
 
-- **`proxy`** — the proxy URL being used (e.g. `socks5://1.2.3.4:1080`)
-- **`client`** — `CustomClient` instance pointer — useful for verifying that each goroutine has its own direct HTTP client
-- **`lodestone_client`** — LodestoneClient pointer — useful for verifying client isolation
-- **`worker_id`** — worker goroutine index
-- **`handler`** — handler instance pointer
-- **`owner`** — lock owner name in the format `census-consume-<hostname>-p<pid>-w<workerID>` (e.g. `census-consume-worker-pod-abc-p43-w2`)
+```json
+{"msg":"proxy_scan.completion","proxy_id":42,"queue":"verification","outcome":"success",
+ "reason":"","duration":105000000,"accepted":true,"recovery_step":0,
+ "previously_healthy":true,"verify_late":1000000000}
+```
 
-These fields appear in `worker.job_start`, `lodestone.scrape_retry`, `handler.achievement_census`, and `worker.proxy_bad`/`worker.proxy_reacquired` log entries.
+`queue` ∈ verification/recovery/background; `outcome` ∈ success/failure/inconclusive; `reason` is the bounded typed label; `verify_late` (when present) is how far past `next_attempt_at` the check landed. Further events: `proxy_scan.claim` (debug; queue, requested/claimed, duration), `proxy_scan.claim_error`, `proxy_scan.complete_error`, `proxy_scan.release_error`, `proxy_scan.shutdown_incomplete`, `proxy_scan.panic_recovered`, and the guard transitions `endpoint control failed; pausing scan claims` / `endpoint control succeeded; scan claims resume` (with generation). The consumer side logs `worker.proxy_acquired`, `worker.proxy_bad`, `worker.proxy_reacquired`, `worker.proxy_waiting`, and `worker.job_retry`.
+
+Experiment/operations SQL over the same database (no separate telemetry subsystem): health totals via `CountByStatus`; oldest completed background age = `min(last_completed_at)` over not-healthy completed rows; unknown-history count = rows with `last_completed_at IS NULL`; overdue verification count = healthy rows with `next_attempt_at < now() - grace`. Distinguish locally logged attempts from accepted persisted observations by filtering `accepted=true`.
+
+## Measured local exercise (2026-09-09)
+
+Throwaway fixtures on one Apple M1 host: local TLS IP-echo target, HTTP CONNECT / HTTPS CONNECT / SOCKS4 / SOCKS5 proxies (100 ms forwarding delay), immediate-refusal and 10 s-stall populations; 10 000 seeded rows per run (6000 delayed-success, 3900 refusal, 100 stall); `verification_interval` 10 s, all other defaults; per-process `-c 30`; identical policy and 150 s window per run; scanners ran as Linux containers, one run per dataset reset. Accepted completions counted from `accepted=true` log events only.
+
+| Scanners (-c 30 each) | Accepted completions/s | Verify lateness avg/p95 | Postgres container CPU | Scanner CPU each |
+|---|---|---|---|---|
+| 1 | 130.4 | 54.1 s / 98.9 s | 16.9 % | 28.7 % |
+| 2 | 244.3 | 39.2 s / 53.5 s | 40.6 % | 27–31 % |
+| 5 | 445.7 | 18.5 s / 22.8 s | 120.4 % | 27–30 % |
+
+Every run: zero fencing discards, zero claim/persistence errors. Throughput scaled 1.9× at two replicas and 3.4× at five while the single-container PostgreSQL instance became the binding resource (120 % CPU) — the honest ceiling in this setup, not scanner capacity (scanners stayed near 30 % CPU each with headroom on the host). No queue starved: the background sweep drained completely in each run (≤35 s at five replicas), the recovery population kept cycling, and the verification backlog shrank monotonically with replica count. Database connections matched the budget: one steady-state backend per replica (≤10 total at five replicas, sampled via `pg_stat_activity`).
+
+Kill test: one of three replicas was `SIGKILL`ed holding 26 in-flight leases. All 26 rows were reclaimed lazily by the two survivors after the 30 s lease expiry and completed successfully; a captured pre-kill lease token replayed through `CompleteScan` was rejected (`accepted=false`, no error) by the version/token fence.
+
+Smoke: valid bodies activated rows on all four protocols (~105 ms latency recorded); a malformed target body caused the guard to pause claiming with no failure history written (inconclusive, fail closed); refusal proxies failed conclusively in ~1.4 ms; stalls ended at the 10 s deadline (10.00–10.01 s observed); stopping all scanners decayed fresh lists, counts and acquisitions to zero across a single `freshness_ttl` window (staggered per row); hub handout required claim + destination check + freshness revalidation; three destination 429s raised only destination cooldowns (Retry-After honored) while all 20 rows' general health and verification timestamps stayed intact, and no proxy was handed out while the destination rejected.
+
+## Coordinated rollout procedure
+
+The scanner rewrite changes evidence columns, predicates, and consumer fencing; old and new binaries must not run against the same proxies concurrently. Roll out as a stop-the-world cutover, executed only with user authorization (the README release workflow governs image build and tag steps):
+
+1. Stop the old proxy writers and consumers: `proxy-scan`, `proxy-new`, all `--proxy` census consumers, and `proxy-discover` CronJobs. Old live readers that serve proxy data (currently none — `cmd/http` exposes no proxy view) stop with them.
+2. Migrate the schema with the new binary (`00017_proxy_scan_scheduling.sql` is embedded and self-applies on first database use). The migration adds columns and indexes; it does not backfill success — every row starts with `general_healthy = false` and will be proven fresh only by a new scan.
+3. Start the new `proxy-scan` replicas. Watch `proxy_scan.completion` events, guard transitions, and `CountByStatus` until the fresh `active` count reflects real, recent evidence.
+4. Start the new consumers (`proxy-new`, `--proxy` census consumers) and any proxy readers. Consumers must be the new binary: a pre-rewrite consumer cannot present an observation version and will have its failure writes fenced off.
+
+There is no rolling mixed-binary cutover, no automatic destructive rollback (roll forward by redeploying the previous release the same way), and no synthetic backfill of availability.
+
+## Discovery
+
+`proxy discover` streams provider responses directly to RabbitMQ (bounded memory), deduplicates each tuple with a read-only `Exists` check before publication, and treats `--limit` as a global publication cap. Providers run sequentially in configured order; a provider lookup error fails that provider closed without publishing. The rotating discovery HTTP client uses `RandomActive` (fresh pool, ID exclusions) and swaps on 403/429/5xx or transport failure without marking proxies — provider blocks say nothing about general health.
