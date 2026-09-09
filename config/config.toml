@@ -54,11 +54,24 @@ rate_limit = 5.0
 timeout = "10s"
 
 [proxy]
-test_url                = "https://na.finalfantasyxiv.com/lodestone/"
-test_timeout            = "5s"
-dead_threshold_days     = 2
-dead_scan_interval_days = 3
-fail_count_threshold    = 5
+test_url             = "https://api64.ipify.org?format=json"
+test_timeout         = "10s"
+dead_threshold_days  = 2
+fail_count_threshold = 5
+
+[proxy.scan]
+verification_interval = "60s"
+freshness_ttl         = "120s"
+recovery_base         = "1m"
+recovery_cap          = "15m"
+recovery_horizon      = "1h"
+weight_verification   = 10
+weight_recovery       = 45
+weight_background     = 45
+lease_duration        = "30s"
+min_repeat_interval   = "1s"
+inconclusive_retry    = "60s"
+control_interval      = "30s"
 
 [proxy.providers]
 proxyscrape     = true
@@ -88,6 +101,9 @@ ercindedeoglu_url = "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/mai
 lock_ttl              = "5m"
 lodestone_rate_limit  = 1.0
 request_timeout       = "30s"
+test_url              = "https://na.finalfantasyxiv.com/lodestone/"
+test_timeout          = "10s"
+cooldown              = "60s"
 
 [census]
 activity_window_days = 30

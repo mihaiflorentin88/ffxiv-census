@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -162,19 +164,40 @@ type UIStatsConfig struct {
 }
 
 type ProxyConfig struct {
-	TestURL              string              `mapstructure:"test_url"`
-	TestTimeout          string              `mapstructure:"test_timeout"`
-	DeadThresholdDays    int                 `mapstructure:"dead_threshold_days"`
-	DeadScanIntervalDays int                 `mapstructure:"dead_scan_interval_days"`
-	FailCountThreshold   int                 `mapstructure:"fail_count_threshold"`
-	Providers            ProxyProviderConfig `mapstructure:"providers"`
-	Consumer             ProxyConsumerConfig `mapstructure:"consumer"`
+	TestURL            string              `mapstructure:"test_url"`
+	TestTimeout        time.Duration       `mapstructure:"test_timeout"`
+	DeadThresholdDays  int                 `mapstructure:"dead_threshold_days"`
+	FailCountThreshold int                 `mapstructure:"fail_count_threshold"`
+	Scan               ProxyScanConfig     `mapstructure:"scan"`
+	Providers          ProxyProviderConfig `mapstructure:"providers"`
+	Consumer           ProxyConsumerConfig `mapstructure:"consumer"`
+}
+
+// ProxyScanConfig is the validated scheduler configuration: cohort
+// intervals, capacity weights, lease/repeat floors and the guard control
+// cadence. All durations are Viper-decoded from duration strings.
+type ProxyScanConfig struct {
+	VerificationInterval time.Duration `mapstructure:"verification_interval"`
+	FreshnessTTL         time.Duration `mapstructure:"freshness_ttl"`
+	RecoveryBase         time.Duration `mapstructure:"recovery_base"`
+	RecoveryCap          time.Duration `mapstructure:"recovery_cap"`
+	RecoveryHorizon      time.Duration `mapstructure:"recovery_horizon"`
+	WeightVerification   int           `mapstructure:"weight_verification"`
+	WeightRecovery       int           `mapstructure:"weight_recovery"`
+	WeightBackground     int           `mapstructure:"weight_background"`
+	LeaseDuration        time.Duration `mapstructure:"lease_duration"`
+	MinRepeatInterval    time.Duration `mapstructure:"min_repeat_interval"`
+	InconclusiveRetry    time.Duration `mapstructure:"inconclusive_retry"`
+	ControlInterval      time.Duration `mapstructure:"control_interval"`
 }
 
 type ProxyConsumerConfig struct {
-	LockTTL            string  `mapstructure:"lock_ttl"`
-	LodestoneRateLimit float64 `mapstructure:"lodestone_rate_limit"`
-	RequestTimeout     string  `mapstructure:"request_timeout"`
+	LockTTL            string        `mapstructure:"lock_ttl"`
+	LodestoneRateLimit float64       `mapstructure:"lodestone_rate_limit"`
+	RequestTimeout     string        `mapstructure:"request_timeout"`
+	TestURL            string        `mapstructure:"test_url"`
+	TestTimeout        time.Duration `mapstructure:"test_timeout"`
+	Cooldown           time.Duration `mapstructure:"cooldown"`
 }
 
 type ProxyProviderConfig struct {
@@ -230,6 +253,115 @@ func loadDotEnv() {
 	}
 }
 
+// validateHTTPSURL requires an explicit https URL with a host and no
+// embedded credentials.
+func validateHTTPSURL(key, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("config: %s: invalid URL %q: %w", key, raw, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("config: %s must use https, got %q", key, raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("config: %s must include a host, got %q", key, raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("config: %s must not contain credentials, got %q", key, raw)
+	}
+	return nil
+}
+
+func validatePositiveDuration(key string, d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("config: %s must be positive, got %s", key, d)
+	}
+	return nil
+}
+
+// validateProxySettings fails startup on invalid explicit settings. Nothing
+// is clamped or silently defaulted: a bad operator value must surface here,
+// not as surprising scanner behavior.
+func validateProxySettings(cfg *Config) error {
+	proxy := cfg.Proxy
+	if proxy == nil {
+		return fmt.Errorf("config: [proxy] section missing")
+	}
+	if err := validateHTTPSURL("proxy.test_url", proxy.TestURL); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration("proxy.test_timeout", proxy.TestTimeout); err != nil {
+		return err
+	}
+	if proxy.DeadThresholdDays <= 0 {
+		return fmt.Errorf("config: proxy.dead_threshold_days must be positive, got %d", proxy.DeadThresholdDays)
+	}
+	if proxy.FailCountThreshold <= 0 {
+		return fmt.Errorf("config: proxy.fail_count_threshold must be positive, got %d", proxy.FailCountThreshold)
+	}
+
+	scan := &proxy.Scan
+	durations := []struct {
+		key string
+		d   time.Duration
+	}{
+		{"proxy.scan.verification_interval", scan.VerificationInterval},
+		{"proxy.scan.freshness_ttl", scan.FreshnessTTL},
+		{"proxy.scan.recovery_base", scan.RecoveryBase},
+		{"proxy.scan.recovery_cap", scan.RecoveryCap},
+		{"proxy.scan.recovery_horizon", scan.RecoveryHorizon},
+		{"proxy.scan.lease_duration", scan.LeaseDuration},
+		{"proxy.scan.min_repeat_interval", scan.MinRepeatInterval},
+		{"proxy.scan.inconclusive_retry", scan.InconclusiveRetry},
+		{"proxy.scan.control_interval", scan.ControlInterval},
+	}
+	for _, d := range durations {
+		if err := validatePositiveDuration(d.key, d.d); err != nil {
+			return err
+		}
+	}
+
+	weights := [3]int{scan.WeightVerification, scan.WeightRecovery, scan.WeightBackground}
+	weightKeys := [3]string{"proxy.scan.weight_verification", "proxy.scan.weight_recovery", "proxy.scan.weight_background"}
+	for i, w := range weights {
+		if w <= 0 {
+			return fmt.Errorf("config: %s must be positive, got %d", weightKeys[i], w)
+		}
+	}
+	if sum := weights[0] + weights[1] + weights[2]; sum != 100 {
+		return fmt.Errorf("config: proxy.scan weights must sum to 100, got %d (verification=%d recovery=%d background=%d)",
+			sum, weights[0], weights[1], weights[2])
+	}
+
+	// A freshness that expires before the bounded verification recheck can
+	// never be honored, and a lease that may lapse before the check deadline
+	// lets another replica claim a row that is still being scanned.
+	if checkDeadline := scan.VerificationInterval + proxy.TestTimeout; scan.FreshnessTTL <= checkDeadline {
+		return fmt.Errorf("config: proxy.scan.freshness_ttl (%s) must exceed verification_interval + test_timeout (%s)",
+			scan.FreshnessTTL, checkDeadline)
+	}
+	if scan.LeaseDuration <= proxy.TestTimeout {
+		return fmt.Errorf("config: proxy.scan.lease_duration (%s) must exceed test_timeout (%s)",
+			scan.LeaseDuration, proxy.TestTimeout)
+	}
+	if scan.RecoveryCap < scan.RecoveryBase {
+		return fmt.Errorf("config: proxy.scan.recovery_cap (%s) must be at least recovery_base (%s)",
+			scan.RecoveryCap, scan.RecoveryBase)
+	}
+	if scan.MinRepeatInterval > scan.InconclusiveRetry {
+		return fmt.Errorf("config: proxy.scan.min_repeat_interval (%s) must not exceed inconclusive_retry (%s)",
+			scan.MinRepeatInterval, scan.InconclusiveRetry)
+	}
+
+	if err := validateHTTPSURL("proxy.consumer.test_url", proxy.Consumer.TestURL); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration("proxy.consumer.test_timeout", proxy.Consumer.TestTimeout); err != nil {
+		return err
+	}
+	return validatePositiveDuration("proxy.consumer.cooldown", proxy.Consumer.Cooldown)
+}
+
 func NewConfig() (*Config, error) {
 	loadDotEnv()
 
@@ -249,6 +381,9 @@ func NewConfig() (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+	if err := validateProxySettings(&cfg); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }

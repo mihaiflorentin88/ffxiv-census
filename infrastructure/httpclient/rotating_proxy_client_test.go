@@ -48,7 +48,7 @@ func TestRotatingProxyClient_GetStream_SwapActiveReturnsDifferentProxy(t *testin
 			IP:       fmt.Sprintf("10.0.0.%d", i),
 			Port:     8080,
 		})
-		repo.UpdateStatus(context.Background(), int64(i), contract.ProxyStatusActive, nil, 0, nil)
+		repo.SeedSuccess(int64(i), 0)
 	}
 	hub := proxy.NewProxyHub(repo, 5*time.Minute, nil)
 
@@ -79,7 +79,7 @@ func TestRotatingProxyClient_GetStream_ConsumerError_NoRotate(t *testing.T) {
 		IP:       "10.0.0.1",
 		Port:     8080,
 	})
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, nil, 0, nil)
+	repo.SeedSuccess(1, 0)
 	hub := proxy.NewProxyHub(repo, 5*time.Minute, nil)
 
 	direct := &mockhttpclient.Client{

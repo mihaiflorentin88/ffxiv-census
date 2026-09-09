@@ -103,18 +103,3 @@ func (p *Proxy) Release(ctx context.Context, owner string) error {
 	p.record.LockedAt = nil
 	return nil
 }
-
-// MarkFailed atomically releases the lock and sets the proxy to inactive with
-// an incremented fail count. This prevents the proxy from being immediately
-// re-acquired by another worker, and avoids the TOCTOU race of separate
-// Release + UpdateStatus calls.
-func (p *Proxy) MarkFailed(ctx context.Context, owner string) error {
-	if err := p.repo.MarkFailedProxy(ctx, p.record.ID, owner); err != nil {
-		return err
-	}
-	p.record.LockedBy = nil
-	p.record.LockedAt = nil
-	p.record.FailCount++
-	p.record.Status = contract.ProxyStatusInactive
-	return nil
-}

@@ -217,7 +217,6 @@ func (r *ProxyRepository) CompleteScan(ctx context.Context, lease contract.ScanL
 			last_alive_at = $2,
 			last_verified_at = $2,
 			last_completed_at = $2,
-			last_scanned_at = $2,
 			fail_count = 0,
 			recovery_step = 0,
 			next_attempt_at = $3,
@@ -241,7 +240,6 @@ func (r *ProxyRepository) CompleteScan(ctx context.Context, lease contract.ScanL
 			general_healthy = FALSE,
 			status = $5,
 			last_completed_at = $2,
-			last_scanned_at = $2,
 			fail_count = $6,
 			recovery_step = $7,
 			next_attempt_at = $3,
@@ -261,7 +259,6 @@ func (r *ProxyRepository) CompleteScan(ctx context.Context, lease contract.ScanL
 		// version and success stamps; only reschedule and record the attempt.
 		query = fmt.Sprintf(`UPDATE proxies SET
 			last_completed_at = $2,
-			last_scanned_at = $2,
 			next_attempt_at = $3,
 			scan_not_before = $4,
 			scan_token = NULL,

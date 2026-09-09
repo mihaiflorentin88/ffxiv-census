@@ -14,38 +14,26 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-type fakeChecker struct {
-	latency int
-	err     error
-}
-
-func (f *fakeChecker) Check(_ context.Context, _, _ string, _ int) (int, error) {
-	return f.latency, f.err
-}
-
-func newTestService(checker contract.ProxyChecker, providers []contract.ProxyProvider, repo contract.ProxyRepository) *proxydomain.Service {
-	return proxydomain.NewService(providers, repo, checker, nil, 48*time.Hour, 5)
-}
-
-func TestService_ProcessNewProxy_Success(t *testing.T) {
+func TestService_ProcessNewProxy_InsertsDiscoveredProxy(t *testing.T) {
 	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	providers := []contract.ProxyProvider{
 		mockproxy.NewFakeProvider("test", nil),
 	}
-	svc := proxydomain.NewService(providers, repo, nil, nil, 48*time.Hour, 5)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := proxydomain.NewService(providers, repo, logger)
 
-	// ProcessNewProxy needs a checker, so let's test the service methods with a real checker
-	// that we control via httptest — but for unit tests we test the repo interaction
-	_, inserted, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
-	})
+	err := svc.ProcessNewProxy(context.Background(), "http", "1.2.3.4", 8080, nil, nil, "test", nil)
 	if err != nil {
-		t.Fatalf("InsertIfAbsent: %v", err)
-	}
-	if !inserted {
-		t.Fatal("expected new proxy, got inserted=false")
+		t.Fatalf("ProcessNewProxy: %v", err)
 	}
 
+	p, err := repo.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected the discovered proxy to be inserted")
+	}
 	count, err := repo.Count(context.Background())
 	if err != nil {
 		t.Fatalf("Count: %v", err)
@@ -53,7 +41,6 @@ func TestService_ProcessNewProxy_Success(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 proxy, got %d", count)
 	}
-	_ = svc
 }
 
 func TestService_ProcessNewProxy_Duplicate(t *testing.T) {
@@ -88,135 +75,48 @@ func TestService_ProcessNewProxy_Duplicate(t *testing.T) {
 	}
 }
 
-func TestService_ProcessScanProxy_BecomesActive(t *testing.T) {
+// TestService_ProcessNewProxy_InsertionOnly pins the ingestion contract: a
+// newly discovered proxy is deduplicated and inserted with no fresh evidence
+// and no independent health I/O — the service has no checker dependency at
+// all. Verification belongs to the guarded, lease-bound background scan
+// worker.
+func TestService_ProcessNewProxy_InsertionOnly(t *testing.T) {
 	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-	_, inserted, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
-	})
-	if err != nil || !inserted {
-		t.Fatalf("InsertIfAbsent: inserted=%v err=%v", inserted, err)
-	}
-
-	// First scan fails: the proxy must go inactive with fail_count 1.
-	checker := &fakeChecker{err: errors.New("lodestone down")}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
-
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-	if len(proxies) != 1 {
-		t.Fatalf("expected 1 scannable proxy, got %d", len(proxies))
-	}
-	if err := svc.ProcessScanProxy(context.Background(), &proxies[0]); err != nil {
-		t.Fatalf("ProcessScanProxy (failing): %v", err)
-	}
-	p, _ := repo.Get(context.Background(), proxies[0].ID)
-	if p.Status != contract.ProxyStatusInactive || p.FailCount != 1 {
-		t.Fatalf("after failed scan: status=%s fail_count=%d, want inactive/1", p.Status, p.FailCount)
-	}
-
-	// Proxy recovers: a successful scan must reset fail_count to 0.
-	checker.err = nil
-	checker.latency = 150
-	proxies, _ = repo.ListForScan(context.Background(), 10)
-	if len(proxies) != 1 {
-		t.Fatalf("expected the recovered proxy to be scannable again, got %d", len(proxies))
-	}
-	if err := svc.ProcessScanProxy(context.Background(), &proxies[0]); err != nil {
-		t.Fatalf("ProcessScanProxy (recovering): %v", err)
-	}
-
-	p, _ = repo.Get(context.Background(), proxies[0].ID)
-	if p.Status != contract.ProxyStatusActive {
-		t.Fatalf("expected active, got %s", p.Status)
-	}
-	if p.LatencyMS == nil || *p.LatencyMS != 150 {
-		t.Fatalf("expected latency 150, got %v", p.LatencyMS)
-	}
-	if p.FailCount != 0 {
-		t.Fatalf("expected fail_count reset to 0 on success, got %d", p.FailCount)
-	}
-}
-
-func TestService_ProcessScanProxy_BecomesDead(t *testing.T) {
-	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
-	})
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-
-	// Simulate 5 failures → dead via ProcessScanProxy with a failing checker.
-	checker := &fakeChecker{err: errors.New("connection refused")}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
-
-	for i := 0; i < 5; i++ {
-		// Re-fetch the record each time since status changes.
-		p, _ := repo.Get(context.Background(), proxies[0].ID)
-		err := svc.ProcessScanProxy(context.Background(), p)
-		if err != nil {
-			t.Fatalf("ProcessScanProxy fail %d: %v", i, err)
-		}
-	}
-
-	p, _ := repo.Get(context.Background(), proxies[0].ID)
-	if p.FailCount != 5 {
-		t.Fatalf("expected fail_count 5, got %d", p.FailCount)
-	}
-	if p.Status != contract.ProxyStatusDead {
-		t.Fatalf("expected dead, got %s", p.Status)
-	}
-}
-
-func TestService_ProcessScanProxy_DeadlineExceeded(t *testing.T) {
-	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
-	})
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-
-	// Checker returns context.DeadlineExceeded — should follow ordinary failed path.
-	checker := &fakeChecker{err: context.DeadlineExceeded}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
-
-	err := svc.ProcessScanProxy(context.Background(), &proxies[0])
-	if err != nil {
-		t.Fatalf("ProcessScanProxy: %v", err)
-	}
-
-	p, _ := repo.Get(context.Background(), proxies[0].ID)
-	if p.Status != contract.ProxyStatusInactive {
-		t.Fatalf("expected inactive after deadline exceeded, got %s", p.Status)
-	}
-	if p.FailCount != 1 {
-		t.Fatalf("expected fail_count 1, got %d", p.FailCount)
-	}
-	if p.LastScannedAt == nil {
-		t.Fatal("expected last_scanned_at to be set")
-	}
-}
-
-func TestService_ProcessNewProxy_DeadlineExceeded(t *testing.T) {
-	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-	checker := &fakeChecker{err: context.DeadlineExceeded}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, checker, logger, 48*time.Hour, 5)
+	svc := proxydomain.NewService(nil, repo, logger)
 
 	err := svc.ProcessNewProxy(context.Background(), "http", "1.2.3.4", 8080, nil, nil, "test", nil)
 	if err != nil {
 		t.Fatalf("ProcessNewProxy: %v", err)
 	}
 
-	// Proxy should be inserted then marked inactive due to deadline.
-	p, _ := repo.Get(context.Background(), 1)
+	p, err := repo.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	if p == nil {
-		t.Fatal("expected proxy to be inserted")
+		t.Fatal("expected the discovered proxy to be inserted")
 	}
-	if p.Status != contract.ProxyStatusInactive {
-		t.Fatalf("expected inactive after deadline exceeded, got %s", p.Status)
+	if p.GeneralHealthy || p.LastVerifiedAt != nil {
+		t.Fatalf("newly inserted proxy has fresh evidence: healthy=%v verified_at=%v", p.GeneralHealthy, p.LastVerifiedAt)
 	}
-	if p.FailCount != 1 {
-		t.Fatalf("expected fail_count 1, got %d", p.FailCount)
+
+	// The consumer claim path must never hand out an unverified row.
+	rec, err := repo.ClaimProxy(context.Background(), "owner", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimProxy: %v", err)
+	}
+	if rec != nil {
+		t.Fatalf("unverified new proxy was handed to a consumer (id=%d)", rec.ID)
+	}
+
+	// Instead it enters background scanning.
+	leases, err := repo.ClaimScans(context.Background(), contract.ScanBackground, 10)
+	if err != nil {
+		t.Fatalf("ClaimScans: %v", err)
+	}
+	if len(leases) != 1 || leases[0].Record.ID != p.ID {
+		t.Fatalf("expected the new proxy to enter the background scan queue, got %d leases", len(leases))
 	}
 }
 
@@ -252,75 +152,6 @@ func TestFakeProvider_FetchProxies_Error(t *testing.T) {
 	}
 }
 
-func TestFakeRepo_ListForScan_ExcludesDead(t *testing.T) {
-	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-
-	// Insert 3 proxies: 1 inactive, 1 active (old enough), 1 dead (old enough).
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "2.2.2.2", Port: 80, Source: "test"})
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "3.3.3.3", Port: 80, Source: "test"})
-
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-
-	// Mark as active (old scan) and dead (old scan).
-	oldScan := time.Now().UTC().Add(-1 * time.Hour)
-	repo.UpdateStatus(context.Background(), proxies[1].ID, contract.ProxyStatusActive, intPtr(100), 0, &oldScan)
-	repo.UpdateStatus(context.Background(), proxies[2].ID, contract.ProxyStatusDead, nil, 5, nil)
-	deadScan := time.Now().UTC().Add(-10 * 24 * time.Hour)
-	repo.SetLastScannedAt(proxies[2].ID, deadScan)
-
-	// ListForScan should exclude dead proxies.
-	scanList, _ := repo.ListForScan(context.Background(), 100)
-	for _, p := range scanList {
-		if p.Status == contract.ProxyStatusDead {
-			t.Errorf("ListForScan returned dead proxy ID=%d — dead must be excluded", p.ID)
-		}
-	}
-
-	// ListDeadForScan should return only dead proxies.
-	deadList, _ := repo.ListDeadForScan(context.Background(), 100)
-	for _, p := range deadList {
-		if p.Status != contract.ProxyStatusDead {
-			t.Errorf("ListDeadForScan returned non-dead proxy ID=%d status=%s", p.ID, p.Status)
-		}
-	}
-}
-
-func TestFakeRepo_ListDeadForScan_PriorityOrder(t *testing.T) {
-	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-
-	// Insert 3 proxies: 1 inactive, 1 active, 1 dead (all eligible).
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "1.1.1.1", Port: 80, Source: "test"})
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "2.2.2.2", Port: 80, Source: "test"})
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{Protocol: "http", IP: "3.3.3.3", Port: 80, Source: "test"})
-
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-
-	// Mark as active (old scan) and dead (old scan).
-	oldScan := time.Now().UTC().Add(-1 * time.Hour)
-	repo.UpdateStatus(context.Background(), proxies[1].ID, contract.ProxyStatusActive, intPtr(100), 0, &oldScan)
-	repo.UpdateStatus(context.Background(), proxies[2].ID, contract.ProxyStatusDead, nil, 5, nil)
-	deadScan := time.Now().UTC().Add(-10 * 24 * time.Hour)
-	repo.SetLastScannedAt(proxies[2].ID, deadScan)
-
-	// ListDeadForScan should return only the dead one.
-	deadList, _ := repo.ListDeadForScan(context.Background(), 100)
-	if len(deadList) != 1 {
-		t.Fatalf("expected 1 dead, got %d", len(deadList))
-	}
-	if deadList[0].Status != contract.ProxyStatusDead {
-		t.Errorf("expected dead, got %s", deadList[0].Status)
-	}
-
-	// limit=1 should return exactly 1.
-	one, _ := repo.ListDeadForScan(context.Background(), 1)
-	if len(one) != 1 {
-		t.Fatalf("limit=1: expected 1, got %d", len(one))
-	}
-}
-
-func intPtr(v int) *int { return &v }
-
 func TestService_ProcessNewProxy_SkipsExistingWithoutWrite(t *testing.T) {
 	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
 	// Seed one tuple via InsertIfAbsent.
@@ -332,7 +163,7 @@ func TestService_ProcessNewProxy_SkipsExistingWithoutWrite(t *testing.T) {
 	repo.InsertCalls = 0
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, nil, logger, 48*time.Hour, 5)
+	svc := proxydomain.NewService(nil, repo, logger)
 
 	err := svc.ProcessNewProxy(context.Background(), "http", "1.2.3.4", 8080, nil, nil, "test", nil)
 	if err != nil {
@@ -349,7 +180,7 @@ func TestService_ProcessNewProxy_ExistsError(t *testing.T) {
 	repo.ExistsErr = errors.New("db connection refused")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := proxydomain.NewService(nil, repo, nil, logger, 48*time.Hour, 5)
+	svc := proxydomain.NewService(nil, repo, logger)
 
 	err := svc.ProcessNewProxy(context.Background(), "http", "1.2.3.4", 8080, nil, nil, "test", nil)
 	if err == nil {

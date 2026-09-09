@@ -82,19 +82,6 @@ type ProxyRepository interface {
 	InsertIfAbsent(ctx context.Context, rec ProxyRecord) (id int64, inserted bool, err error)
 	// Get returns a proxy by ID, or nil (no error) if not found.
 	Get(ctx context.Context, id int64) (*ProxyRecord, error)
-	// UpdateStatus updates a proxy's status, latency, fail_count, and last_alive_at.
-	UpdateStatus(ctx context.Context, id int64, status string, latencyMS *int, failCount int, lastAliveAt *time.Time) error
-	// UpdateScanTime sets last_scanned_at and updated_at to now.
-	UpdateScanTime(ctx context.Context, id int64) error
-	// ListForScan claims up to limit eligible inactive and active proxies for
-	// verification, inactive (oldest scan first) before active (oldest first).
-	// Claimed rows are stamped last_scanned_at = now atomically, so rows in
-	// flight are never returned again until their regular scan window passes.
-	// Dead proxies are excluded — use ListDeadForScan for those.
-	ListForScan(ctx context.Context, limit int) ([]ProxyRecord, error)
-	// ListDeadForScan claims up to limit dead proxies (not scanned in 7 days),
-	// oldest first, stamping last_scanned_at at claim time like ListForScan.
-	ListDeadForScan(ctx context.Context, limit int) ([]ProxyRecord, error)
 	// ListActive returns up to limit active proxies ordered by latency (lowest first).
 	ListActive(ctx context.Context, limit int) ([]ProxyRecord, error)
 	// Count returns the total number of proxies.
@@ -111,10 +98,6 @@ type ProxyRepository interface {
 	ExtendLock(ctx context.Context, id int64, owner string, lockTTL time.Duration) (bool, error)
 	// ReleaseProxy releases the lock on a proxy owned by the given owner.
 	ReleaseProxy(ctx context.Context, id int64, owner string) error
-	// MarkFailedProxy atomically releases the lock AND sets the proxy to inactive
-	// with an incremented fail count. This prevents a TOCTOU race where another
-	// worker could claim the proxy between Release and UpdateStatus.
-	MarkFailedProxy(ctx context.Context, id int64, owner string) error
 	// RandomActive returns a random active proxy, optionally excluding IDs.
 	// Returns nil (no error) if no eligible proxy exists. Does NOT claim or lock
 	// the proxy — used only for discovery/provider scraping, never for Lodestone.

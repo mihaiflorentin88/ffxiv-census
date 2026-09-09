@@ -40,7 +40,8 @@ type InfrastructureContainer struct {
 	uiStatsRepository     contract.UIStatsRepository
 	providerRateLimiter   contract.ProviderRateLimiter
 	proxyRepository       contract.ProxyRepository
-	proxyChecker          *proxyinfra.Checker
+	proxyChecker          contract.ProxyChecker
+	destinationChecker    *proxyinfra.Checker
 	proxyScrapeProvider   contract.ProxyProvider
 	geonodeProvider       contract.ProxyProvider
 	pubProxyProvider      contract.ProxyProvider
@@ -92,7 +93,7 @@ func (s *ServiceContainer) discoveryHTTPClientUnlocked() contract.HTTPClient {
 	}
 	repo := s.infrastructure.proxyRepository
 	if repo == nil {
-		repo = repository.NewProxyRepository(driver, contract.ProxyScanPolicy{})
+		repo = repository.NewProxyRepository(driver, s.proxyScanPolicyUnlocked())
 		s.infrastructure.proxyRepository = repo
 	}
 	lockTTL := 5 * time.Minute
@@ -101,24 +102,7 @@ func (s *ServiceContainer) discoveryHTTPClientUnlocked() contract.HTTPClient {
 			lockTTL = d
 		}
 	}
-	// Inline checker creation to avoid re-locking.
-	checker := s.infrastructure.proxyChecker
-	if checker == nil {
-		testURL := "https://na.finalfantasyxiv.com/lodestone/"
-		timeout := 5 * time.Second
-		if cfg := s.configUnlocked().Proxy; cfg != nil {
-			if cfg.TestURL != "" {
-				testURL = cfg.TestURL
-			}
-			if cfg.TestTimeout != "" {
-				if d, err := time.ParseDuration(cfg.TestTimeout); err == nil {
-					timeout = d
-				}
-			}
-		}
-		checker = proxyinfra.NewChecker(testURL, timeout, logging.Logger)
-		s.infrastructure.proxyChecker = checker
-	}
+	checker := s.destinationCheckerUnlocked()
 	hub := proxydomain.NewProxyHub(repo, lockTTL, checker)
 	if hub == nil {
 		return s.HTTPClient()
@@ -346,10 +330,13 @@ func (s *ServiceContainer) ProxyRepository() contract.ProxyRepository {
 		logging.Warn("container.proxy_repository", "database driver unavailable")
 		return nil
 	}
-	s.infrastructure.proxyRepository = repository.NewProxyRepository(driver, contract.ProxyScanPolicy{})
+	s.infrastructure.proxyRepository = repository.NewProxyRepository(driver, s.proxyScanPolicyUnlocked())
 	return s.infrastructure.proxyRepository
 }
 
+// ProxyChecker returns the general availability checker: a strict proxied
+// GET against the configured JSON IP echo target ([proxy] test_url). This is
+// the checker the scan worker uses for every general check.
 func (s *ServiceContainer) ProxyChecker() contract.ProxyChecker {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -357,20 +344,62 @@ func (s *ServiceContainer) ProxyChecker() contract.ProxyChecker {
 		return s.infrastructure.proxyChecker
 	}
 	cfg := s.configUnlocked().Proxy
-	testURL := "https://na.finalfantasyxiv.com/lodestone/"
-	timeout := 5 * time.Second
-	if cfg != nil {
-		if cfg.TestURL != "" {
-			testURL = cfg.TestURL
-		}
-		if cfg.TestTimeout != "" {
-			if d, err := time.ParseDuration(cfg.TestTimeout); err == nil {
-				timeout = d
-			}
-		}
+	checker := proxyinfra.NewHealthChecker(cfg.TestURL, cfg.TestTimeout, s.Logger())
+	s.infrastructure.proxyChecker = checker
+	return checker
+}
+
+// DestinationChecker returns the Lodestone destination checker built from the
+// [proxy.consumer] settings. It is used for handout-time validation only;
+// random provider discovery never invokes it.
+func (s *ServiceContainer) DestinationChecker() contract.ProxyChecker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.destinationCheckerUnlocked()
+}
+
+func (s *ServiceContainer) destinationCheckerUnlocked() *proxyinfra.Checker {
+	if s.infrastructure.destinationChecker != nil {
+		return s.infrastructure.destinationChecker
 	}
-	s.infrastructure.proxyChecker = proxyinfra.NewChecker(testURL, timeout, s.Logger())
-	return s.infrastructure.proxyChecker
+	cfg := s.configUnlocked().Proxy
+	checker := proxyinfra.NewChecker(cfg.Consumer.TestURL, cfg.Consumer.TestTimeout, s.Logger())
+	s.infrastructure.destinationChecker = checker
+	return checker
+}
+
+// ProxyScanPolicy returns the single parsed scheduler policy shared by the
+// repository adapter and the scan worker. DeadAfter and FailThreshold come
+// from the retained [proxy] threshold settings.
+func (s *ServiceContainer) ProxyScanPolicy() contract.ProxyScanPolicy {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.proxyScanPolicyUnlocked()
+}
+
+func (s *ServiceContainer) proxyScanPolicyUnlocked() contract.ProxyScanPolicy {
+	cfg := s.configUnlocked().Proxy
+	return contract.ProxyScanPolicy{
+		VerifyInterval:    cfg.Scan.VerificationInterval,
+		FreshnessTTL:      cfg.Scan.FreshnessTTL,
+		RecoveryBase:      cfg.Scan.RecoveryBase,
+		RecoveryCap:       cfg.Scan.RecoveryCap,
+		RecoveryHorizon:   cfg.Scan.RecoveryHorizon,
+		LeaseDuration:     cfg.Scan.LeaseDuration,
+		MinRepeatInterval: cfg.Scan.MinRepeatInterval,
+		InconclusiveRetry: cfg.Scan.InconclusiveRetry,
+		DeadAfter:         time.Duration(cfg.DeadThresholdDays) * 24 * time.Hour,
+		FailThreshold:     cfg.FailCountThreshold,
+	}
+}
+
+// ProxyScanWeights returns the long-run capacity shares for the
+// verification, recovery and background queues.
+func (s *ServiceContainer) ProxyScanWeights() [3]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	scan := s.configUnlocked().Proxy.Scan
+	return [3]int{scan.WeightVerification, scan.WeightRecovery, scan.WeightBackground}
 }
 
 func (s *ServiceContainer) ProxyScrapeProvider() contract.ProxyProvider {
@@ -564,7 +593,10 @@ func (s *ServiceContainer) ErcinDedeogluProvider() contract.ProxyProvider {
 	return s.infrastructure.ercindedeogluProvider
 }
 
-// ProxyHub creates a ProxyHub. The lock TTL is read from [proxy.consumer] config.
+// ProxyHub creates a ProxyHub for consumer handout. The lock TTL is read
+// from [proxy.consumer] config and handouts are validated with the
+// destination checker; random provider discovery paths on the hub never
+// invoke that checker.
 func (s *ServiceContainer) ProxyHub() *proxydomain.ProxyHub {
 	repo := s.ProxyRepository()
 	if repo == nil {
@@ -576,5 +608,5 @@ func (s *ServiceContainer) ProxyHub() *proxydomain.ProxyHub {
 			lockTTL = d
 		}
 	}
-	return proxydomain.NewProxyHub(repo, lockTTL, s.ProxyChecker())
+	return proxydomain.NewProxyHub(repo, lockTTL, s.DestinationChecker())
 }

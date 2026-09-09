@@ -178,102 +178,6 @@ func (r *ProxyRepository) Get(ctx context.Context, id int64) (*contract.ProxyRec
 	return p, nil
 }
 
-func (r *ProxyRepository) UpdateStatus(ctx context.Context, id int64, status string, latencyMS *int, failCount int, lastAliveAt *time.Time) error {
-	db, err := r.driver.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	_, err = db.ExecContext(
-		ctx,
-		`UPDATE proxies SET status = $1, latency_ms = $2, fail_count = $3,
-			last_alive_at = $4, last_scanned_at = $5, updated_at = $6
-		WHERE id = $7`,
-		status, nullableInt(latencyMS), failCount,
-		nullableTime(lastAliveAt), now, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("proxy update status: %w", err)
-	}
-	return nil
-}
-
-func (r *ProxyRepository) UpdateScanTime(ctx context.Context, id int64) error {
-	db, err := r.driver.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	_, err = db.ExecContext(
-		ctx,
-		`UPDATE proxies SET last_scanned_at = $1, updated_at = $2 WHERE id = $3`,
-		now, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("proxy update scan time: %w", err)
-	}
-	return nil
-}
-
-// ListForScan claims up to limit eligible inactive and active proxies for
-// scanning, inactive (oldest first) before active (oldest first). Dead proxies
-// are excluded — use ListDeadForScan for those.
-func (r *ProxyRepository) ListForScan(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
-	return r.listForScan(ctx, limit, `
-			(status = 'inactive' AND last_scanned_at < NOW() - INTERVAL '20 minutes')
-			OR (status = 'active' AND last_scanned_at < NOW() - INTERVAL '10 minutes')`,
-		`CASE WHEN status = 'inactive' THEN 0 ELSE 1 END, last_scanned_at ASC NULLS FIRST`)
-}
-
-// ListDeadForScan claims up to limit dead proxies not scanned in 7 days,
-// oldest first.
-func (r *ProxyRepository) ListDeadForScan(ctx context.Context, limit int) ([]contract.ProxyRecord, error) {
-	return r.listForScan(ctx, limit, `status = 'dead' AND last_scanned_at < NOW() - INTERVAL '7 days'`,
-		`last_scanned_at ASC NULLS FIRST`)
-}
-
-// listForScan claims up to limit proxies matching the eligibility filter in a
-// single atomic statement: chosen rows are stamped last_scanned_at = NOW() as
-// they are returned, so a running-ahead prefetcher (or a second replica) can
-// never re-select rows that are already in flight. A crash after claiming but
-// before the scan writes leaves the row invisible until its regular scan
-// window passes.
-func (r *ProxyRepository) listForScan(ctx context.Context, limit int, where, orderBy string) ([]contract.ProxyRecord, error) {
-	db, err := r.driver.Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	query := `WITH chosen AS (
-		SELECT id FROM proxies
-		WHERE ` + where + `
-		ORDER BY ` + orderBy + `
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED
-	)
-	UPDATE proxies p
-	SET last_scanned_at = NOW()
-	FROM chosen
-	WHERE p.id = chosen.id
-	RETURNING ` + proxyColumnsClaimed
-
-	rows, err := db.QueryContext(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("proxy list for scan: %w", err)
-	}
-	defer rows.Close()
-
-	var proxies []contract.ProxyRecord
-	for rows.Next() {
-		p, err := scanProxy(rows)
-		if err != nil {
-			return nil, fmt.Errorf("proxy scan row: %w", err)
-		}
-		proxies = append(proxies, *p)
-	}
-	return proxies, rows.Err()
-}
-
 // ListActive returns fresh healthy proxies ordered by latency. Availability
 // is general evidence (healthy AND verified within the freshness TTL), never
 // the historical status column.
@@ -430,23 +334,6 @@ func (r *ProxyRepository) ReleaseProxy(ctx context.Context, id int64, owner stri
 		now, id, owner)
 	if err != nil {
 		return fmt.Errorf("proxy release: %w", err)
-	}
-	return nil
-}
-
-func (r *ProxyRepository) MarkFailedProxy(ctx context.Context, id int64, owner string) error {
-	db, err := r.driver.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	_, err = db.ExecContext(ctx,
-		`UPDATE proxies SET locked_by = NULL, locked_at = NULL, status = 'inactive',
-		fail_count = fail_count + 1, updated_at = $1
-		WHERE id = $2 AND locked_by = $3`,
-		now, id, owner)
-	if err != nil {
-		return fmt.Errorf("proxy mark failed: %w", err)
 	}
 	return nil
 }

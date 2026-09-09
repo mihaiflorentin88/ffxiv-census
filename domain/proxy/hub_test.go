@@ -19,7 +19,7 @@ func TestProxyHub_NewProxy_Success(t *testing.T) {
 		LatencyMS: &latency,
 	})
 	// Mark as active.
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(1, latency)
 
 	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.NewProxy(context.Background(), "test-g1")
@@ -59,7 +59,7 @@ func TestProxyHub_NewProxy_AllLocked(t *testing.T) {
 		LatencyMS: &latency,
 	})
 	// Activate the proxy.
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(1, latency)
 	// Lock it via ClaimProxy with a different owner.
 	claimed, err := repo.ClaimProxy(context.Background(), "other-g1", 5*time.Minute)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestProxyHub_RandomActive_ReturnsProxy(t *testing.T) {
 		Port:      8080,
 		LatencyMS: &latency,
 	})
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(1, latency)
 
 	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.RandomActive(context.Background())
@@ -135,7 +135,7 @@ func TestProxyHub_RandomActive_SkipsInactiveAndLocked(t *testing.T) {
 		Port:      8080,
 		LatencyMS: &latency,
 	})
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(1, latency)
 	// Insert inactive proxy (not eligible).
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol:  "http",
@@ -168,14 +168,14 @@ func TestProxyHub_SwapActive_DifferentProxy(t *testing.T) {
 		Port:      8080,
 		LatencyMS: &latency,
 	})
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(1, latency)
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol:  "http",
 		IP:        "5.6.7.8",
 		Port:      8080,
 		LatencyMS: &latency,
 	})
-	repo.UpdateStatus(context.Background(), 2, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(2, latency)
 
 	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	// Get initial proxy.
@@ -208,7 +208,7 @@ func TestProxyHub_SwapActive_NilCurrent(t *testing.T) {
 		Port:      8080,
 		LatencyMS: &latency,
 	})
-	repo.UpdateStatus(context.Background(), 1, contract.ProxyStatusActive, &latency, 0, nil)
+	repo.SeedSuccess(1, latency)
 
 	hub := NewProxyHub(repo, 5*time.Minute, nil)
 	p, err := hub.SwapActive(context.Background(), nil)

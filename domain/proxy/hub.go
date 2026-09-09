@@ -46,8 +46,10 @@ func (h *ProxyHub) NewProxy(ctx context.Context, owner string) (*Proxy, error) {
 		return p, nil
 	}
 
-	// Proxy failed check — mark it failed so it re-enters the scan cycle.
-	_ = p.MarkFailed(ctx, owner)
+	// The handout check rejected this proxy. Release the claim so the row is
+	// not leaked; failure classification and cooldowns belong to the scan
+	// pipeline, and the next acquisition attempt re-checks the row.
+	_ = p.Release(ctx, owner)
 	return nil, nil
 }
 

@@ -156,51 +156,21 @@ var proxyDiscoverCmd = &cobra.Command{
 	},
 }
 
-// scanWeights reserves long-run capacity shares for verification, recovery
-// and background scanning. Task 6 replaces these literals with parsed
-// [proxy.scan] configuration.
-var scanWeights = [3]int{10, 45, 45}
+// guardControlTimeout bounds each endpoint-guard control request; the guard
+// only observes error versus nil.
+const guardControlTimeout = 10 * time.Second
 
-// The guard and general-availability literals below move into the parsed
-// [proxy.scan] configuration in Task 6.
-const (
-	generalAvailabilityURL = "https://api64.ipify.org?format=json"
-	generalCheckTimeout    = 10 * time.Second
-	guardControlInterval   = 30 * time.Second
-)
-
-// defaultProxyScanPolicy is the scheduler policy the scanner runs with until
-// Task 6 wires the parsed configuration through.
-func defaultProxyScanPolicy() contract.ProxyScanPolicy {
-	return contract.ProxyScanPolicy{
-		VerifyInterval:    time.Minute,
-		FreshnessTTL:      2 * time.Minute,
-		RecoveryBase:      time.Minute,
-		RecoveryCap:       15 * time.Minute,
-		RecoveryHorizon:   time.Hour,
-		LeaseDuration:     30 * time.Second,
-		MinRepeatInterval: time.Second,
-		InconclusiveRetry: time.Minute,
-		DeadAfter:         48 * time.Hour,
-		FailThreshold:     5,
-	}
-}
-
-// generalAvailabilityCheck binds the guard's control callback to a strict
-// direct egress validation: no proxy, complete JSON response required.
-func generalAvailabilityCheck(logger contract.Logger) func(context.Context) error {
-	health := proxyinfra.NewHealthChecker(generalAvailabilityURL, generalCheckTimeout, logger)
-	return health.CheckDirect
-}
-
-// runScanWorker wires the scan store, checker and endpoint guard and runs
-// the scan worker until the context is cancelled.
-func runScanWorker(ctx context.Context, concurrency, deadScanPercentage int) error {
+// runScanWorker wires the scan store, the general checker, the endpoint
+// guard and the parsed [proxy.scan] policy, then runs the scan worker until
+// the context is cancelled.
+func runScanWorker(ctx context.Context, concurrency int) error {
 	logger := container.Load.Logger()
-	logger.InfoContext(ctx, "proxy.scan.start",
-		"concurrency", concurrency,
-		"dead_scan_percentage", deadScanPercentage)
+	cfg := container.Load.Config().Proxy
+	logger.InfoContext(ctx, "proxy.scan.start", "concurrency", concurrency)
 
+	if concurrency <= 0 {
+		return fmt.Errorf("proxy scan: concurrency must be positive, got %d", concurrency)
+	}
 	repo := container.Load.ProxyRepository()
 	if repo == nil {
 		return fmt.Errorf("proxy repository not initialised")
@@ -210,14 +180,22 @@ func runScanWorker(ctx context.Context, concurrency, deadScanPercentage int) err
 		return fmt.Errorf("proxy repository does not support the scan store contract")
 	}
 
-	guard := proxyinfra.NewEndpointGuard(generalAvailabilityCheck(logger), guardControlInterval, logger)
+	// The endpoint guard is owned by this command's cancellable lifecycle:
+	// it observes this replica's own egress with a bounded direct control
+	// request and pauses claims while the endpoint is unhealthy.
+	health := proxyinfra.NewHealthChecker(cfg.TestURL, cfg.TestTimeout, logger)
+	guard := proxyinfra.NewEndpointGuard(func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, guardControlTimeout)
+		defer cancel()
+		return health.CheckDirect(ctx)
+	}, cfg.Scan.ControlInterval, logger)
 	guardDone := make(chan error, 1)
 	go func() {
 		guardDone <- guard.Run(ctx)
 	}()
 
 	scanWorker := worker.NewScanWorker(store, container.Load.ProxyChecker(), guard,
-		defaultProxyScanPolicy(), scanWeights, logger)
+		container.Load.ProxyScanPolicy(), container.Load.ProxyScanWeights(), logger)
 	if hub := container.Load.ProxyHub(); hub != nil {
 		scanWorker.SetNotifier(hub.NotifyAvailable)
 	}
@@ -241,12 +219,11 @@ timeout shorter than the lease; the endpoint guard pauses claims while this
 replica's own egress is unhealthy.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		deadScanPercentage, _ := cmd.Flags().GetInt("dead-scan-percentage")
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		return runScanWorker(ctx, concurrency, deadScanPercentage)
+		return runScanWorker(ctx, concurrency)
 	},
 }
 
@@ -285,7 +262,6 @@ func init() {
 	proxyCmd.AddCommand(proxyConsumeCmd)
 
 	proxyDiscoverCmd.Flags().IntP("limit", "l", 0, "max proxies to publish after deduplication (0 = no limit)")
-	proxyScanCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent scan routines (also used as SQL batch limit)")
-	proxyScanCmd.Flags().Int("dead-scan-percentage", 0, "percentage of scan concurrency reserved for dead proxies (0-90; values above 90 are capped)")
+	proxyScanCmd.Flags().IntP("concurrency", "c", 4, "total per-replica scan concurrency (bounds each queue claim)")
 	proxyConsumeCmd.Flags().IntP("concurrency", "c", 4, "number of concurrent worker routines")
 }

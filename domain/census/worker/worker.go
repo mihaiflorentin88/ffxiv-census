@@ -276,38 +276,28 @@ func (w *Worker) waitForProxy(ctx context.Context, owner string, proxyHub *proxy
 	}
 }
 
-// replaceProxy acquires a replacement proxy, builds new clients/handlers, and
-// only then releases or marks-failed the previous proxy. This ordering prevents
-// a window where the worker holds no proxy at all.
-//
-// If markBad is true, the previous proxy is marked failed (inactive + incremented
-// fail count). Otherwise it is released normally. MarkFailed and release errors
-// are logged but do not prevent the replacement from being used.
+// replaceProxy releases the previous proxy claim, acquires a replacement,
+// and builds new clients/handlers. The previous claim is released before the
+// replacement is acquired so a pool with no spare capacity can rotate; a
+// window without a proxy is bounded by the release being local. Release
+// errors are logged but do not prevent the replacement from being used.
+// Failure classification and cooldowns belong to the scan pipeline; the
+// consumer only gives up its claim.
 func (w *Worker) replaceProxy(
 	ctx context.Context,
 	previous *proxydomain.Proxy,
 	owner string,
-	markBad bool,
 	proxyHub *proxydomain.ProxyHub,
 	newLodestoneClient func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error),
 	newTomestoneClient func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error),
 	newRateLimiter func() contract.ProviderRateLimiter,
 	newHandlers func(contract.LodestoneClient, contract.TomestoneClient, contract.ProviderRateLimiter) *handler.Registry,
 ) (*proxydomain.Proxy, contract.LodestoneClient, contract.TomestoneClient, contract.ProviderRateLimiter, *handler.Registry, error) {
-	// Mark/release the previous proxy BEFORE acquiring replacement.
-	// This frees the slot so a pool with no spare capacity can rotate.
 	if previous != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if markBad {
-			if markErr := previous.MarkFailed(cleanupCtx, owner); markErr != nil {
-				w.logger.WarnContext(cleanupCtx, "worker.proxy_mark_failed_error",
-					slog.String("proxy", previous.Address()), slog.Any("error", markErr))
-			}
-		} else {
-			if relErr := previous.Release(cleanupCtx, owner); relErr != nil {
-				w.logger.WarnContext(cleanupCtx, "worker.proxy_release_error",
-					slog.String("proxy", previous.Address()), slog.Any("error", relErr))
-			}
+		if relErr := previous.Release(cleanupCtx, owner); relErr != nil {
+			w.logger.WarnContext(cleanupCtx, "worker.proxy_release_error",
+				slog.String("proxy", previous.Address()), slog.Any("error", relErr))
 		}
 		cancel()
 		// Wake one waiting worker now that a proxy slot is free.
@@ -514,7 +504,7 @@ func (w *Worker) proxyWorkerLoop(
 		if !canUse {
 			w.logger.InfoContext(ctx, "worker.proxy_lost", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()), slog.String("owner", owner))
 			newProxy, newLodestone, newTomestone, newLimiter, newReg, rerr := w.replaceProxy(
-				ctx, proxy, owner, false, proxyHub,
+				ctx, proxy, owner, proxyHub,
 				newLodestoneClient, newTomestoneClient, newRateLimiter, newHandlers,
 			)
 			if rerr != nil {
@@ -581,7 +571,7 @@ func (w *Worker) proxyWorkerLoop(
 			if isProxyError(jobErr) {
 				w.logger.InfoContext(ctx, "worker.proxy_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
 				newProxy, newLodestone, newTomestone, newLimiter, newReg, rerr := w.replaceProxy(
-					ctx, proxy, owner, true, proxyHub,
+					ctx, proxy, owner, proxyHub,
 					newLodestoneClient, newTomestoneClient, newRateLimiter, newHandlers,
 				)
 				if rerr != nil {
@@ -626,23 +616,17 @@ func (w *Worker) proxyWorkerLoop(
 				}()
 
 				if retryErr != nil {
-					// If the retry also failed with a proxy error, mark the
-					// replacement failed before returning to RabbitMQ.
+					// If the retry also failed with a proxy error, give up
+					// the claim before returning the delivery to RabbitMQ.
 					if isProxyError(retryErr) {
 						w.logger.InfoContext(ctx, "worker.proxy_retry_bad", slog.Int("worker_id", workerID), slog.String("proxy", proxy.Address()))
-						markCtx, markCancel := context.WithTimeout(context.Background(), 10*time.Second)
-						if markErr := proxy.MarkFailed(markCtx, owner); markErr != nil {
-							w.logger.WarnContext(markCtx, "worker.proxy_mark_failed_error",
-								slog.String("proxy", proxy.Address()), slog.Any("error", markErr))
+						relCtx, relCancel := context.WithTimeout(context.Background(), 10*time.Second)
+						if relErr := proxy.Release(relCtx, owner); relErr != nil {
+							w.logger.WarnContext(relCtx, "worker.proxy_release_error",
+								slog.String("proxy", proxy.Address()), slog.Any("error", relErr))
 						}
-						markCancel()
+						relCancel()
 					}
-					w.logger.WarnContext(
-						ctx, "worker.job_retry_failed",
-						slog.String("event_type", job.Type),
-						slog.Duration("duration", time.Since(retryStart)),
-						slog.Any("error", retryErr),
-					)
 					return retryErr
 				}
 

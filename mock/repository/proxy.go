@@ -85,6 +85,32 @@ func (f *FakeProxyRepository) fresh(p contract.ProxyRecord, now time.Time) bool 
 	return p.GeneralHealthy && p.LastVerifiedAt != nil && p.LastVerifiedAt.After(now.Add(-f.policy.FreshnessTTL))
 }
 
+// SeedSuccess seeds fresh general evidence for one proxy by driving a
+// successful completion through the store's claim/complete pipeline, exactly
+// the way the production scanner produces it. Rows sharing the claim batch
+// are released untouched. It reports whether the target row was completed.
+func (f *FakeProxyRepository) SeedSuccess(id int64, latencyMS int) bool {
+	ctx := context.Background()
+	leases, err := f.ClaimScans(ctx, contract.ScanBackground, 1024)
+	if err != nil {
+		return false
+	}
+	for _, lease := range leases {
+		if lease.Record.ID != id {
+			_ = f.ReleaseScan(ctx, lease)
+			continue
+		}
+		ok, err := f.CompleteScan(ctx, lease, contract.ScanUpdate{
+			Outcome:     contract.ScanSuccess,
+			LatencyMS:   latencyMS,
+			NextDelay:   0,
+			RepeatDelay: 0,
+		})
+		return ok && err == nil
+	}
+	return false
+}
+
 func (f *FakeProxyRepository) Exists(_ context.Context, protocol, ip string, port int) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -134,117 +160,6 @@ func (f *FakeProxyRepository) Get(_ context.Context, id int64) (*contract.ProxyR
 		return nil, nil
 	}
 	return &p, nil
-}
-
-// UpdateStatus is the legacy unversioned write. It stays for tests that have
-// not migrated to the scan pipeline yet (Task 6 removes it). Because
-// availability is now general evidence, an 'active' status maps to
-// healthy-and-verified-now so legacy tests keep their meaning.
-func (f *FakeProxyRepository) UpdateStatus(_ context.Context, id int64, status string, latencyMS *int, failCount int, lastAliveAt *time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.proxies[id]
-	if !ok {
-		return nil
-	}
-	p.Status = status
-	p.LatencyMS = latencyMS
-	p.FailCount = failCount
-	p.LastAliveAt = lastAliveAt
-	now := f.now()
-	p.LastScannedAt = &now
-	p.UpdatedAt = now
-	switch status {
-	case contract.ProxyStatusActive:
-		p.GeneralHealthy = true
-		p.LastVerifiedAt = &now
-	default:
-		p.GeneralHealthy = false
-	}
-	f.proxies[id] = p
-	return nil
-}
-
-func (f *FakeProxyRepository) UpdateScanTime(_ context.Context, id int64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.proxies[id]
-	if !ok {
-		return nil
-	}
-	now := time.Now().UTC()
-	p.LastScannedAt = &now
-	p.UpdatedAt = now
-	f.proxies[id] = p
-	return nil
-}
-
-// SetLastScannedAt directly sets last_scanned_at for test seeding. Not part of contract.ProxyRepository.
-func (f *FakeProxyRepository) SetLastScannedAt(id int64, t time.Time) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.proxies[id]
-	if !ok {
-		return
-	}
-	p.LastScannedAt = &t
-	f.proxies[id] = p
-}
-
-func (f *FakeProxyRepository) ListForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	now := time.Now().UTC()
-	var result []contract.ProxyRecord
-	for _, p := range f.proxies {
-		switch p.Status {
-		case contract.ProxyStatusInactive:
-			result = append(result, p)
-		case contract.ProxyStatusActive:
-			if p.LastScannedAt == nil || p.LastScannedAt.Before(now.Add(-10*time.Minute)) {
-				result = append(result, p)
-			}
-		}
-	}
-	// Sort: inactive first, then active. Within each group, oldest scan first.
-	for i := 0; i < len(result); i++ {
-		for j := i + 1; j < len(result); j++ {
-			if priority(result[j]) < priority(result[i]) ||
-				(priority(result[j]) == priority(result[i]) && scannedBefore(result[j], result[i])) {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
-	if limit > 0 && len(result) > limit {
-		result = result[:limit]
-	}
-	return result, nil
-}
-
-func (f *FakeProxyRepository) ListDeadForScan(_ context.Context, limit int) ([]contract.ProxyRecord, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	now := time.Now().UTC()
-	var result []contract.ProxyRecord
-	for _, p := range f.proxies {
-		if p.Status == contract.ProxyStatusDead {
-			if p.LastScannedAt == nil || p.LastScannedAt.Before(now.Add(-7*24*time.Hour)) {
-				result = append(result, p)
-			}
-		}
-	}
-	// Sort: oldest scan first.
-	for i := 0; i < len(result); i++ {
-		for j := i + 1; j < len(result); j++ {
-			if scannedBefore(result[j], result[i]) {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
-	if limit > 0 && len(result) > limit {
-		result = result[:limit]
-	}
-	return result, nil
 }
 
 // ListActive returns fresh healthy proxies ordered by latency, mirroring the
@@ -393,25 +308,6 @@ func (f *FakeProxyRepository) ReleaseProxy(_ context.Context, id int64, owner st
 	return nil
 }
 
-func (f *FakeProxyRepository) MarkFailedProxy(_ context.Context, id int64, owner string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	p, ok := f.proxies[id]
-	if !ok {
-		return nil
-	}
-	if p.LockedBy == nil || *p.LockedBy != owner {
-		return nil
-	}
-	p.LockedBy = nil
-	p.LockedAt = nil
-	p.Status = contract.ProxyStatusInactive
-	p.FailCount++
-	p.UpdatedAt = time.Now().UTC()
-	f.proxies[id] = p
-	return nil
-}
-
 // RandomActive returns a random fresh healthy proxy for discovery, honoring
 // ID exclusions and protocol support. No destination cooldown filter and no
 // lock side effects.
@@ -448,32 +344,6 @@ func (f *FakeProxyRepository) RandomActive(_ context.Context, excludeIDs []int64
 	idx := r.IntN(len(eligible))
 	rec := eligible[idx]
 	return &rec, nil
-}
-
-func priority(p contract.ProxyRecord) int {
-	switch p.Status {
-	case contract.ProxyStatusInactive:
-		return 0
-	case contract.ProxyStatusActive:
-		return 1
-	case contract.ProxyStatusDead:
-		return 2
-	default:
-		return 3
-	}
-}
-
-func scannedBefore(a, b contract.ProxyRecord) bool {
-	if a.LastScannedAt == nil && b.LastScannedAt == nil {
-		return false
-	}
-	if a.LastScannedAt == nil {
-		return true
-	}
-	if b.LastScannedAt == nil {
-		return false
-	}
-	return a.LastScannedAt.Before(*b.LastScannedAt)
 }
 
 func uptimeOrZero(p contract.ProxyRecord) float64 {
@@ -641,7 +511,6 @@ func (f *FakeProxyRepository) CompleteScan(_ context.Context, lease contract.Sca
 		p.LastAliveAt = &now
 		p.LastVerifiedAt = &now
 		p.LastCompletedAt = &now
-		p.LastScannedAt = &now
 		p.FailCount = 0
 		p.RecoveryStep = 0
 		p.NextAttemptAt = &nextAttempt
@@ -652,7 +521,6 @@ func (f *FakeProxyRepository) CompleteScan(_ context.Context, lease contract.Sca
 		p.GeneralHealthy = false
 		p.Status = status
 		p.LastCompletedAt = &now
-		p.LastScannedAt = &now
 		p.FailCount = newFailCount
 		p.RecoveryStep = update.RecoveryStep
 		p.NextAttemptAt = &nextAttempt
@@ -660,7 +528,6 @@ func (f *FakeProxyRepository) CompleteScan(_ context.Context, lease contract.Sca
 		p.ObservationVersion++
 	case contract.ScanInconclusive:
 		p.LastCompletedAt = &now
-		p.LastScannedAt = &now
 		p.NextAttemptAt = &nextAttempt
 		p.ScanNotBefore = &notBefore
 	default:

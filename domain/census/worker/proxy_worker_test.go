@@ -95,9 +95,6 @@ func (c *fakeTomestoneClient) FetchCharacterProfileByName(context.Context, strin
 	return nil, nil
 }
 func (c *fakeTomestoneClient) IsConfigured() bool { return false }
-
-func intPtr(v int) *int { return &v }
-
 func newTestCensusWorker(q contract.Queue, logger contract.Logger) *Worker {
 	return New(q, nil, logger)
 }
@@ -159,14 +156,15 @@ func TestProxyWorkerLoop_WaitsForProxy(t *testing.T) {
 		t.Fatal("worker started before proxy was available")
 	}
 
-	// Insert a proxy and mark it active.
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	// Insert a proxy and seed fresh evidence so the hub hands it out.
+	id, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-	if len(proxies) > 0 {
-		now := time.Now().UTC()
-		repo.UpdateStatus(context.Background(), proxies[0].ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+	if err != nil {
+		t.Fatalf("InsertIfAbsent: %v", err)
+	}
+	if !repo.SeedSuccess(id, 100) {
+		t.Fatal("failed to seed proxy evidence")
 	}
 
 	// Wait for the worker to pick it up.
@@ -183,19 +181,19 @@ func TestProxyWorkerLoop_WaitsForProxy(t *testing.T) {
 	<-done
 }
 
-func TestReplaceProxy_MarksBadBeforeReplacement(t *testing.T) {
+func TestReplaceProxy_ReleasesBadBeforeReplacement(t *testing.T) {
 	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
+	// Seed distinct uptimes so ClaimProxy order is deterministic: p2 is the
+	// better proxy and is handed out first.
+	lowUptime, highUptime := 10.0, 90.0
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "1.1.1.1", Port: 8080, Source: "test",
+		Protocol: "http", IP: "1.1.1.1", Port: 8080, Source: "test", UptimePercent: &lowUptime,
 	})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "2.2.2.2", Port: 8080, Source: "test",
+		Protocol: "http", IP: "2.2.2.2", Port: 8080, Source: "test", UptimePercent: &highUptime,
 	})
-
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-	for _, p := range proxies {
-		now := time.Now().UTC()
-		repo.UpdateStatus(context.Background(), p.ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+	if !repo.SeedSuccess(1, 100) || !repo.SeedSuccess(2, 100) {
+		t.Fatal("failed to seed proxy evidence")
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -213,7 +211,6 @@ func TestReplaceProxy_MarksBadBeforeReplacement(t *testing.T) {
 		context.Background(),
 		p1,
 		owner,
-		true,
 		proxyHub,
 		func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 			return &fakeLodestoneClient{}, nil
@@ -231,13 +228,14 @@ func TestReplaceProxy_MarksBadBeforeReplacement(t *testing.T) {
 		t.Fatal("expected replacement proxy")
 	}
 
-	// First proxy should be marked failed (inactive).
+	// The previous proxy's claim must be released, and its evidence must be
+	// untouched: the consumer no longer writes failure history.
 	rec, _ := repo.Get(context.Background(), p1.ID())
-	if rec.Status != contract.ProxyStatusInactive {
-		t.Errorf("expected first proxy inactive, got %s", rec.Status)
+	if rec.LockedBy != nil {
+		t.Errorf("expected previous proxy released, still locked by %s", *rec.LockedBy)
 	}
-	if rec.FailCount != 1 {
-		t.Errorf("expected first proxy fail_count 1, got %d", rec.FailCount)
+	if rec.FailCount != 0 || !rec.GeneralHealthy {
+		t.Errorf("expected general evidence untouched, got fail_count=%d healthy=%v", rec.FailCount, rec.GeneralHealthy)
 	}
 
 	if p2.ID() == p1.ID() {
@@ -247,17 +245,17 @@ func TestReplaceProxy_MarksBadBeforeReplacement(t *testing.T) {
 
 func TestReplaceProxy_ReplacementTransportError(t *testing.T) {
 	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
+	// Seed distinct uptimes so ClaimProxy order is deterministic: p2 is the
+	// better proxy and is handed out first.
+	lowUptime, highUptime := 10.0, 90.0
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "1.1.1.1", Port: 8080, Source: "test",
+		Protocol: "http", IP: "1.1.1.1", Port: 8080, Source: "test", UptimePercent: &lowUptime,
 	})
 	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
-		Protocol: "http", IP: "2.2.2.2", Port: 8080, Source: "test",
+		Protocol: "http", IP: "2.2.2.2", Port: 8080, Source: "test", UptimePercent: &highUptime,
 	})
-
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-	for _, p := range proxies {
-		now := time.Now().UTC()
-		repo.UpdateStatus(context.Background(), p.ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+	if !repo.SeedSuccess(1, 100) || !repo.SeedSuccess(2, 100) {
+		t.Fatal("failed to seed proxy evidence")
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -275,7 +273,6 @@ func TestReplaceProxy_ReplacementTransportError(t *testing.T) {
 		context.Background(),
 		p1,
 		owner,
-		true,
 		proxyHub,
 		func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 			return &fakeLodestoneClient{}, nil
@@ -290,12 +287,18 @@ func TestReplaceProxy_ReplacementTransportError(t *testing.T) {
 		t.Fatalf("replaceProxy: %v", err)
 	}
 
-	// Mark the replacement as failed (simulating transport error).
+	// Give up the replacement claim (simulating transport error handling):
+	// the claim is released and general evidence stays untouched.
 	if p2 != nil {
-		p2.MarkFailed(context.Background(), owner)
+		if err := p2.Release(context.Background(), owner); err != nil {
+			t.Fatalf("Release: %v", err)
+		}
 		rec, _ := repo.Get(context.Background(), p2.ID())
-		if rec.Status != contract.ProxyStatusInactive {
-			t.Errorf("expected replacement proxy inactive, got %s", rec.Status)
+		if rec.LockedBy != nil {
+			t.Errorf("expected replacement proxy released, still locked by %s", *rec.LockedBy)
+		}
+		if rec.FailCount != 0 || !rec.GeneralHealthy {
+			t.Errorf("expected general evidence untouched, got fail_count=%d healthy=%v", rec.FailCount, rec.GeneralHealthy)
 		}
 	}
 }
@@ -350,10 +353,10 @@ func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
 			Protocol: "http", IP: ip, Port: 8080, Source: "test",
 		})
 	}
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-	for _, p := range proxies {
-		now := time.Now().UTC()
-		repo.UpdateStatus(context.Background(), p.ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+	for _, id := range []int64{1, 2} {
+		if !repo.SeedSuccess(id, 100) {
+			t.Fatalf("failed to seed proxy evidence for id %d", id)
+		}
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -481,13 +484,15 @@ func TestWaitForProxy_ExponentialBackoff(t *testing.T) {
 	// Insert a proxy after a short delay to measure how long waitForProxy waited.
 	go func() {
 		time.Sleep(1 * time.Second)
-		repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+		id, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 			Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 		})
-		proxies, _ := repo.ListForScan(context.Background(), 10)
-		if len(proxies) > 0 {
-			now := time.Now().UTC()
-			repo.UpdateStatus(context.Background(), proxies[0].ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+		if err != nil {
+			t.Errorf("InsertIfAbsent: %v", err)
+			return
+		}
+		if !repo.SeedSuccess(id, 100) {
+			t.Error("failed to seed proxy evidence")
 		}
 	}()
 
@@ -520,18 +525,18 @@ func TestWaitForProxy_NotificationChannel(t *testing.T) {
 	defer cancel()
 
 	// Insert and activate a proxy before starting waitForProxy.
-	repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
+	id, _, err := repo.InsertIfAbsent(context.Background(), contract.ProxyRecord{
 		Protocol: "http", IP: "1.2.3.4", Port: 8080, Source: "test",
 	})
-	proxies, _ := repo.ListForScan(context.Background(), 10)
-	if len(proxies) == 0 {
-		t.Fatal("expected at least one proxy")
+	if err != nil {
+		t.Fatalf("InsertIfAbsent: %v", err)
 	}
-	now := time.Now().UTC()
-	repo.UpdateStatus(context.Background(), proxies[0].ID, contract.ProxyStatusActive, intPtr(100), 0, &now)
+	if !repo.SeedSuccess(id, 100) {
+		t.Fatal("failed to seed proxy evidence")
+	}
 
 	// Lock all proxies so waitForProxy blocks.
-	_, err := repo.ClaimProxy(context.Background(), "other-owner", 5*time.Minute)
+	_, err = repo.ClaimProxy(context.Background(), "other-owner", 5*time.Minute)
 	if err != nil {
 		t.Fatalf("claim proxy: %v", err)
 	}
@@ -552,7 +557,7 @@ func TestWaitForProxy_NotificationChannel(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Release the proxy and notify.
-	err = repo.ReleaseProxy(context.Background(), proxies[0].ID, "other-owner")
+	err = repo.ReleaseProxy(context.Background(), id, "other-owner")
 	if err != nil {
 		t.Fatalf("release proxy: %v", err)
 	}

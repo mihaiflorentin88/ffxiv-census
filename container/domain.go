@@ -102,6 +102,9 @@ func (s *ServiceContainer) Handlers() *handler.Registry {
 	return reg
 }
 
+// ProxyService returns the ingestion-only proxy service: providers plus the
+// repository. It performs no health checks — scanning is owned by the
+// guarded scan worker.
 func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 	if s.domain.proxyService != nil {
 		return s.domain.proxyService
@@ -109,11 +112,6 @@ func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 	repo := s.ProxyRepository()
 	if repo == nil {
 		logging.Warn("container.proxy_service", "database driver unavailable, proxy service disabled")
-		return nil
-	}
-	checker := s.ProxyChecker()
-	if checker == nil {
-		logging.Warn("container.proxy_service", "proxy checker unavailable")
 		return nil
 	}
 
@@ -155,19 +153,7 @@ func (s *ServiceContainer) ProxyService() *proxydomain.Service {
 		logging.Warn("container.proxy_service", "no proxy providers configured")
 	}
 
-	cfg := s.Config().Proxy
-	deadThreshold := 48 * time.Hour
-	failCountThreshold := 5
-	if cfg != nil {
-		if cfg.DeadThresholdDays > 0 {
-			deadThreshold = time.Duration(cfg.DeadThresholdDays) * 24 * time.Hour
-		}
-		if cfg.FailCountThreshold > 0 {
-			failCountThreshold = cfg.FailCountThreshold
-		}
-	}
-
-	svc := proxydomain.NewService(providers, repo, checker, s.Logger(), deadThreshold, failCountThreshold)
+	svc := proxydomain.NewService(providers, repo, s.Logger())
 	s.domain.proxyService = svc
 	return svc
 }

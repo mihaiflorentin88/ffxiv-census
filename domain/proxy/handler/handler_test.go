@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/proxy/handler"
@@ -14,7 +13,7 @@ import (
 
 func TestNewProxy_Handle_BadPayload(t *testing.T) {
 	repo := repository.NewFakeProxyRepository(contract.ProxyScanPolicy{})
-	svc := proxydomain.NewService(nil, repo, nil, nil, 48*time.Hour, 5)
+	svc := proxydomain.NewService(nil, repo, nil)
 	h := handler.NewNewProxy(svc, nil)
 
 	_, err := h.Handle(context.Background(), []byte(`{invalid`))

@@ -375,15 +375,8 @@ func TestPublishDiscoveredProxies_LimitCrossProviderFallback(t *testing.T) {
 	}
 }
 
-func TestProxyScanCmd_DeadScanPercentageFlag(t *testing.T) {
-	flag := proxyScanCmd.Flags().Lookup("dead-scan-percentage")
-	if flag == nil {
-		t.Fatal("expected --dead-scan-percentage flag to be registered")
-	}
-	if flag.Value.Type() != "int" {
-		t.Errorf("flag type = %q, want %q", flag.Value.Type(), "int")
-	}
-	if flag.DefValue != "0" {
-		t.Errorf("flag default = %q, want %q", flag.DefValue, "0")
+func TestProxyScanCmd_DeadScanPercentageFlagRemoved(t *testing.T) {
+	if flag := proxyScanCmd.Flags().Lookup("dead-scan-percentage"); flag != nil {
+		t.Fatalf("--dead-scan-percentage must be retired, got usage %q", flag.Usage)
 	}
 }
