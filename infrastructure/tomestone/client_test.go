@@ -632,3 +632,24 @@ func TestFetchProfile_LargeErrorBody(t *testing.T) {
 		t.Error("expected error body to be truncated")
 	}
 }
+
+func TestNewClientWithProxy_ProtocolsConstruct(t *testing.T) {
+	cfg := &config.TomestoneConfig{BaseURL: "https://tomestone.gg"}
+	for _, addr := range []string{
+		"http://127.0.0.1:8080",
+		"https://127.0.0.1:8443",
+		"socks4://127.0.0.1:1080",
+		"socks5://127.0.0.1:1080",
+	} {
+		c, err := NewClientWithProxy(cfg, addr, nil)
+		if err != nil {
+			t.Fatalf("NewClientWithProxy(%s): %v", addr, err)
+		}
+		if c == nil {
+			t.Fatalf("NewClientWithProxy(%s): nil client", addr)
+		}
+	}
+	if _, err := NewClientWithProxy(cfg, "ftp://127.0.0.1:21", nil); err == nil {
+		t.Fatal("expected error for unsupported proxy protocol")
+	}
+}

@@ -7,18 +7,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	xproxy "golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 
-	_ "github.com/bdandy/go-socks4" // register socks4 scheme with golang.org/x/net/proxy
 	"github.com/mihaiflorentin88/ffxiv-census/config"
+	httpclient "github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -173,54 +171,12 @@ func NewClientWithProxy(cfg *config.TomestoneConfig, proxyURL string, logger con
 		}
 	}
 
-	// Build proxy-aware HTTP transport by cloning DefaultTransport to inherit
-	// bounded standard idle-connection/TLS timeouts.
-	u, err := url.Parse(proxyURL)
+	// Build the proxy-aware HTTP transport via the shared cancellation-safe
+	// builder (DefaultTransport clone, inherited ProxyFromEnvironment
+	// cleared, bounded SOCKS4 handshake).
+	transport, err := httpclient.NewProxyTransport(proxyURL, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("parse proxy URL: %w", err)
-	}
-
-	cloneTransport := func() *http.Transport {
-		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
-			return dt.Clone()
-		}
-		return &http.Transport{}
-	}
-
-	var transport *http.Transport
-	switch u.Scheme {
-	case "http", "https":
-		transport = cloneTransport()
-		transport.Proxy = http.ProxyURL(u)
-	case "socks5":
-		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
-		if derr != nil {
-			return nil, fmt.Errorf("create socks dialer: %w", derr)
-		}
-		ctxDialer, ok := dialer.(xproxy.ContextDialer)
-		if !ok {
-			return nil, fmt.Errorf("socks dialer does not support context")
-		}
-		transport = cloneTransport()
-		transport.DialContext = ctxDialer.DialContext
-	case "socks4":
-		dialer, derr := xproxy.FromURL(u, xproxy.Direct)
-		if derr != nil {
-			return nil, fmt.Errorf("create socks4 dialer: %w", derr)
-		}
-		ctxDialer, ok := dialer.(xproxy.ContextDialer)
-		if !ok {
-			// go-socks4 dialer doesn't implement ContextDialer; wrap plain Dialer.
-			transport = cloneTransport()
-			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
-			}
-		} else {
-			transport = cloneTransport()
-			transport.DialContext = ctxDialer.DialContext
-		}
-	default:
-		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
+		return nil, fmt.Errorf("build proxy transport: %w", err)
 	}
 
 	requestRate := o.requestRate

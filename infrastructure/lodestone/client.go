@@ -10,19 +10,17 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
-	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	xhtml "golang.org/x/net/html"
-	"golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
+	httpclient "github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -190,33 +188,10 @@ func NewCustomClient(cfg *config.LodestoneConfig, logger contract.Logger, rateLi
 	return c, nil
 }
 
-// newProxyTransport creates an HTTP transport that routes through the given proxy.
+// newProxyTransport creates an HTTP transport that routes through the given
+// proxy via the shared cancellation-safe transport builder.
 func newProxyTransport(proxyURL string) (*http.Transport, error) {
-	u, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	switch u.Scheme {
-	case "http", "https":
-		return &http.Transport{Proxy: http.ProxyURL(u)}, nil
-	case "socks4", "socks5":
-		dialer, err := proxy.FromURL(u, proxy.Direct)
-		if err != nil {
-			return nil, err
-		}
-		ctxDialer, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			// go-socks4 dialer doesn't implement ContextDialer; wrap plain Dialer.
-			return &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				},
-			}, nil
-		}
-		return &http.Transport{DialContext: ctxDialer.DialContext}, nil
-	default:
-		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
-	}
+	return httpclient.NewProxyTransport(proxyURL, requestTimeout)
 }
 
 // doRequest executes an HTTP GET with rate limiting, retries, and backoff.

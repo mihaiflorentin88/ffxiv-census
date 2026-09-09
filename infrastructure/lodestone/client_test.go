@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"golang.org/x/time/rate"
 )
 
@@ -591,5 +592,26 @@ func TestParseClassJobs_VariousCharacterProfiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewCustomClient_WithProxyProtocolsConstruct(t *testing.T) {
+	cfg := &config.LodestoneConfig{}
+	for _, addr := range []string{
+		"http://127.0.0.1:8080",
+		"https://127.0.0.1:8443",
+		"socks4://127.0.0.1:1080",
+		"socks5://127.0.0.1:1080",
+	} {
+		c, err := NewCustomClient(cfg, nil, nil, WithProxy(addr))
+		if err != nil {
+			t.Fatalf("NewCustomClient with proxy %s: %v", addr, err)
+		}
+		if c == nil {
+			t.Fatalf("NewCustomClient with proxy %s: nil client", addr)
+		}
+	}
+	if _, err := NewCustomClient(cfg, nil, nil, WithProxy("ftp://127.0.0.1:21")); err == nil {
+		t.Fatal("expected error for unsupported proxy protocol")
 	}
 }
