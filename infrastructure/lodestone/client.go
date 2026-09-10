@@ -165,7 +165,7 @@ func NewCustomClient(cfg *config.LodestoneConfig, logger contract.Logger, rateLi
 	}
 
 	c := &CustomClient{
-		httpClient:  &http.Client{Timeout: requestTimeout},
+		httpClient:  &http.Client{Timeout: requestTimeout, Transport: httpclient.NewDirectTransport()},
 		limiter:     rate.NewLimiter(rate.Limit(rps), 1),
 		maxRetries:  cfg.MaxRetries,
 		backoffBase: 500 * time.Millisecond,

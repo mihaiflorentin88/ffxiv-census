@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	utls "github.com/refraction-networking/utls"
+
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 
 	xproxy "golang.org/x/net/proxy"
@@ -75,6 +77,72 @@ func ParseRetryAfter(hint string, receivedAt time.Time) time.Duration {
 // shared transport keeps its bounded dial timeout and keep-alives.
 var proxyDialer = &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 
+// browserTLSConfig builds a utls config whose ClientHello mimics a current
+// Chrome release. Fronting services (Cloudflare in front of The Lodestone)
+// fingerprint the TLS ClientHello and serve HTTP 202 challenge interstitials
+// to non-browser fingerprints before the request reaches the origin; the
+// stock crypto/tls hello is distinctive and was being challenged fleet-wide.
+// ALPN is pinned to http/1.1 because net/http does not speak h2 over a
+// custom DialTLSContext.
+func browserTLSConfig(host string, base *tls.Config) *utls.Config {
+	cfg := &utls.Config{
+		ServerName: host,
+		NextProtos: []string{"http/1.1"},
+	}
+	if base != nil {
+		cfg.RootCAs = base.RootCAs
+		cfg.InsecureSkipVerify = base.InsecureSkipVerify
+		if base.ServerName != "" {
+			cfg.ServerName = base.ServerName
+		}
+	}
+	return cfg
+}
+
+func browserTLSClient(ctx context.Context, conn net.Conn, host string, tlsCfg *tls.Config, handshakeTimeout time.Duration) (net.Conn, error) {
+	// Start from the Chrome ClientHello spec, then pin its ALPN extension to
+	// http/1.1: the preset ships h2-first ALPN, and net/http does not speak
+	// h2 over a custom DialTLSContext. Ciphers, extensions and curves — the
+	// parts fingerprinting scores — are untouched.
+	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_120)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("build chrome client hello: %w", err)
+	}
+	for _, ext := range spec.Extensions {
+		if alpn, ok := ext.(*utls.ALPNExtension); ok {
+			alpn.AlpnProtocols = []string{"http/1.1"}
+		}
+	}
+	uconn := utls.UClient(conn, browserTLSConfig(host, tlsCfg), utls.HelloCustom)
+	if err := uconn.ApplyPreset(&spec); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("apply chrome client hello: %w", err)
+	}
+	// utls's handshake does not abort on context cancellation at every read,
+	// and net/http applies TLSHandshakeTimeout only to its own TLS path, so
+	// bound the handshake explicitly: the earliest of the context deadline
+	// and the transport's handshake timeout.
+	deadline := time.Now().Add(10 * time.Second)
+	if handshakeTimeout > 0 {
+		deadline = time.Now().Add(handshakeTimeout)
+	}
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetDeadline(deadline)
+	err = uconn.HandshakeContext(ctx)
+	if err != nil {
+		_ = conn.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{}) // clear before the HTTP exchange
+	return uconn, nil
+}
+
 // NewProxyTransport builds an *http.Transport that routes every request
 // through the given proxy URL. Supported schemes are http, https, socks5,
 // and socks4. The transport starts from a clone of the standard library's
@@ -98,9 +166,10 @@ func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport,
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.Proxy = nil // explicitly clear inherited ProxyFromEnvironment
 
+	var dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	switch u.Scheme {
 	case "http", "https":
-		base.DialContext = httpConnectDialContext(u, base)
+		dial = httpConnectDialContext(u, base)
 	case "socks5":
 		dialer, err := xproxy.FromURL(u, xproxy.Direct)
 		if err != nil {
@@ -110,7 +179,7 @@ func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport,
 		if !ok {
 			return nil, fmt.Errorf("socks5 dialer does not support context")
 		}
-		base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := ctxDialer.DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, &ProxyDialError{Reason: "socks5", Err: err}
@@ -118,19 +187,51 @@ func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport,
 			return conn, nil
 		}
 	case "socks4":
-		base.DialContext = socks4DialContext(u, timeout)
+		dial = socks4DialContext(u, timeout)
 	default:
 		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
 	}
+	base.DialContext = dial
+	// HTTPS targets are tunneled by the same dial function and then handed
+	// a browser-mimicking TLS handshake (see browserTLSConfig). TLSClientConfig
+	// is read at dial time so callers can still inject trust roots after
+	// construction.
+	base.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return browserTLSClient(ctx, conn, host, base.TLSClientConfig, base.TLSHandshakeTimeout)
+	}
+	base.ForceAttemptHTTP2 = false
 	return base, nil
 }
 
 // NewDirectTransport builds an *http.Transport without any proxy. The
 // inherited ProxyFromEnvironment is explicitly cleared, so control-plane
-// checks never route through ambient proxies.
+// checks never route through ambient proxies. TLS handshakes use the
+// browser-mimicking fingerprint (see browserTLSConfig).
 func NewDirectTransport() *http.Transport {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.Proxy = nil
+	dialer := proxyDialer
+	base.DialContext = dialer.DialContext
+	base.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return browserTLSClient(ctx, conn, host, base.TLSClientConfig, base.TLSHandshakeTimeout)
+	}
+	base.ForceAttemptHTTP2 = false
 	return base
 }
 

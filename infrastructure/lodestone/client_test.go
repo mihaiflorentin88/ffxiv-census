@@ -725,3 +725,30 @@ func TestDoRequest_AcceptedReturnsBodyWithoutPause(t *testing.T) {
 		t.Fatal("a 202 must not pause the provider")
 	}
 }
+
+func TestNewCustomClient_RateLimitClampedAndFallback(t *testing.T) {
+	tests := []struct {
+		name      string
+		rateLimit float64
+		want      float64
+	}{
+		{name: "configured rate passes through", rateLimit: 0.1, want: 0.1},
+		{name: "ceiling clamps to one request per second", rateLimit: 5.0, want: 1.0},
+		{name: "zero falls back to the safe ceiling", rateLimit: 0, want: 1.0},
+		{name: "negative falls back to the safe ceiling", rateLimit: -3, want: 1.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := NewCustomClient(&config.LodestoneConfig{RateLimit: tt.rateLimit}, nil, nil)
+			if err != nil {
+				t.Fatalf("NewCustomClient: %v", err)
+			}
+			if got := c.limiter.Limit(); got != rate.Limit(tt.want) {
+				t.Fatalf("limiter rate = %v, want %v", got, tt.want)
+			}
+			if c.limiter.Burst() != 1 {
+				t.Fatalf("limiter burst = %d, want 1 (strict spacing)", c.limiter.Burst())
+			}
+		})
+	}
+}

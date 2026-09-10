@@ -328,7 +328,7 @@ cronjobs:
         - publish
         - character-census
         - --limit
-        - "600"
+        - "300"
         - --older-than
         - "0"
 
@@ -340,7 +340,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --count
-        - "700"
+        - "300"
         - --chunk-size
         - "1"
 
