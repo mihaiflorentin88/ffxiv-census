@@ -12,7 +12,6 @@ import (
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
-	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"golang.org/x/time/rate"
 )
@@ -687,45 +686,6 @@ func TestDoRequest_ProxyDialFailureAbortsLadder(t *testing.T) {
 	}
 }
 
-func TestDoRequest_AcceptedReturnsBodyWithoutPause(t *testing.T) {
-	attempts := 0
-	lim := mock.NewProviderRateLimiter()
-	c := &CustomClient{
-		httpClient: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-			attempts++
-			return &http.Response{
-				StatusCode: http.StatusAccepted,
-				Body:       io.NopCloser(strings.NewReader("challenge interstitial")),
-			}, nil
-		})},
-		limiter:     rate.NewLimiter(rate.Inf, 1),
-		logger:      loggerOrDiscard(nil),
-		maxRetries:  3,
-		backoffBase: time.Millisecond,
-		rateLimiter: lim,
-	}
-
-	// A 202 challenge interstitial is surfaced to the caller with its body
-	// and status: handlers reject non-200 statuses and the queue's own
-	// backoff spaces the retry. No provider pause, no in-ladder retry.
-	body, code, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
-	if err != nil {
-		t.Fatalf("expected 202 to pass through without an error, got %v", err)
-	}
-	if code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", code)
-	}
-	if body == nil {
-		t.Fatal("expected the response body to be returned")
-	}
-	if attempts != 1 {
-		t.Fatalf("expected exactly 1 attempt, got %d", attempts)
-	}
-	if !lim.IsAvailable(contract.ProviderLodestone) {
-		t.Fatal("a 202 must not pause the provider")
-	}
-}
-
 func TestNewCustomClient_RateLimitClampedAndFallback(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -750,5 +710,31 @@ func TestNewCustomClient_RateLimitClampedAndFallback(t *testing.T) {
 				t.Fatalf("limiter burst = %d, want 1 (strict spacing)", c.limiter.Burst())
 			}
 		})
+	}
+}
+
+func TestDoRequest_202ChallengeIsTypedCheckTargetWithoutRetry(t *testing.T) {
+	attempts := 0
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusAccepted,
+			Body:       io.NopCloser(strings.NewReader("challenge interstitial")),
+		}, nil
+	}))
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckTarget {
+		t.Fatalf("expected typed CheckTarget error for a 202 challenge, got %v", err)
+	}
+	// A challenge will not clear inside the backoff ladder: fail immediately
+	// so the worker cools this proxy's destination down and the queue
+	// redelivers on a different identity.
+	if attempts != 1 {
+		t.Fatalf("expected exactly 1 attempt, got %d", attempts)
+	}
+	var dialErr *httpclient.ProxyDialError
+	if errors.As(err, &dialErr) {
+		t.Fatal("a target 202 must not be classified as a proxy dial failure")
 	}
 }

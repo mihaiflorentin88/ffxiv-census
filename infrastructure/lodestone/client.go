@@ -282,6 +282,24 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 			continue
 		}
 
+		if resp.StatusCode == http.StatusAccepted {
+			// A 202 is a Cloudflare challenge interstitial served to this
+			// identity. Type it as a target rejection so the worker applies
+			// the proxy's destination cooldown (floor 60s) and the queue
+			// redelivers on a different identity — no in-ladder retry, a
+			// challenge will not clear inside the backoff ladder.
+			lastErr = &contract.ProxyCheckError{
+				Kind:       contract.CheckTarget,
+				Reason:     "status 202",
+				RetryAfter: httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+				Err:        fmt.Errorf("HTTP %d from %s", resp.StatusCode, url),
+			}
+			c.logger.WarnContext(ctx, "lodestone.challenge",
+				slog.String("url", url),
+				slog.Int("status", resp.StatusCode))
+			return nil, resp.StatusCode, fmt.Errorf("request %s: %w", url, lastErr)
+		}
+
 		return body, resp.StatusCode, nil
 	}
 	if lastErr == nil {
