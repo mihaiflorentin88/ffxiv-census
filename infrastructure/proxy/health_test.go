@@ -137,8 +137,8 @@ func TestHealthCheck_Non200IsCheckTarget(t *testing.T) {
 	}
 }
 
-func TestHealthCheck_InvalidBodyIsCheckTarget(t *testing.T) {
-	target, _ := httpTarget(t, http.StatusOK, `not-json`)
+func TestHealthCheck_EmptyBodyIsCheckTarget(t *testing.T) {
+	target, _ := httpTarget(t, http.StatusOK, ``)
 	p := proxytest.NewHTTPProxy(t)
 	h := NewHealthChecker(target.URL, fixtureBudget, nil)
 
@@ -147,7 +147,7 @@ func TestHealthCheck_InvalidBodyIsCheckTarget(t *testing.T) {
 }
 
 func TestHealthCheck_OversizeBodyIsCheckTarget(t *testing.T) {
-	body := `{"ip":"203.0.113.9"}` + strings.Repeat(" ", 1010)
+	body := strings.Repeat("a", maxHealthBodyBytes+1)
 	target, _ := httpTarget(t, http.StatusOK, body)
 	p := proxytest.NewHTTPProxy(t)
 	h := NewHealthChecker(target.URL, fixtureBudget, nil)
@@ -210,8 +210,8 @@ func TestCheckDirect_Success(t *testing.T) {
 	}
 }
 
-func TestCheckDirect_InvalidBodyReturnsError(t *testing.T) {
-	target, _ := httpTarget(t, http.StatusOK, `{"ip":"nope"}`)
+func TestCheckDirect_EmptyBodyReturnsError(t *testing.T) {
+	target, _ := httpTarget(t, http.StatusOK, ``)
 	h := NewHealthChecker(target.URL, fixtureBudget, nil)
 
 	if err := h.CheckDirect(context.Background()); err == nil {
@@ -230,62 +230,38 @@ func TestCheckDirect_IgnoresProxyEnvironment(t *testing.T) {
 	}
 }
 
-func TestValidateIPBody(t *testing.T) {
+func TestValidateBody(t *testing.T) {
 	tests := []struct {
 		name    string
 		body    string
 		wantErr bool
 	}{
-		{"valid ipv4", `{"ip":"203.0.113.9"}`, false},
-		{"valid ipv6", `{"ip":"2001:db8::1"}`, false},
-		{"extra fields allowed", `{"ip":"203.0.113.9","country":"US"}`, false},
-		{"surrounding whitespace", "  \n\t" + `{"ip":"203.0.113.9"}` + "\n ", false},
-		{"missing ip", `{"address":"203.0.113.9"}`, true},
-		{"non-string ip", `{"ip":203}`, true},
-		{"invalid ip", `{"ip":"not-an-ip"}`, true},
-		{"empty ip", `{"ip":""}`, true},
-		{"json null", `null`, true},
-		{"json array", `["203.0.113.9"]`, true},
-		{"json string", `"203.0.113.9"`, true},
-		{"two objects", `{"ip":"203.0.113.9"} {}`, true},
-		{"trailing garbage", `{"ip":"203.0.113.9"} trailing`, true},
+		{"json object", `{"ip":"203.0.113.9"}`, false},
+		{"html page", "<!DOCTYPE html><html><body>ok</body></html>", false},
+		{"json with trailing data", `{"ip":"203.0.113.9"} trailing`, false},
+		{"surrounding whitespace", "  \n\t content \n ", false},
 		{"empty body", ``, true},
+		{"whitespace only", "  \n\t", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateIPBody(strings.NewReader(tt.body))
+			err := validateBody(strings.NewReader(tt.body))
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("validateIPBody(%q) error = %v, wantErr %v", tt.body, err, tt.wantErr)
+				t.Fatalf("validateBody(%q) error = %v, wantErr %v", tt.body, err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func TestValidateIPBodyRejectsTrailingObject(t *testing.T) {
-	err := validateIPBody(strings.NewReader(`{"ip":"203.0.113.9"} {}`))
-	if err == nil {
-		t.Fatal("accepted two JSON objects")
-	}
-}
-
-func TestValidateIPBodySizeBoundaries(t *testing.T) {
-	t.Helper()
-	payload := `{"ip":"203.0.113.9"}`
-
-	exact := payload + strings.Repeat(" ", 1024-len(payload))
-	if len(exact) != 1024 {
-		t.Fatalf("test setup: want 1024-byte body, got %d", len(exact))
-	}
-	if err := validateIPBody(strings.NewReader(exact)); err != nil {
-		t.Fatalf("rejected exact 1024-byte body: %v", err)
+func TestValidateBodySizeBoundary(t *testing.T) {
+	exact := strings.Repeat("a", maxHealthBodyBytes)
+	if err := validateBody(strings.NewReader(exact)); err != nil {
+		t.Fatalf("rejected exact %d-byte body: %v", maxHealthBodyBytes, err)
 	}
 
-	oversize := exact + strings.Repeat(" ", 1025-len(exact))
-	if len(oversize) != 1025 {
-		t.Fatalf("test setup: want 1025-byte body, got %d", len(oversize))
-	}
-	if err := validateIPBody(strings.NewReader(oversize)); err == nil {
-		t.Fatal("accepted 1025-byte body")
+	oversize := exact + "a"
+	if err := validateBody(strings.NewReader(oversize)); err == nil {
+		t.Fatalf("accepted %d-byte body", maxHealthBodyBytes+1)
 	}
 }

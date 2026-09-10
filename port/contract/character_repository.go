@@ -40,8 +40,9 @@ type CharacterRepository interface {
 	UpsertGear(ctx context.Context, charID uint32, gear []CharacterGearRecord) error
 	// GetGear returns the character's equipped gear slots (empty if none).
 	GetGear(ctx context.Context, charID uint32) ([]CharacterGearRecord, error)
-	// FindIDGaps returns missing/unscanned ID ranges [[start, end], ...] between 1 and maxID.
-	FindIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error)
+	// FindIDGaps returns missing/unscanned ID ranges [[start, end], ...]
+	// between minID and maxID.
+	FindIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error)
 	// Get returns the character, or nil (no error) if not found.
 	Get(ctx context.Context, id uint32) (*CharacterRecord, error)
 	// GetJobs returns the character's job levels (empty if none).

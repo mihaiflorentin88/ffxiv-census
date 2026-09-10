@@ -100,7 +100,7 @@ func (f *CharacterRepository) GetGear(ctx context.Context, id uint32) ([]contrac
 	return cloned, nil
 }
 
-func (f *CharacterRepository) FindIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error) {
+func (f *CharacterRepository) FindIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.FindIDGapsErr != nil {

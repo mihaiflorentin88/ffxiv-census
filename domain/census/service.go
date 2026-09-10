@@ -223,9 +223,9 @@ func (s *Service) MaxCharacterID(ctx context.Context) (uint32, error) {
 	return s.characters.MaxID(ctx)
 }
 
-// FindUnscannedIDGaps returns missing/unscanned ID ranges between 1 and maxID.
-func (s *Service) FindUnscannedIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error) {
-	return s.characters.FindIDGaps(ctx, maxID, limit)
+// FindUnscannedIDGaps returns missing/unscanned ID ranges between minID and maxID.
+func (s *Service) FindUnscannedIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
+	return s.characters.FindIDGaps(ctx, minID, maxID, limit)
 }
 
 func parseTomestoneGender(g string) uint8 {

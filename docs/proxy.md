@@ -17,7 +17,7 @@ The proxy feature is a separate bounded context (`domain/proxy/`) with its own C
 | Domain scanner | `domain/proxy/worker/scan.go` | Single-dispatcher lease-based scan worker |
 | Domain admission | `domain/proxy/worker/admission.go` | Persistent round-robin admission state |
 | Domain consumer | `domain/proxy/worker/worker.go` | `new-proxy` event consumer |
-| Infrastructure | `infrastructure/proxy/health.go` | General checker: strict JSON IP-echo GET through the proxy (ipify) |
+| Infrastructure | `infrastructure/proxy/health.go` | General checker: complete-response GET through the proxy to the health target (default The Lodestone) |
 | Infrastructure | `infrastructure/proxy/checker.go` | Destination checker: complete-response GET to The Lodestone with `Retry-After` parsing |
 | Infrastructure | `infrastructure/proxy/guard.go` | `EndpointGuard` — per-replica egress circuit breaker |
 | Infrastructure | `infrastructure/proxyscrape/`, `infrastructure/geonode/`, … | Discovery providers (streaming) |
@@ -62,7 +62,7 @@ Long-run capacity shares default to 10/45/45 (`weight_verification`, `weight_rec
 
 ### Checks and classification
 
-The general checker (`infrastructure/proxy/health.go`) performs one GET of the configured JSON IP-echo target through the proxy. Success requires HTTP 200 plus a complete, bounded (≤1 KiB) body that parses as exactly one JSON object with a string `ip` field. Every check runs under the check timeout (default 10 s); there is no direct fallback.
+The general checker (`infrastructure/proxy/health.go`) performs one GET of the configured health target through the proxy — by default The Lodestone, so a passing check proves the proxy is usable for real census traffic, not merely alive. Success requires HTTP 200 plus a complete, bounded (≤512 KiB), non-empty body; body shape is the target's own concern. Every check runs under the check timeout (default 10 s); there is no direct fallback.
 
 Outcomes are typed (`ProxyCheckKind`: `local`, `proxy`, `target`, `deadline`, `cancelled`) and decisions use `errors.As`/`errors.Is`, never error text:
 
@@ -84,7 +84,7 @@ Shutdown releases leases it still owns on bounded fresh contexts after a ≤5 s 
 
 ### Endpoint guard
 
-Each scan replica owns an `EndpointGuard` observing its own egress with a bounded direct request to the same IP-echo target (`control_interval`, default 30 s, ±10 % jitter, serial controls, 10 s control budget). A failed control pauses claiming until a later success; the generation counter increments on each healthy→unhealthy transition and is never reset. A healthy control never mutates proxy state. The guard gates claiming only — in-flight checks always run to completion and are fenced by generation as described above.
+Each scan replica owns an `EndpointGuard` observing its own egress with a bounded direct request to the same health target (`control_interval`, default 30 s, ±10 % jitter, serial controls, 10 s control budget). A failed control pauses claiming until a later success; the generation counter increments on each healthy→unhealthy transition and is never reset. A healthy control never mutates proxy state. The guard gates claiming only — in-flight checks always run to completion and are fenced by generation as described above.
 
 ## Fresh availability (general vs destination health)
 
@@ -133,7 +133,7 @@ The rewrite removed, with all callers and fakes migrated: `UpdateStatus`, `Updat
 
 ```toml
 [proxy]
-test_url             = "https://api64.ipify.org?format=json"  # JSON IP-echo target (general checks + guard)
+test_url             = "https://na.finalfantasyxiv.com/lodestone/"  # general health target: proxies must prove Lodestone works
 test_timeout         = "10s"                                  # per-check budget (also the stall deadline)
 dead_threshold_days  = 2                                      # historical dead classification
 fail_count_threshold = 5                                      # historical dead classification

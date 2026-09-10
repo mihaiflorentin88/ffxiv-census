@@ -127,7 +127,7 @@ func TestMockCharacterRepository_GearAndGaps(t *testing.T) {
 	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 8, FirstSeenAt: now}, nil)
 	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 15, FirstSeenAt: now}, nil)
 
-	gaps, err := repo.FindIDGaps(ctx, 15, 10)
+	gaps, err := repo.FindIDGaps(ctx, 1, 15, 10)
 	if err != nil {
 		t.Fatalf("FindIDGaps: %v", err)
 	}

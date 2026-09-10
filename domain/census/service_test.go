@@ -320,7 +320,7 @@ func TestService_FindUnscannedIDGaps(t *testing.T) {
 	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 2, FirstSeenAt: now}, nil)
 	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 5, FirstSeenAt: now}, nil)
 
-	gaps, err := svc.FindUnscannedIDGaps(ctx, 5, 10)
+	gaps, err := svc.FindUnscannedIDGaps(ctx, 1, 5, 10)
 	if err != nil {
 		t.Fatalf("FindUnscannedIDGaps: %v", err)
 	}

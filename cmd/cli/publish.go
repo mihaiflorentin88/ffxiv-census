@@ -147,6 +147,7 @@ var publishIDSweepCmd = &cobra.Command{
 		daemon, _ := cmd.Flags().GetBool("daemon")
 		daemonInterval, _ := cmd.Flags().GetDuration("daemon-interval")
 		maxGaps, _ := cmd.Flags().GetInt("max-gaps")
+		minID, _ := cmd.Flags().GetUint32("min-id")
 		if daemon && daemonInterval <= 0 {
 			return fmt.Errorf("invalid --daemon-interval %v: must be positive", daemonInterval)
 		}
@@ -185,7 +186,7 @@ var publishIDSweepCmd = &cobra.Command{
 					}
 					jobs = buildIDSweepJobs(actualFrom, actualTo, chunkSize, source)
 				} else {
-					gaps, err := repo.FindIDGaps(cmd.Context(), maxID, maxGaps)
+					gaps, err := repo.FindIDGaps(cmd.Context(), minID, maxID, maxGaps)
 					if err != nil {
 						return fmt.Errorf("find id gaps: %w", err)
 					}
@@ -388,6 +389,7 @@ func init() {
 	publishIDSweepCmd.Flags().Bool("daemon", false, "run continuous auto-sweep loop")
 	publishIDSweepCmd.Flags().Duration("daemon-interval", 30*time.Second, "tick interval for daemon checks")
 	publishIDSweepCmd.Flags().Int("max-gaps", 50, "max gap ranges to query per run in --fill-gaps mode")
+	publishIDSweepCmd.Flags().Uint32("min-id", 0, "lower bound for --fill-gaps gap scanning (0 = scan from the first character)")
 	publishCmd.AddCommand(publishCharacterCensusCmd)
 	publishCharacterCensusCmd.Flags().Duration("older-than", 0, "positive duration filters by age; zero or negative selects oldest entries without age cutoff")
 	publishCharacterCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")

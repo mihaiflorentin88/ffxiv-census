@@ -168,9 +168,12 @@ func (r *CharacterRepository) GetGear(ctx context.Context, id uint32) ([]contrac
 	return out, rows.Err()
 }
 
-func (r *CharacterRepository) FindIDGaps(ctx context.Context, maxID uint32, limit int) ([][2]uint32, error) {
+func (r *CharacterRepository) FindIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
 	if maxID <= 1 {
 		return nil, nil
+	}
+	if minID < 1 {
+		minID = 1
 	}
 	if limit <= 0 {
 		limit = 100
@@ -181,11 +184,12 @@ func (r *CharacterRepository) FindIDGaps(ctx context.Context, maxID uint32, limi
 		       (SELECT MIN(c3.id) - 1 FROM characters c3 WHERE c3.id > c1.id) AS gap_end
 		  FROM characters c1
 		 WHERE NOT EXISTS (SELECT 1 FROM characters c2 WHERE c2.id = c1.id + 1)
+		   AND c1.id >= $3
 		   AND c1.id < $1
 		 ORDER BY c1.id ASC
 		 LIMIT $2`
 
-	rows, err := r.driver.FetchMany(ctx, query, maxID, limit)
+	rows, err := r.driver.FetchMany(ctx, query, maxID, limit, minID)
 	if err != nil {
 		return nil, fmt.Errorf("find id gaps: %w", err)
 	}

@@ -3,14 +3,12 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"time"
 
@@ -18,41 +16,33 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
-// maxIPBodyBytes bounds the ipify response body. The expected payload is a
-// single tiny JSON object; anything larger is rejected before decoding.
-const maxIPBodyBytes = 1024
+// maxHealthBodyBytes bounds the health-check response body. A Lodestone
+// character page is a few hundred KiB of HTML; anything larger is rejected
+// before buffering.
+const maxHealthBodyBytes = 512 * 1024
 
-// validateIPBody reads and validates a complete ipify response: at most 1024
-// bytes containing exactly one JSON object with a string "ip" field that
-// parses as an IP address. Extra fields are allowed; trailing data is not.
-func validateIPBody(r io.Reader) error {
-	body, err := io.ReadAll(io.LimitReader(r, maxIPBodyBytes+1))
+// validateBody reads and validates a complete response from the health
+// target: bounded size and non-empty content. The general check proves the
+// proxy can deliver the target's real content (e.g. a Lodestone HTML page);
+// the body's shape is the target's own concern.
+func validateBody(r io.Reader) error {
+	body, err := io.ReadAll(io.LimitReader(r, maxHealthBodyBytes+1))
 	if err != nil {
 		return err
 	}
-	if len(body) > maxIPBodyBytes {
-		return errors.New("ipify response exceeds 1024 bytes")
+	if len(body) > maxHealthBodyBytes {
+		return errors.New("health response exceeds body limit")
 	}
-	var payload struct {
-		IP string `json:"ip"`
-	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	if err := dec.Decode(&payload); err != nil {
-		return err
-	}
-	if _, err := netip.ParseAddr(payload.IP); err != nil {
-		return err
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return errors.New("ipify response contains trailing data")
+	if len(bytes.TrimSpace(body)) == 0 {
+		return errors.New("empty response body")
 	}
 	return nil
 }
 
-// HealthChecker tests whether a proxy can complete a strict health check
-// against a single JSON IP echo target (ipify). Every check is one-shot:
-// the proxied GET must return HTTP 200 with a complete, valid body; idle
+// HealthChecker tests whether a proxy can complete a health check against
+// the configured target URL (by default The Lodestone, so a passing proxy is
+// proven usable for real census traffic). Every check is one-shot: the
+// proxied GET must return HTTP 200 with a complete, non-empty body; idle
 // connections are closed afterwards.
 //
 // Check outcomes are typed: construction/configuration failures are
@@ -136,7 +126,7 @@ func (h *HealthChecker) runCheck(ctx context.Context, transport *http.Transport,
 		h.logFailure(ctx, contract.CheckTarget, err)
 		return 0, checkError(contract.CheckTarget, "unexpected status", err)
 	}
-	if err := validateIPBody(resp.Body); err != nil {
+	if err := validateBody(resp.Body); err != nil {
 		h.logFailure(ctx, contract.CheckTarget, err)
 		return 0, checkError(contract.CheckTarget, "validate body", err)
 	}

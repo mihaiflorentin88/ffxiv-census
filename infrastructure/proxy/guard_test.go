@@ -184,7 +184,8 @@ func TestEndpointGuard_RealDirectChecker(t *testing.T) {
 		wantHealthy bool
 	}{
 		{"valid json is healthy", http.StatusOK, `{"ip":"203.0.113.9"}`, true},
-		{"invalid payload is not a healthy baseline", http.StatusOK, `{"ip":"nope"}`, false},
+		{"html body is healthy", http.StatusOK, "<html><body>lodestone</body></html>", true},
+		{"empty body is not a healthy baseline", http.StatusOK, ``, false},
 		{"target error is unhealthy", http.StatusBadGateway, `{"ip":"203.0.113.9"}`, false},
 	}
 

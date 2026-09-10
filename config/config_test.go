@@ -277,6 +277,9 @@ func TestNewConfig_ProxyScanDefaults(t *testing.T) {
 	if cfg.Proxy.TestTimeout != 10*time.Second {
 		t.Errorf("expected test_timeout 10s, got %s", cfg.Proxy.TestTimeout)
 	}
+	if cfg.Proxy.TestURL != "https://na.finalfantasyxiv.com/lodestone/" {
+		t.Errorf("expected general test_url to default to the Lodestone URL, got %q", cfg.Proxy.TestURL)
+	}
 	if cfg.Proxy.Consumer.TestURL != "https://na.finalfantasyxiv.com/lodestone/" {
 		t.Errorf("expected consumer test_url to default to the Lodestone URL, got %q", cfg.Proxy.Consumer.TestURL)
 	}

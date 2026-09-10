@@ -131,7 +131,7 @@ func TestPublishIDSweepCmd_FlagsRegistered(t *testing.T) {
 	flags := publishIDSweepCmd.Flags()
 	for _, name := range []string{
 		"auto", "batch-size", "from", "to", "count", "chunk-size", "source",
-		"fill-gaps", "daemon", "daemon-interval", "max-gaps",
+		"fill-gaps", "daemon", "daemon-interval", "max-gaps", "min-id",
 	} {
 		if flags.Lookup(name) == nil {
 			t.Errorf("flag --%s not registered on publish id-sweep", name)
