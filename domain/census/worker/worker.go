@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,33 @@ import (
 	proxydomain "github.com/mihaiflorentin88/ffxiv-census/domain/proxy"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
+
+// jobIdentity carries the identifying payload fields for lifecycle logs so
+// any job can be traced by character id or id range regardless of type.
+type jobIdentity struct {
+	From        uint32 `json:"from"`
+	To          uint32 `json:"to"`
+	CharacterID uint32 `json:"character_id"`
+}
+
+// jobAttrs extracts identifying payload fields for log records. Unknown or
+// malformed payloads log without identity attributes.
+func jobAttrs(payload []byte) []any {
+	var id jobIdentity
+	if err := json.Unmarshal(payload, &id); err != nil {
+		return nil
+	}
+	var attrs []any
+	if id.From != 0 || id.To != 0 {
+		attrs = append(attrs,
+			slog.Uint64("from", uint64(id.From)),
+			slog.Uint64("to", uint64(id.To)))
+	}
+	if id.CharacterID != 0 {
+		attrs = append(attrs, slog.Uint64("character_id", uint64(id.CharacterID)))
+	}
+	return attrs
+}
 
 // Worker consumes jobs from configured event types and dispatches them to registered
 // handlers using push-based consumption from the queue.
@@ -122,11 +150,13 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		}()
 
 		if err != nil {
-			w.logger.WarnContext(
+			w.logger.ErrorContext(
 				processCtx, "worker.job_retry",
-				slog.String("event_type", job.Type),
-				slog.Duration("duration", time.Since(start)),
-				slog.Any("error", err),
+				append([]any{
+					slog.String("event_type", job.Type),
+					slog.Duration("duration", time.Since(start)),
+					slog.Any("error", err),
+				}, jobAttrs(job.Payload)...)...,
 			)
 			if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "rate limit") {
 				select {
@@ -152,9 +182,11 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 
 		w.logger.InfoContext(
 			processCtx, "worker.job_done",
-			slog.String("event_type", job.Type),
-			slog.Duration("duration", time.Since(start)),
-			slog.Int("chained", len(next)),
+			append([]any{
+				slog.String("event_type", job.Type),
+				slog.Duration("duration", time.Since(start)),
+				slog.Int("chained", len(next)),
+			}, jobAttrs(job.Payload)...)...,
 		)
 
 		return nil
@@ -620,11 +652,13 @@ func (w *Worker) proxyWorkerLoop(
 				}()
 
 				if retryErr != nil {
-					w.logger.WarnContext(
+					w.logger.ErrorContext(
 						ctx, "worker.job_retry_failed",
-						slog.String("event_type", job.Type),
-						slog.Duration("duration", time.Since(retryStart)),
-						slog.Any("error", retryErr),
+						append([]any{
+							slog.String("event_type", job.Type),
+							slog.Duration("duration", time.Since(retryStart)),
+							slog.Any("error", retryErr),
+						}, jobAttrs(job.Payload)...)...,
 					)
 					// A typed general failure on the replacement is persisted
 					// too; either way the claim is given up before the
@@ -659,9 +693,11 @@ func (w *Worker) proxyWorkerLoop(
 				}
 				w.logger.InfoContext(
 					ctx, "worker.job_done",
-					slog.String("event_type", job.Type),
-					slog.Duration("duration", time.Since(retryStart)),
-					slog.Int("chained", len(retryNext)),
+					append([]any{
+						slog.String("event_type", job.Type),
+						slog.Duration("duration", time.Since(retryStart)),
+						slog.Int("chained", len(retryNext)),
+					}, jobAttrs(job.Payload)...)...,
 				)
 				return nil
 			}
@@ -683,9 +719,11 @@ func (w *Worker) proxyWorkerLoop(
 
 		w.logger.InfoContext(
 			ctx, "worker.job_done",
-			slog.String("event_type", job.Type),
-			slog.Duration("duration", time.Since(start)),
-			slog.Int("chained", len(next)),
+			append([]any{
+				slog.String("event_type", job.Type),
+				slog.Duration("duration", time.Since(start)),
+				slog.Int("chained", len(next)),
+			}, jobAttrs(job.Payload)...)...,
 		)
 
 		return nil

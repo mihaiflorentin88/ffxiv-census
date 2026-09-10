@@ -108,6 +108,11 @@ func (q *Queue) declareTopology(ch *amqp.Channel) error {
 		if _, err := ch.QueueDeclare(failedQueue, true, false, false, false, failedArgs); err != nil {
 			return fmt.Errorf("declare queue %s: %w", failedQueue, err)
 		}
+
+		deadQueue := mainQueue + ".dead"
+		if _, err := ch.QueueDeclare(deadQueue, true, false, false, false, nil); err != nil {
+			return fmt.Errorf("declare queue %s: %w", deadQueue, err)
+		}
 	}
 
 	return nil
@@ -300,18 +305,28 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 		eventType := msg.RoutingKey
 
 		if attempts >= maxFailedAttempts {
-			q.logger.WarnContext(
-				processCtx, "rabbitmq.failed.permanent_discard",
+			q.logger.ErrorContext(
+				processCtx, "rabbitmq.failed.dead_letter",
 				slog.String("event_type", eventType),
 				slog.Int("attempts", attempts),
 			)
+			// Never silently drop a delivery: park the body on the
+			// durable dead queue so it stays inspectable and recoverable.
+			if err := q.publishToFailed("census."+eventType+".dead", eventType, msg.Body, msg.Headers, attempts, 0); err != nil {
+				q.logger.ErrorContext(
+					processCtx, "rabbitmq.failed.dead_letter_error",
+					slog.String("event_type", eventType),
+					slog.Int("attempts", attempts),
+					slog.Any("error", err),
+				)
+				_ = msg.Nack(false, true)
+				continue
+			}
 			_ = msg.Ack(false)
 			continue
 		}
-
 		newHeaders := copyHeaders(msg.Headers, attempts)
 		pubErr := ch.PublishWithContext(processCtx, exchangeMain, eventType, false, false, amqp.Publishing{
-			ContentType:  "application/json",
 			DeliveryMode: amqp.Persistent,
 			Body:         msg.Body,
 			Headers:      newHeaders,
@@ -406,15 +421,50 @@ func failureAction(attempts, maxAttempts int) (backoffSec int, permanent bool) {
 	return backoff, false
 }
 
-// handleFailure publishes the failed message to the per-event-type failed queue.
+// republishMain republishes a message body to its main queue with the
+// given headers and waits for broker confirmation.
+func (q *Queue) republishMain(eventType string, body []byte, headers amqp.Table) error {
+	return q.ch.PublishWithContext(context.Background(), "", "census."+eventType, false, false, amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent,
+		Body:         body,
+		Headers:      headers,
+	})
+}
+
+// handleFailure requeues a failed delivery: challenge rejections go
+// straight back to the main queue without consuming the attempt budget,
+// everything else enters the per-event-type failed queue with the
+// attempt-incremented backoff ladder.
 func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr error) {
-	attempts := getAttempts(msg.Headers) + 1
 	eventType := msg.RoutingKey
+
+	// A Cloudflare challenge rejected this delivery's identity, not the
+	// message itself. Requeue straight onto the main queue with the
+	// attempt counter untouched: the challenged proxy's destination
+	// cooldown (floor 60s) keeps it out of handout, so the redelivery
+	// lands on a clean identity. Burning the attempt budget here would
+	// let a challenge storm park or discard otherwise deliverable jobs.
+	if contract.IsChallenge(handlerErr) {
+		q.logger.WarnContext(
+			ctx, "rabbitmq.challenge_requeue",
+			slog.String("event_type", eventType),
+			slog.Int("attempts", getAttempts(msg.Headers)),
+			slog.Any("error", handlerErr),
+		)
+		if err := q.republishMain(eventType, msg.Body, msg.Headers); err != nil {
+			q.logger.ErrorContext(ctx, "rabbitmq.challenge_requeue_error", slog.Any("error", err))
+		}
+		_ = msg.Ack(false)
+		return
+	}
+
+	attempts := getAttempts(msg.Headers) + 1
 	failedQueue := "census." + eventType + ".failed"
 
 	backoff, permanent := failureAction(attempts, q.maxAttempts)
 	if permanent {
-		q.logger.WarnContext(
+		q.logger.ErrorContext(
 			ctx, "rabbitmq.permanent_failure",
 			slog.String("event_type", eventType),
 			slog.Int("attempts", attempts),
@@ -424,7 +474,7 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr
 			q.logger.ErrorContext(ctx, "rabbitmq.failed_publish_error", slog.Any("error", err))
 		}
 	} else {
-		q.logger.WarnContext(
+		q.logger.ErrorContext(
 			ctx, "rabbitmq.retry",
 			slog.String("event_type", eventType),
 			slog.Int("attempts", attempts),

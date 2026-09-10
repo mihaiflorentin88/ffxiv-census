@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -43,10 +44,23 @@ func (k ProxyCheckKind) String() string {
 // bounded diagnostic label for logs only; it is never parsed for decisions.
 // A nil *ProxyCheckError never means success — check the error value itself.
 type ProxyCheckError struct {
-	Kind       ProxyCheckKind
-	Reason     string
+	Kind   ProxyCheckKind
+	Reason string
+	// Challenge marks a Cloudflare challenge served to the delivery's
+	// identity (HTTP 202 interstitial or a 403 block page). Challenges are
+	// destination-side: the queue republishes them without consuming the
+	// message's attempt budget.
+	Challenge  bool
 	RetryAfter time.Duration
 	Err        error
+}
+
+// IsChallenge reports whether the error chain carries a Cloudflare
+// challenge rejection. Use it to keep challenge storms from parking or
+// discarding otherwise deliverable messages.
+func IsChallenge(err error) bool {
+	var checkErr *ProxyCheckError
+	return errors.As(err, &checkErr) && checkErr.Challenge
 }
 
 // Error returns a bounded diagnostic string for logs. Decision code must use

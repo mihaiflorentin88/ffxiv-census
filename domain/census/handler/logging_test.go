@@ -130,11 +130,12 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	}
 }
 
-func TestSuccessfulHandlersAreQuietAtInfo(t *testing.T) {
-	// At Info level, successful handler runs should emit no Debug logs.
+func TestSuccessfulHandlersTraceAtInfo(t *testing.T) {
+	// At Info level, successful handler runs trace the range lifecycle and
+	// every discovered character; not-found probes stay Debug-only.
 	ls := mocklodestone.NewFake()
 	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
-		return &contract.CharacterProfile{ID: id, Name: "Quiet Hero", World: "Ultros", Datacenter: "Primal"}, nil
+		return &contract.CharacterProfile{ID: id, Name: "Quiet Hero", World: "Ultros", Datacenter: "Primal", Race: "Hyur", Tribe: "Midlander", Gender: 1}, nil
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 
@@ -147,10 +148,14 @@ func TestSuccessfulHandlersAreQuietAtInfo(t *testing.T) {
 		t.Fatalf("Handle: %v", err)
 	}
 	logs := buf.String()
-	// At Info level, no Debug messages should appear.
-	for _, notWant := range []string{"handler.id_sweep.start", "handler.id_sweep.probe", "handler.id_sweep.discovered", "handler.id_sweep.done"} {
+	for _, want := range []string{"handler.id_sweep.start", "handler.id_sweep.discovered", "handler.id_sweep.done", "character_id=1"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("Info logger should emit %q:\n%s", want, logs)
+		}
+	}
+	for _, notWant := range []string{"handler.id_sweep.probe"} {
 		if strings.Contains(logs, notWant) {
-			t.Errorf("Info logger should not emit %q:\n%s", notWant, logs)
+			t.Errorf("Info logger should not emit %q for a found character:\n%s", notWant, logs)
 		}
 	}
 }

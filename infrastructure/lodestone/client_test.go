@@ -738,3 +738,60 @@ func TestDoRequest_202ChallengeIsTypedCheckTargetWithoutRetry(t *testing.T) {
 		t.Fatal("a target 202 must not be classified as a proxy dial failure")
 	}
 }
+
+func TestDoRequest_403CloudflareChallengeIsTypedCheckTargetWithoutRetry(t *testing.T) {
+	attempts := 0
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Cf-Mitigated": []string{"challenge"}},
+			Body:       io.NopCloser(strings.NewReader("<html>Just a moment...</html>")),
+		}, nil
+	}))
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckTarget {
+		t.Fatalf("expected typed CheckTarget error for a Cloudflare 403 challenge, got %v", err)
+	}
+	if !checkErr.Challenge {
+		t.Fatal("the typed error must flag the challenge so the queue skips the attempt budget")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected exactly 1 attempt, got %d", attempts)
+	}
+}
+
+func TestDoRequest_403ChallengeBodyMarkerIsTypedCheckTarget(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Body:       io.NopCloser(strings.NewReader("<html><title>Attention Required! | Cloudflare</title></html>")),
+		}, nil
+	}))
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckTarget {
+		t.Fatalf("expected typed CheckTarget error for a challenge-body 403, got %v", err)
+	}
+}
+
+func TestDoRequest_Genuine403PassesThroughToCaller(t *testing.T) {
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Body:       io.NopCloser(strings.NewReader("<html>Lodestone error: access restricted.</html>")),
+		}, nil
+	}))
+	body, status, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	if err != nil {
+		t.Fatalf("expected genuine 403 to pass through, got %v", err)
+	}
+	if status != http.StatusForbidden || body == nil {
+		t.Fatalf("expected status 403 with body, got status %d body %v", status, body)
+	}
+	var checkErr *contract.ProxyCheckError
+	if errors.As(err, &checkErr) {
+		t.Fatal("a genuine Lodestone 403 must not be typed as a proxy check error")
+	}
+}

@@ -48,7 +48,7 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	knownMilestones, err := h.census.ListCharacterMilestones(ctx, p.CharacterID)
 	if err != nil {
 		// Log warning but continue — DB check is optimization, not requirement.
-		h.logger.WarnContext(ctx, "handler.achievement_census.milestone_query_failed", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
+		h.logger.ErrorContext(ctx, "handler.achievement_census.milestone_query_failed", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 	}
 
 	// Get milestone IDs from config.
@@ -62,7 +62,7 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	start := time.Now()
 	summary, err := h.lodestone.FetchAchievements(ctx, p.CharacterID, milestoneIDs)
 	if err != nil {
-		h.logger.WarnContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
+		h.logger.ErrorContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 		return nil, fmt.Errorf("achievement-census fetch %d: %w", p.CharacterID, err)
 	}
 

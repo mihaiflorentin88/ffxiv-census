@@ -194,6 +194,36 @@ func newProxyTransport(proxyURL string) (*http.Transport, error) {
 	return httpclient.NewProxyTransport(proxyURL, requestTimeout)
 }
 
+// isCloudflareChallenge reports whether the response is a Cloudflare block
+// rather than a genuine Lodestone response. Cloudflare flags active
+// challenges with the Cf-Mitigated header and serves HTML interstitials or
+// block pages whose markers never appear on Lodestone error pages.
+func isCloudflareChallenge(resp *http.Response, body []byte) bool {
+	if strings.EqualFold(resp.Header.Get("Cf-Mitigated"), "challenge") {
+		return true
+	}
+	if len(body) == 0 {
+		return false
+	}
+	sniff := body
+	if len(sniff) > 64*1024 {
+		sniff = sniff[:64*1024]
+	}
+	lower := strings.ToLower(string(sniff))
+	for _, marker := range []string{
+		"just a moment",
+		"attention required",
+		"cf-error-details",
+		"error 1020",
+		"cloudflare",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // doRequest executes an HTTP GET with rate limiting, retries, and backoff.
 func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, error) {
 	var lastErr error
@@ -283,14 +313,33 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 		}
 
 		if resp.StatusCode == http.StatusAccepted {
-			// A 202 is a Cloudflare challenge interstitial served to this
-			// identity. Type it as a target rejection so the worker applies
-			// the proxy's destination cooldown (floor 60s) and the queue
-			// redelivers on a different identity — no in-ladder retry, a
-			// challenge will not clear inside the backoff ladder.
 			lastErr = &contract.ProxyCheckError{
 				Kind:       contract.CheckTarget,
 				Reason:     "status 202",
+				Challenge:  true,
+				RetryAfter: httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+				Err:        fmt.Errorf("HTTP %d from %s", resp.StatusCode, url),
+			}
+			c.logger.WarnContext(ctx, "lodestone.challenge",
+				slog.String("url", url),
+				slog.Int("status", resp.StatusCode))
+			return nil, resp.StatusCode, fmt.Errorf("request %s: %w", url, lastErr)
+		}
+
+		if resp.StatusCode == http.StatusForbidden && isCloudflareChallenge(resp, body) {
+			// Cloudflare also blocks identities with 403 interstitials.
+			// Treating that as the Lodestone "restricted" outcome would
+			// silently drop a real character forever, so it must surface
+			// as a target rejection like the 202 challenge: the worker
+			// cools the destination down and the queue redelivers on
+			// another identity. A genuine Lodestone 403 (restricted
+			// profile, private achievements) carries none of the
+			// Cloudflare markers and keeps its conclusive handling in
+			// the callers.
+			lastErr = &contract.ProxyCheckError{
+				Kind:       contract.CheckTarget,
+				Reason:     "status 403 challenge",
+				Challenge:  true,
 				RetryAfter: httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 				Err:        fmt.Errorf("HTTP %d from %s", resp.StatusCode, url),
 			}
@@ -313,26 +362,31 @@ func (c *CustomClient) FetchCharacter(ctx context.Context, id uint32) (*contract
 	start := time.Now()
 	charURL := fmt.Sprintf("https://na.finalfantasyxiv.com/lodestone/character/%d/", id)
 
-	c.logger.DebugContext(ctx, "lodestone.fetch_character.attempt",
+	c.logger.InfoContext(ctx, "lodestone.fetch_character.attempt",
 		slog.Uint64("character_id", uint64(id)),
 		slog.String("proxy", c.proxyURL))
 
 	body, statusCode, err := c.doRequest(ctx, charURL)
 	if err != nil {
-		c.logger.WarnContext(ctx, "lodestone.fetch_character.error",
+		c.logger.ErrorContext(ctx, "lodestone.fetch_character.error",
 			slog.Uint64("character_id", uint64(id)),
+			slog.Int("status", statusCode),
 			slog.Any("error", err))
 		return nil, fmt.Errorf("fetch character %d: %w", id, err)
 	}
 
 	if statusCode == http.StatusNotFound || statusCode == http.StatusForbidden {
-		c.logger.DebugContext(ctx, "lodestone.fetch_character.not_found",
+		c.logger.InfoContext(ctx, "lodestone.fetch_character.not_found",
 			slog.Uint64("character_id", uint64(id)),
 			slog.Int("status", statusCode))
 		return nil, contract.ErrCharacterNotFound
 	}
 
 	if statusCode != http.StatusOK {
+		c.logger.ErrorContext(ctx, "lodestone.fetch_character.error",
+			slog.Uint64("character_id", uint64(id)),
+			slog.Int("status", statusCode),
+			slog.Any("error", fmt.Errorf("unexpected status %d", statusCode)))
 		return nil, fmt.Errorf("fetch character %d: HTTP %d", id, statusCode)
 	}
 
@@ -343,8 +397,9 @@ func (c *CustomClient) FetchCharacter(ctx context.Context, id uint32) (*contract
 	}
 
 	duration := time.Since(start)
-	c.logger.DebugContext(ctx, "lodestone.fetch_character.success",
+	c.logger.InfoContext(ctx, "lodestone.fetch_character.success",
 		slog.Uint64("character_id", uint64(id)),
+		slog.Int("status", statusCode),
 		slog.String("name", profile.Name),
 		slog.String("world", profile.World),
 		slog.Duration("duration", duration))
@@ -402,7 +457,7 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 			results = append(results, result)
 		} else {
 			// Sequential dependency — no point checking further.
-			c.logger.DebugContext(ctx, "lodestone.check_achievement.stopping",
+			c.logger.InfoContext(ctx, "lodestone.check_achievement.stopping",
 				slog.Uint64("character_id", uint64(charID)),
 				slog.Uint64("missing_id", uint64(id)),
 				slog.String("missing_name", result.Name),
@@ -475,7 +530,7 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 	start := time.Now()
 	detailURL := fmt.Sprintf("https://na.finalfantasyxiv.com/lodestone/character/%d/achievement/detail/%d/", charID, achievementID)
 
-	c.logger.DebugContext(ctx, "lodestone.check_achievement.attempt",
+	c.logger.InfoContext(ctx, "lodestone.check_achievement.attempt",
 		slog.Uint64("character_id", uint64(charID)),
 		slog.Uint64("achievement_id", uint64(achievementID)))
 
@@ -517,7 +572,7 @@ func (c *CustomClient) checkSingleAchievement(ctx context.Context, charID uint32
 		}
 		result.Earned = true
 		result.EarnedAt = earnedAt.UTC()
-		c.logger.DebugContext(ctx, "lodestone.check_achievement.earned",
+		c.logger.InfoContext(ctx, "lodestone.check_achievement.earned",
 			slog.Uint64("character_id", uint64(charID)),
 			slog.Uint64("achievement_id", uint64(achievementID)),
 			slog.String("achievement_name", result.Name),
