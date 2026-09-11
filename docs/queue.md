@@ -47,8 +47,11 @@ Publish(ctx, job)
                                 │           census.<type>.failed with TTL, Ack
                                 │
                               census.<type>.failed
-                                ├─ TTL message: expires → dead-letter → census.<type>
-                                │   (retry worker also republishes on sight)
+                                ├─ retry worker holds the delivery until its
+                                │   x-not-before-ms instant (the TTL ladder),
+                                │   then republishes → census.<type>
+                                │   (READY messages behind it expire via TTL
+                                │   and dead-letter to census.<type> instead)
                                 └─ attempts >= max_attempts → census.<type>.dead
 ```
 

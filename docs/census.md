@@ -26,7 +26,7 @@ One row per Lodestone character. `id` is the Lodestone character ID (externally 
 
 **Discovery:** the `id-sweep` handler ingests a discovered character fully (profile + jobs) in one `UpsertCharacter` call. `last_census_at` is set by the upsert; `latest_achievement_at` stays NULL until the achievement census runs.
 
-**`ListStale` behaviour:** returns up to `limit` characters ordered by `last_census_at ASC NULLS FIRST, id ASC`. A zero `cutoff` disables the age predicate — all non-deleted characters are eligible, ordered oldest `last_census_at` first (NULL first). A positive `cutoff` filters to rows whose `last_census_at` is before the cutoff (NULL `last_census_at` counts as stale in both modes).
+**`ListStale` behaviour:** returns up to `limit` characters ordered by `last_census_at ASC NULLS FIRST, id ASC`. A zero `cutoff` disables the age predicate — **all characters are eligible, including deleted ones**; a deleted character that reappears on the Lodestone is therefore re-probed and `Upsert` clears its `deleted_at` (resurrection self-healing). A positive `cutoff` filters to rows whose `last_census_at` is before the cutoff (NULL `last_census_at` counts as stale in both modes).
 
 ### `character_jobs`
 
