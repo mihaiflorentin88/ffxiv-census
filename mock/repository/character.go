@@ -16,33 +16,36 @@ import (
 // deleted_at clearing, jobs replacement, stale ordering) so handler tests don't
 // drift from production behavior.
 type CharacterRepository struct {
-	mu                      sync.Mutex
-	characters              map[uint32]contract.CharacterRecord
-	jobs                    map[uint32][]contract.ClassJobRecord
-	gear                    map[uint32][]contract.CharacterGearRecord
-	UpsertErr               error
-	UpsertGearErr           error
-	GetGearErr              error
-	FindIDGapsErr           error
-	GetErr                  error
-	MarkDeletedErr          error
-	UpdateErr               error
-	ListStaleErr            error
-	ListErr                 error
-	StreamErr               error
-	CountErr                error
-	CountActiveErr          error
-	BreakdownErr            error
-	SummaryCountsErr        error
-	MultiBreakdownErr       error
-	DemographicBreakdownErr error
-	NewPerDayErr            error
-	MaxIDErr                error
-	IDSweepCursorErr        error
-	AdvanceIDSweepCursorErr error
-	idSweepCursor           uint32
-	UpsertCalls             int
-	UpsertGearCalls         int
+	mu                       sync.Mutex
+	characters               map[uint32]contract.CharacterRecord
+	jobs                     map[uint32][]contract.ClassJobRecord
+	gear                     map[uint32][]contract.CharacterGearRecord
+	UpsertErr                error
+	UpsertGearErr            error
+	GetGearErr               error
+	FindIDGapsAfterErr       error
+	FillGapsCursorErr        error
+	AdvanceFillGapsCursorErr error
+	GetErr                   error
+	MarkDeletedErr           error
+	UpdateErr                error
+	ListStaleErr             error
+	ListErr                  error
+	StreamErr                error
+	CountErr                 error
+	CountActiveErr           error
+	BreakdownErr             error
+	SummaryCountsErr         error
+	MultiBreakdownErr        error
+	DemographicBreakdownErr  error
+	NewPerDayErr             error
+	MaxIDErr                 error
+	IDSweepCursorErr         error
+	AdvanceIDSweepCursorErr  error
+	idSweepCursor            uint32
+	fillGapsCursor           uint32
+	UpsertCalls              int
+	UpsertGearCalls          int
 }
 
 func NewCharacterFake() *CharacterRepository {
@@ -100,42 +103,75 @@ func (f *CharacterRepository) GetGear(ctx context.Context, id uint32) ([]contrac
 	return cloned, nil
 }
 
-func (f *CharacterRepository) FindIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
+func (f *CharacterRepository) FindIDGapsAfter(ctx context.Context, afterID, maxID uint32, limit int) ([][2]uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.FindIDGapsErr != nil {
-		return nil, f.FindIDGapsErr
+	if f.FindIDGapsAfterErr != nil {
+		return nil, f.FindIDGapsAfterErr
 	}
-	if limit <= 0 || maxID == 0 {
+	if maxID == 0 {
 		return nil, nil
 	}
-	var validIDs []uint32
-	for id, rec := range f.characters {
-		if rec.DeletedAt == nil && id <= maxID {
+	if limit <= 0 {
+		limit = 100
+	}
+	validIDs := []uint32{0}
+	for id := range f.characters {
+		if id <= maxID {
 			validIDs = append(validIDs, id)
 		}
-	}
-	if len(validIDs) == 0 {
-		return nil, nil
 	}
 	sort.Slice(validIDs, func(i, j int) bool { return validIDs[i] < validIDs[j] })
 
 	var gaps [][2]uint32
-	if validIDs[0] > 1 {
-		gaps = append(gaps, [2]uint32{1, validIDs[0] - 1})
-		if len(gaps) >= limit {
-			return gaps, nil
+	minStart := uint64(afterID) + 1
+	for i := range validIDs {
+		next := uint64(maxID + 1)
+		if i+1 < len(validIDs) {
+			next = uint64(validIDs[i+1])
 		}
-	}
-	for i := range len(validIDs) - 1 {
-		if validIDs[i+1] > validIDs[i]+1 {
-			gaps = append(gaps, [2]uint32{validIDs[i] + 1, validIDs[i+1] - 1})
-			if len(gaps) >= limit {
-				return gaps, nil
-			}
+		if next <= uint64(validIDs[i])+1 {
+			continue
+		}
+		start := uint64(validIDs[i]) + 1
+		end := next - 1
+		if start < minStart {
+			start = minStart
+		}
+		if start > end {
+			continue
+		}
+		gaps = append(gaps, [2]uint32{uint32(start), uint32(end)})
+		if len(gaps) >= limit {
+			break
 		}
 	}
 	return gaps, nil
+}
+
+func (f *CharacterRepository) FillGapsCursor(ctx context.Context) (uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FillGapsCursorErr != nil {
+		return 0, f.FillGapsCursorErr
+	}
+	return f.fillGapsCursor, nil
+}
+
+func (f *CharacterRepository) AdvanceFillGapsCursor(ctx context.Context, expected, next uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AdvanceFillGapsCursorErr != nil {
+		return f.AdvanceFillGapsCursorErr
+	}
+	if f.fillGapsCursor == expected {
+		f.fillGapsCursor = next
+		return nil
+	}
+	if f.fillGapsCursor >= next {
+		return nil
+	}
+	return fmt.Errorf("fill gaps cursor changed concurrently: expected %d, current %d, next %d", expected, f.fillGapsCursor, next)
 }
 
 func (f *CharacterRepository) Get(ctx context.Context, id uint32) (*contract.CharacterRecord, error) {

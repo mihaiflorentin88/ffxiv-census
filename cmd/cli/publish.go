@@ -129,6 +129,78 @@ func publishAutoIDSweep(ctx context.Context, cursor idSweepCursor, q contract.Qu
 	return nil
 }
 
+// fillGapsScanner is the repository surface the fill-gaps mode needs.
+type fillGapsScanner interface {
+	MaxID(ctx context.Context) (uint32, error)
+	FindIDGapsAfter(ctx context.Context, afterID, maxID uint32, limit int) ([][2]uint32, error)
+	FillGapsCursor(ctx context.Context) (uint32, error)
+	AdvanceFillGapsCursor(ctx context.Context, expected, next uint32) error
+}
+
+// publishFillGapsIDSweep publishes at most count id-sweep jobs covering the
+// oldest unscanned gaps after the persistent fill-gaps cursor. With minID > 0
+// it runs a one-shot manual scan from minID instead and never touches the
+// cursor. When the cursor reaches MaxID it wraps to 0 so the sweep restarts
+// from the lowest gaps on the next run.
+func publishFillGapsIDSweep(ctx context.Context, repo fillGapsScanner, q contract.Queue, logger contract.Logger, count, chunkSize uint32, source string, minID uint32) error {
+	if count == 0 {
+		return fmt.Errorf("--count must be > 0 in --fill-gaps mode")
+	}
+
+	maxID, err := repo.MaxID(ctx)
+	if err != nil {
+		return fmt.Errorf("lookup max character id for gap fill: %w", err)
+	}
+	if maxID == 0 {
+		logger.InfoContext(ctx, "publish.id_sweep_gaps.none_found", slog.Uint64("max_id", 0))
+		return nil
+	}
+
+	cursorMode := minID == 0
+	after := minID
+	var cursorBefore uint32
+	if cursorMode {
+		c, err := repo.FillGapsCursor(ctx)
+		if err != nil {
+			return fmt.Errorf("lookup fill gaps cursor: %w", err)
+		}
+		if c >= maxID {
+			if err := repo.AdvanceFillGapsCursor(ctx, c, 0); err != nil {
+				return fmt.Errorf("wrap fill gaps cursor: %w", err)
+			}
+			c = 0
+		}
+		cursorBefore = c
+		after = c
+	}
+
+	gaps, err := repo.FindIDGapsAfter(ctx, after, maxID, int(count))
+	if err != nil {
+		return fmt.Errorf("find id gaps: %w", err)
+	}
+	if len(gaps) == 0 {
+		logger.InfoContext(ctx, "publish.id_sweep_gaps.none_found", slog.Uint64("max_id", uint64(maxID)))
+		return nil
+	}
+
+	jobs := buildGapSweepJobs(gaps, chunkSize, source)
+	if uint32(len(jobs)) > count {
+		jobs = jobs[:count]
+	}
+
+	published, pubErr := publishAll(q, logger, ctx, jobs)
+	if cursorMode && published > 0 {
+		var last handler.IDSweepPayload
+		if err := json.Unmarshal(jobs[published-1].Payload, &last); err != nil {
+			return fmt.Errorf("decode last published fill-gaps job: %w", err)
+		}
+		if err := repo.AdvanceFillGapsCursor(ctx, cursorBefore, last.To); err != nil {
+			return fmt.Errorf("advance fill gaps cursor to %d: %w", last.To, err)
+		}
+	}
+	return pubErr
+}
+
 var publishIDSweepCmd = &cobra.Command{
 	Use:   "id-sweep",
 	Short: "Publish id-sweep jobs covering an ID range (chunked, auto-discovery, gap-fill, daemon)",
@@ -146,7 +218,6 @@ var publishIDSweepCmd = &cobra.Command{
 		fillGaps, _ := cmd.Flags().GetBool("fill-gaps")
 		daemon, _ := cmd.Flags().GetBool("daemon")
 		daemonInterval, _ := cmd.Flags().GetDuration("daemon-interval")
-		maxGaps, _ := cmd.Flags().GetInt("max-gaps")
 		minID, _ := cmd.Flags().GetUint32("min-id")
 		if daemon && daemonInterval <= 0 {
 			return fmt.Errorf("invalid --daemon-interval %v: must be positive", daemonInterval)
@@ -175,27 +246,7 @@ var publishIDSweepCmd = &cobra.Command{
 		publishBatch := func() error {
 			var jobs []contract.QueueJob
 			if fillGaps {
-				maxID, err := repo.MaxID(cmd.Context())
-				if err != nil {
-					return fmt.Errorf("lookup max character id for gap fill: %w", err)
-				}
-				if maxID == 0 {
-					actualFrom, actualTo, err := computeIDSweepRange(0, 0, count, true, func() (uint32, error) { return 0, nil })
-					if err != nil {
-						return err
-					}
-					jobs = buildIDSweepJobs(actualFrom, actualTo, chunkSize, source)
-				} else {
-					gaps, err := repo.FindIDGaps(cmd.Context(), minID, maxID, maxGaps)
-					if err != nil {
-						return fmt.Errorf("find id gaps: %w", err)
-					}
-					if len(gaps) == 0 {
-						logger.InfoContext(cmd.Context(), "publish.id_sweep_gaps.none_found", slog.Uint64("max_id", uint64(maxID)))
-						return nil
-					}
-					jobs = buildGapSweepJobs(gaps, chunkSize, source)
-				}
+				return publishFillGapsIDSweep(cmd.Context(), repo, q, logger, count, chunkSize, source, minID)
 			} else if auto || (from == 0 && to == 0) {
 				return publishAutoIDSweep(cmd.Context(), repo, q, logger, count, chunkSize, source)
 			} else {
@@ -388,8 +439,7 @@ func init() {
 	publishIDSweepCmd.Flags().Bool("fill-gaps", false, "scan unscanned holes between 1 and MaxID")
 	publishIDSweepCmd.Flags().Bool("daemon", false, "run continuous auto-sweep loop")
 	publishIDSweepCmd.Flags().Duration("daemon-interval", 30*time.Second, "tick interval for daemon checks")
-	publishIDSweepCmd.Flags().Int("max-gaps", 50, "max gap ranges to query per run in --fill-gaps mode")
-	publishIDSweepCmd.Flags().Uint32("min-id", 0, "lower bound for --fill-gaps gap scanning (0 = scan from the first character)")
+	publishIDSweepCmd.Flags().Uint32("min-id", 0, "manual gap scan start for --fill-gaps (skips the persistent cursor)")
 	publishCmd.AddCommand(publishCharacterCensusCmd)
 	publishCharacterCensusCmd.Flags().Duration("older-than", 0, "positive duration filters by age; zero or negative selects oldest entries without age cutoff")
 	publishCharacterCensusCmd.Flags().Int("limit", 1000, "max characters to enqueue")

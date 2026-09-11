@@ -168,47 +168,105 @@ func (r *CharacterRepository) GetGear(ctx context.Context, id uint32) ([]contrac
 	return out, rows.Err()
 }
 
-func (r *CharacterRepository) FindIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
-	if maxID <= 1 {
+// FindIDGapsAfter returns missing/unscanned ID ranges strictly after afterID
+// and up to maxID, ordered ascending. Gaps-and-islands over the stored IDs
+// (seeded at 0 so the region below the lowest character is scannable); a gap
+// straddling afterID is trimmed to its portion above afterID.
+func (r *CharacterRepository) FindIDGapsAfter(ctx context.Context, afterID, maxID uint32, limit int) ([][2]uint32, error) {
+	if maxID == 0 {
 		return nil, nil
-	}
-	if minID < 1 {
-		minID = 1
 	}
 	if limit <= 0 {
 		limit = 100
 	}
 
 	query := `
-		SELECT c1.id + 1 AS gap_start,
-		       (SELECT MIN(c3.id) - 1 FROM characters c3 WHERE c3.id > c1.id) AS gap_end
-		  FROM characters c1
-		 WHERE NOT EXISTS (SELECT 1 FROM characters c2 WHERE c2.id = c1.id + 1)
-		   AND c1.id >= $3
-		   AND c1.id < $1
-		 ORDER BY c1.id ASC
-		 LIMIT $2`
+		WITH anchored AS (
+			SELECT id FROM (SELECT 0 AS id UNION SELECT id FROM characters WHERE id <= $1) s
+			ORDER BY id
+		)
+		SELECT id + 1 AS gap_start,
+		       LEAST(COALESCE(LEAD(id) OVER (ORDER BY id) - 1, $1), $1) AS gap_end
+		  FROM anchored`
 
-	rows, err := r.driver.FetchMany(ctx, query, maxID, limit, minID)
+	rows, err := r.driver.FetchMany(ctx, query, maxID)
 	if err != nil {
-		return nil, fmt.Errorf("find id gaps: %w", err)
+		return nil, fmt.Errorf("find id gaps after %d: %w", afterID, err)
 	}
 	defer rows.Close()
 
+	minStart := uint64(afterID) + 1
 	var gaps [][2]uint32
 	for rows.Next() {
 		var start, end int64
 		if err := rows.Scan(&start, &end); err != nil {
 			return nil, fmt.Errorf("scan id gap: %w", err)
 		}
-		if start <= end && start <= int64(maxID) {
-			if end > int64(maxID) {
-				end = int64(maxID)
-			}
-			gaps = append(gaps, [2]uint32{uint32(start), uint32(end)})
+		s := uint64(start)
+		if s < minStart {
+			s = minStart
+		}
+		if s > uint64(end) {
+			continue // empty gap, or empty after cursor trim
+		}
+		gaps = append(gaps, [2]uint32{uint32(s), uint32(end)})
+		if len(gaps) >= limit {
+			break
 		}
 	}
 	return gaps, rows.Err()
+}
+
+// FillGapsCursor returns the last ID queued by the fill-gaps scanner. On
+// first use the state row is created with 0 (nothing scanned yet).
+func (r *CharacterRepository) FillGapsCursor(ctx context.Context) (uint32, error) {
+	if _, err := r.driver.Execute(ctx, `
+		INSERT INTO fill_gaps_state (singleton, last_queued_id)
+		SELECT TRUE, 0
+		ON CONFLICT (singleton) DO NOTHING`); err != nil {
+		return 0, fmt.Errorf("initialize fill gaps cursor: %w", err)
+	}
+	row, err := r.driver.FetchOne(ctx, `SELECT last_queued_id FROM fill_gaps_state WHERE singleton = TRUE`)
+	if err != nil {
+		return 0, fmt.Errorf("fetch fill gaps cursor: %w", err)
+	}
+	var last int64
+	if err := row.Scan(&last); err != nil {
+		return 0, fmt.Errorf("scan fill gaps cursor: %w", err)
+	}
+	if last < 0 || last > int64(^uint32(0)) {
+		return 0, fmt.Errorf("fill gaps cursor out of range: %d", last)
+	}
+	return uint32(last), nil
+}
+
+// AdvanceFillGapsCursor swaps the cursor from expected to next via a
+// compare-and-set. A stale advance is idempotent when the stored cursor is
+// already at or beyond next (never rewinds), and errors otherwise. next = 0
+// is the legitimate wrap-around reset.
+func (r *CharacterRepository) AdvanceFillGapsCursor(ctx context.Context, expected, next uint32) error {
+	result, err := r.driver.Execute(ctx, `
+		UPDATE fill_gaps_state
+		SET last_queued_id = $1, updated_at = NOW()
+		WHERE singleton = TRUE AND last_queued_id = $2`, next, expected)
+	if err != nil {
+		return fmt.Errorf("advance fill gaps cursor: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("advance fill gaps cursor rows affected: %w", err)
+	}
+	if rows == 1 {
+		return nil
+	}
+	current, err := r.FillGapsCursor(ctx)
+	if err != nil {
+		return err
+	}
+	if current == expected || current >= next {
+		return nil
+	}
+	return fmt.Errorf("fill gaps cursor changed concurrently: expected %d, current %d, next %d", expected, current, next)
 }
 
 func (r *CharacterRepository) Get(ctx context.Context, id uint32) (*contract.CharacterRecord, error) {

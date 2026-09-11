@@ -164,27 +164,6 @@ func TestService_UpsertCharacter_Profile(t *testing.T) {
 	}
 }
 
-func TestService_FindUnscannedIDGaps(t *testing.T) {
-	svc, chars := newTestService(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 2, FirstSeenAt: now}, nil)
-	_ = chars.Upsert(ctx, contract.CharacterRecord{ID: 5, FirstSeenAt: now}, nil)
-
-	gaps, err := svc.FindUnscannedIDGaps(ctx, 1, 5, 10)
-	if err != nil {
-		t.Fatalf("FindUnscannedIDGaps: %v", err)
-	}
-	want := [][2]uint32{
-		{1, 1},
-		{3, 4},
-	}
-	if !reflect.DeepEqual(gaps, want) {
-		t.Errorf("gaps = %v, want %v", gaps, want)
-	}
-}
-
 func TestService_MaxCharacterID(t *testing.T) {
 	svc, chars := newTestService(t)
 

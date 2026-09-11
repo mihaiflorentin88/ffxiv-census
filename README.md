@@ -88,13 +88,22 @@ Probes character ID ranges across The Lodestone. Designed for both single-shot s
 # a persistent cursor, publishes them, then advances the cursor.
 ./bin/ffxiv-census publish id-sweep --auto --batch-size 1000 --chunk-size 100
 
-# Gap-fill mode: scans unscanned holes between 1 and MaxID
-./bin/ffxiv-census publish id-sweep --fill-gaps --chunk-size 100
+# Gap-fill mode (persistent cursor): each run publishes at most `--count` jobs
+# covering the oldest unscanned holes after the last queued ID, then stores
+# that ID in the `fill_gaps_state` table. When the cursor reaches MaxID it
+# wraps to 0 and the sweep restarts. Genuine 404s store nothing, so dead IDs
+# are re-probed once per cycle (Lodestone is authoritative; character IDs are
+# assumed never recycled).
+./bin/ffxiv-census publish id-sweep --fill-gaps --count 500 --chunk-size 100
+
+# Manual one-shot gap scan from a fixed ID (the cursor is left untouched)
+./bin/ffxiv-census publish id-sweep --fill-gaps --min-id 13000000 --count 500 --chunk-size 100
 
 # Explicit range: probe character IDs 1 to 10,000 in chunks of 100
 ./bin/ffxiv-census publish id-sweep --from 1 --to 10000 --chunk-size 100
+```
 
-The forward cursor initializes from `MAX(characters.id) + 1` on first use and
+The auto-forward cursor initializes from `MAX(characters.id) + 1` on first use and
 then advances independently of discoveries, so an empty range cannot pin later
 cron runs to the same IDs. It advances only after every queue publish succeeds;
 a partial failure safely retries the full range on the next run.

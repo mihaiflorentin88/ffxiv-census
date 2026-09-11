@@ -183,11 +183,6 @@ func (s *Service) MaxCharacterID(ctx context.Context) (uint32, error) {
 	return s.characters.MaxID(ctx)
 }
 
-// FindUnscannedIDGaps returns missing/unscanned ID ranges between minID and maxID.
-func (s *Service) FindUnscannedIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
-	return s.characters.FindIDGaps(ctx, minID, maxID, limit)
-}
-
 func profileToRecord(char *contract.CharacterProfile) contract.CharacterRecord {
 	now := time.Now().UTC()
 	rec := contract.CharacterRecord{

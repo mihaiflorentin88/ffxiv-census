@@ -121,19 +121,18 @@ func TestMockCharacterRepository_GearAndGaps(t *testing.T) {
 		t.Fatalf("GetGear mismatch: %+v", gotGear)
 	}
 
-	// Test FindIDGaps
+	// Test FindIDGapsAfter (from after the cursor at 6)
 	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 3, FirstSeenAt: now}, nil)
 	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 4, FirstSeenAt: now}, nil)
 	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 8, FirstSeenAt: now}, nil)
 	_ = repo.Upsert(ctx, contract.CharacterRecord{ID: 15, FirstSeenAt: now}, nil)
 
-	gaps, err := repo.FindIDGaps(ctx, 1, 15, 10)
+	gaps, err := repo.FindIDGapsAfter(ctx, 6, 15, 10)
 	if err != nil {
-		t.Fatalf("FindIDGaps: %v", err)
+		t.Fatalf("FindIDGapsAfter: %v", err)
 	}
 	want := [][2]uint32{
-		{1, 2},
-		{5, 7},
+		{7, 7},
 		{9, 14},
 	}
 	if len(gaps) != len(want) {

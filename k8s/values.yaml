@@ -356,6 +356,8 @@ cronjobs:
     #     - publish
     #     - id-sweep
     #     - --fill-gaps
+    #     - --count
+    #     - "500"
     #     - --chunk-size
     #     - "100"
     - name: proxy-discover

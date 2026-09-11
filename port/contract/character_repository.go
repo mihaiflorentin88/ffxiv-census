@@ -40,9 +40,16 @@ type CharacterRepository interface {
 	UpsertGear(ctx context.Context, charID uint32, gear []CharacterGearRecord) error
 	// GetGear returns the character's equipped gear slots (empty if none).
 	GetGear(ctx context.Context, charID uint32) ([]CharacterGearRecord, error)
-	// FindIDGaps returns missing/unscanned ID ranges [[start, end], ...]
-	// between minID and maxID.
-	FindIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error)
+	// FindIDGapsAfter returns missing/unscanned ID ranges [[start, end], ...]
+	// strictly after afterID and up to maxID, ordered ascending. A gap that
+	// straddles afterID is trimmed so only its portion above afterID returns.
+	FindIDGapsAfter(ctx context.Context, afterID, maxID uint32, limit int) ([][2]uint32, error)
+	// FillGapsCursor returns the last ID queued by the fill-gaps scanner.
+	// On first use it is initialized to 0 (nothing scanned yet).
+	FillGapsCursor(ctx context.Context) (uint32, error)
+	// AdvanceFillGapsCursor advances the cursor only when it still equals
+	// expected. A stale advance must never move the cursor backward.
+	AdvanceFillGapsCursor(ctx context.Context, expected, next uint32) error
 	// Get returns the character, or nil (no error) if not found.
 	Get(ctx context.Context, id uint32) (*CharacterRecord, error)
 	// GetJobs returns the character's job levels (empty if none).

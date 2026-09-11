@@ -383,3 +383,143 @@ func TestCharacterRepository_ListStale(t *testing.T) {
 		t.Errorf("got[2].ID = %d, want 3", got[2].ID)
 	}
 }
+
+func TestCharacterRepository_FillGapsCursorInitializesAndAdvances(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+
+	got, err := repo.FillGapsCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("initial fill-gaps cursor = %d, want 0", got)
+	}
+
+	if err := repo.AdvanceFillGapsCursor(ctx, 0, 1723); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.FillGapsCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1723 {
+		t.Fatalf("advanced fill-gaps cursor = %d, want 1723", got)
+	}
+}
+
+func TestCharacterRepository_FillGapsCursorCAS(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+
+	if err := repo.AdvanceFillGapsCursor(ctx, 0, 500); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale advance to an already-covered range is idempotent, never rewinds.
+	if err := repo.AdvanceFillGapsCursor(ctx, 0, 300); err != nil {
+		t.Fatal("stale advance to an already-covered range should be idempotent:", err)
+	}
+	got, err := repo.FillGapsCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 500 {
+		t.Fatalf("cursor rewound to %d, want 500", got)
+	}
+
+	// Stale advance to an uncovered range must fail.
+	if err := repo.AdvanceFillGapsCursor(ctx, 0, 900); err == nil {
+		t.Fatal("stale advance to an uncovered range should fail")
+	}
+
+	// Reset-to-zero (wrap) is a legitimate CAS move when expected matches.
+	if err := repo.AdvanceFillGapsCursor(ctx, 500, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.FillGapsCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("wrapped cursor = %d, want 0", got)
+	}
+}
+
+func TestCharacterRepository_FindIDGapsAfter(t *testing.T) {
+	driver := newTestDriver(t)
+	repo := repository.NewCharacterRepository(driver)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	for _, id := range []uint32{3, 4, 8, 15} {
+		if err := repo.Upsert(ctx, contract.CharacterRecord{ID: id, Name: "C", World: "W", Race: "Hyur", FirstSeenAt: now}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("full scan includes region below the lowest character", func(t *testing.T) {
+		gaps, err := repo.FindIDGapsAfter(ctx, 0, 15, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := [][2]uint32{{1, 2}, {5, 7}, {9, 14}}
+		if len(gaps) != len(want) {
+			t.Fatalf("gaps = %v, want %v", gaps, want)
+		}
+		for i := range want {
+			if gaps[i] != want[i] {
+				t.Fatalf("gaps = %v, want %v", gaps, want)
+			}
+		}
+	})
+
+	t.Run("straddling gap is trimmed to after the cursor", func(t *testing.T) {
+		gaps, err := repo.FindIDGapsAfter(ctx, 6, 15, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := [][2]uint32{{7, 7}, {9, 14}}
+		if len(gaps) != len(want) {
+			t.Fatalf("gaps = %v, want %v", gaps, want)
+		}
+		for i := range want {
+			if gaps[i] != want[i] {
+				t.Fatalf("gaps = %v, want %v", gaps, want)
+			}
+		}
+	})
+
+	t.Run("cursor at maxID yields nothing", func(t *testing.T) {
+		gaps, err := repo.FindIDGapsAfter(ctx, 15, 15, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(gaps) != 0 {
+			t.Fatalf("gaps = %v, want none", gaps)
+		}
+	})
+
+	t.Run("limit respected", func(t *testing.T) {
+		gaps, err := repo.FindIDGapsAfter(ctx, 0, 15, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(gaps) != 2 {
+			t.Fatalf("gaps = %v, want 2", gaps)
+		}
+	})
+
+	t.Run("empty table yields nothing", func(t *testing.T) {
+		emptyRepo := repository.NewCharacterRepository(newTestDriver(t))
+		gaps, err := emptyRepo.FindIDGapsAfter(context.Background(), 0, 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(gaps) != 0 {
+			t.Fatalf("gaps = %v, want none", gaps)
+		}
+	})
+}
