@@ -390,3 +390,33 @@ func TestParseRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+// TestNewProxyTransport_ConnectStallBoundedForHTTPProxy pins the connect
+// budget for the http/https proxy schemes: a proxy that accepts TCP but
+// never answers the CONNECT handshake must fail within the connect budget
+// (min of the caller timeout and the proxyConnectTimeout constant) instead
+// of hanging until the client timeout. The failure is a ProxyDialError, so
+// the worker rotates identities immediately.
+func TestNewProxyTransport_ConnectStallBoundedForHTTPProxy(t *testing.T) {
+	stallAddr := proxytest.StallingTCP(t)
+
+	transport, err := NewProxyTransport("http://"+stallAddr, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewProxyTransport: %v", err)
+	}
+
+	start := time.Now()
+	conn, err := transport.DialContext(context.Background(), "tcp", "192.0.2.1:443")
+	elapsed := time.Since(start)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("expected error against a stalled CONNECT handshake")
+	}
+	var dialErr *ProxyDialError
+	if !errors.As(err, &dialErr) {
+		t.Fatalf("expected a typed ProxyDialError, got %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("CONNECT stall must be bounded by the connect budget, took %v", elapsed)
+	}
+}

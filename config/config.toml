@@ -48,7 +48,7 @@ max_attempts = 50
 
 [lodestone]
 rate_limit = 1.0
-max_retries = 3
+max_retries = 1
 
 [tomestone]
 api_token = ""

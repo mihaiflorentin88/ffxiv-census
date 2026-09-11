@@ -45,7 +45,7 @@ max_retries = 3
 | Field | Default | Purpose |
 | ----- | ------- | ------- |
 | `rate_limit` | `1.0` | Token-bucket fill rate in requests/second (capped at `1.0` req/s ceiling to avoid Lodestone Cloudflare IP bans); burst is always 1. |
-| `max_retries` | `3` | Retries per call on transient errors → up to `max_retries + 1` attempts. |
+| `max_retries` | `1` | Retries per call on instant transient errors (connection reset, read blip) → up to `max_retries + 1` attempts. Deeper retries are the queue's job: its ladder redelivers through a different proxy. |
 
 Environment overrides work like the other sections: `LODESTONE_RATE_LIMIT=0.5`, `LODESTONE_MAX_RETRIES=5`. Note that rates configured above `1.0` are clamped to `1.0` for safety.
 
@@ -55,17 +55,17 @@ Tokens are charged per HTTP attempt, including every achievement detail request 
 
 **Provider-wide pauses** sit in front of the token bucket: before every HTTP attempt the client waits out any active `ProviderLodestone` pause (`rateLimiter.WaitUntilAvailable`). A Lodestone `429` pauses the provider for the `Retry-After` hint (default 30s) and a Cloudflare challenge (`202` interstitial or `403` block page) pauses it for the hint (default 5s), so a hostile destination is not hammered by the next delivery while the queue's retry ladder is pending.
 
+**Proxy connect budget:** the whole proxy connect phase (TCP dial plus CONNECT/SOCKS negotiation) is bounded at 15s for every scheme. A stalled proxy fails fast as a typed `ProxyDialError`, so the worker rotates identities instead of holding the delivery while the connection hangs.
+
 ## Error handling & Retry policy
 
-Non-existent or banned/terminated character profiles (HTTP 404 "Not Found" and HTTP 403 "Forbidden") are immediately recognized as `contract.ErrCharacterNotFound` and are **never retried**. For achievements, a genuine `404` on the list page surfaces as `contract.ErrCharacterNotFound` (the achievement handler then marks the character deleted and acks), while a genuine `403` surfaces as a private-achievements summary. Conclusive proxy failures (typed `*contract.ProxyCheckError` with kind `CheckProxy`: dial refusal, SOCKS/CONNECT negotiation death, proxy-side TLS failure, stalled handshake) **abort the retry ladder on the first attempt** — retrying through a proven-dead proxy cannot succeed, and the immediate typed return lets the worker rotate to a fresh identity right away. A Lodestone `429` also returns immediately as a typed target error (carrying the `Retry-After` hint) instead of spinning in the in-client ladder; the queue's retry ladder re-delivers after the provider pause. All other scraper errors are treated as transient and retried with exponential backoff: `500 ms · 2^attempt` (500 ms, 1 s, 2 s, …). With the default `max_retries = 3` a transient error makes up to 4 attempts.
+Non-existent or banned/terminated character profiles (HTTP 404 "Not Found" and HTTP 403 "Forbidden") are immediately recognized as `contract.ErrCharacterNotFound` and are **never retried**. For achievements, a genuine `404` on the list page surfaces as `contract.ErrCharacterNotFound` (the achievement handler then marks the character deleted and acks), while a genuine `403` surfaces as a private-achievements summary. Conclusive proxy failures (typed `*contract.ProxyCheckError` with kind `CheckProxy`: dial refusal, SOCKS/CONNECT negotiation death, proxy-side TLS failure, stalled handshake) **abort the retry ladder on the first attempt** — retrying through a proven-dead proxy cannot succeed, and the immediate typed return lets the worker rotate to a fresh identity right away. A Lodestone `429` also returns immediately as a typed target error (carrying the `Retry-After` hint) instead of spinning in the in-client ladder; the queue's retry ladder re-delivers after the provider pause. **Full response timeouts return immediately too**: once the tunnel is established and Lodestone does not answer within the client timeout, a same-proxy retry after a sub-second backoff cannot clear the stall, so the delivery goes back to the queue and is redelivered — usually through a different proxy. Only instant transient errors (connection reset, short read blips) use the in-client ladder, up to `max_retries + 1` attempts.
 
 The `backoffBase` is set to **500 ms** by default in `newClient()`. Combined with ±10% jitter and the 1 req/s token bucket, retry timing is:
 
 | Attempt | Backoff Delay | Cumulative |
 |---------|---------------|------------|
 | 0 → 1 | 500 ms | 500 ms |
-| 1 → 2 | 1 s | 1.5 s |
-| 2 → 3 | 2 s | 3.5 s |
 
 The token bucket (1 req/s, burst 1) remains the primary rate defense. The backoff only *increases* the gap between retries on errors, never decreases it.
 

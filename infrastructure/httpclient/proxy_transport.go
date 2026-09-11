@@ -48,6 +48,12 @@ func WrapProxyDial(err error) error {
 	return err
 }
 
+// proxyConnectTimeout bounds the whole proxy connect phase (TCP dial plus
+// CONNECT/SOCKS negotiation) for every scheme. A living proxy completes a
+// TCP connect and handshake in well under this budget; a proxy that stalls
+// here is dead weight and must surface as a ProxyDialError quickly.
+var proxyConnectTimeout = 15 * time.Second
+
 // ParseRetryAfter parses a Retry-After hint as delta-seconds or an HTTP
 // date. The date form yields the duration remaining at receivedAt, never an
 // absolute timestamp. Invalid or non-positive hints return 0 so consumers
@@ -151,8 +157,10 @@ func browserTLSClient(ctx context.Context, conn net.Conn, host string, tlsCfg *t
 //
 // HTTP and HTTPS proxies complete their CONNECT handshake inside the dial
 // function, so a proxy that answers CONNECT with a non-2xx status is a
-// proven proxy failure. timeout bounds the SOCKS4 dial and handshake; other
-// schemes are bounded by the caller's client timeout and request context.
+// proven proxy failure. Every scheme bounds its whole connect phase — TCP
+// dial plus negotiation handshake — at min(timeout, proxyConnectTimeout),
+// so a stalled proxy fails fast as a ProxyDialError and the worker rotates
+// identities instead of babysitting the connection.
 // Dial and negotiation failures are wrapped in *ProxyDialError.
 func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport, error) {
 	if proxyURL == "" {
@@ -163,13 +171,17 @@ func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport,
 		return nil, fmt.Errorf("parse proxy URL: %w", err)
 	}
 
+	connectBudget := timeout
+	if proxyConnectTimeout < connectBudget {
+		connectBudget = proxyConnectTimeout
+	}
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.Proxy = nil // explicitly clear inherited ProxyFromEnvironment
 
 	var dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	switch u.Scheme {
 	case "http", "https":
-		dial = httpConnectDialContext(u, base)
+		dial = httpConnectDialContext(u, base, connectBudget)
 	case "socks5":
 		dialer, err := xproxy.FromURL(u, xproxy.Direct)
 		if err != nil {
@@ -180,14 +192,16 @@ func NewProxyTransport(proxyURL string, timeout time.Duration) (*http.Transport,
 			return nil, fmt.Errorf("socks5 dialer does not support context")
 		}
 		dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := ctxDialer.DialContext(ctx, network, addr)
+			connectCtx, cancel := context.WithTimeout(ctx, connectBudget)
+			defer cancel()
+			conn, err := ctxDialer.DialContext(connectCtx, network, addr)
 			if err != nil {
 				return nil, &ProxyDialError{Reason: "socks5", Err: err}
 			}
 			return conn, nil
 		}
 	case "socks4":
-		dial = socks4DialContext(u, timeout)
+		dial = socks4DialContext(u, connectBudget)
 	default:
 		return nil, fmt.Errorf("unsupported proxy protocol: %s", u.Scheme)
 	}
@@ -241,7 +255,7 @@ func NewDirectTransport() *http.Transport {
 // proxy, a request write or response read error, and a non-2xx CONNECT
 // refusal — is wrapped in *ProxyDialError and classifies as a conclusive
 // proxy failure. Success yields the established tunnel to addr.
-func httpConnectDialContext(u *url.URL, transport *http.Transport) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func httpConnectDialContext(u *url.URL, transport *http.Transport, connectBudget time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		proxyPort := u.Port()
 		if proxyPort == "" {
@@ -250,14 +264,17 @@ func httpConnectDialContext(u *url.URL, transport *http.Transport) func(ctx cont
 				proxyPort = "443"
 			}
 		}
-		conn, err := proxyDialer.DialContext(ctx, network, net.JoinHostPort(u.Hostname(), proxyPort))
+		connectCtx, cancel := context.WithTimeout(ctx, connectBudget)
+		defer cancel()
+
+		conn, err := proxyDialer.DialContext(connectCtx, network, net.JoinHostPort(u.Hostname(), proxyPort))
 		if err != nil {
 			return nil, &ProxyDialError{Reason: "dial", Err: err}
 		}
 		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 		defer stop()
 
-		if d, ok := ctx.Deadline(); ok {
+		if d, ok := connectCtx.Deadline(); ok {
 			_ = conn.SetDeadline(d)
 		}
 
@@ -270,7 +287,7 @@ func httpConnectDialContext(u *url.URL, transport *http.Transport) func(ctx cont
 				cfg.ServerName = u.Hostname()
 			}
 			tconn := tls.Client(conn, cfg)
-			if err := tconn.HandshakeContext(ctx); err != nil {
+			if err := tconn.HandshakeContext(connectCtx); err != nil {
 				_ = conn.Close()
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return nil, ctxErr

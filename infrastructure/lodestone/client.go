@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -45,6 +46,17 @@ func jittered(d time.Duration) time.Duration {
 	}
 	factor := 0.9 + 0.2*rand.Float64()
 	return time.Duration(float64(d) * factor)
+}
+
+// isTimeoutError reports whether the transport error is a deadline/timeout
+// (client timeout, dial timeout, context deadline) rather than an instant
+// failure such as a connection reset.
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // stripTags removes HTML tags, decodes common entities, and collapses whitespace.
@@ -263,6 +275,18 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 			if errors.As(lastErr, &dialCheck) && dialCheck.Kind == contract.CheckProxy {
 				c.logger.WarnContext(ctx, "lodestone.proxy_failure",
 					slog.String("url", url),
+					slog.String("error", err.Error()))
+				return nil, 0, fmt.Errorf("request %s: %w", url, lastErr)
+			}
+			// A full response timeout through an established path will not
+			// clear by retrying the same proxy after a sub-second backoff:
+			// return immediately so the queue's retry ladder redelivers —
+			// usually through a different proxy — instead of the goroutine
+			// babysitting the request for minutes.
+			if isTimeoutError(err) {
+				c.logger.WarnContext(ctx, "lodestone.request_timeout",
+					slog.String("url", url),
+					slog.Int("attempt", attempt+1),
 					slog.String("error", err.Error()))
 				return nil, 0, fmt.Errorf("request %s: %w", url, lastErr)
 			}
