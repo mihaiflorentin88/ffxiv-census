@@ -152,9 +152,9 @@ var publishIDSweepCmd = &cobra.Command{
 			return fmt.Errorf("invalid --daemon-interval %v: must be positive", daemonInterval)
 		}
 		switch source {
-		case "auto", "tomestone", "lodestone":
+		case "auto", "lodestone":
 		default:
-			return fmt.Errorf("invalid --source %q: must be one of 'auto', 'tomestone', 'lodestone'", source)
+			return fmt.Errorf("invalid --source %q: must be one of 'auto', 'lodestone'", source)
 		}
 
 		repo := container.Load.CharacterRepository()
@@ -384,7 +384,7 @@ func init() {
 	publishIDSweepCmd.Flags().Uint32("to", 0, "last character ID (default: from + count - 1)")
 	publishIDSweepCmd.Flags().Uint32("count", 1000, "number of character IDs to sweep when --to is omitted")
 	publishIDSweepCmd.Flags().Uint32("chunk-size", 100, "IDs per id-sweep job")
-	publishIDSweepCmd.Flags().String("source", "auto", "ingest source (auto, tomestone, lodestone)")
+	publishIDSweepCmd.Flags().String("source", "auto", "ingest source (auto, lodestone)")
 	publishIDSweepCmd.Flags().Bool("fill-gaps", false, "scan unscanned holes between 1 and MaxID")
 	publishIDSweepCmd.Flags().Bool("daemon", false, "run continuous auto-sweep loop")
 	publishIDSweepCmd.Flags().Duration("daemon-interval", 30*time.Second, "tick interval for daemon checks")

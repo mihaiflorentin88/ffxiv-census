@@ -20,7 +20,7 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 - `cmd/cli`: Cobra-based control surface. `main.go` forwards execution here to keep the root tidy.
 - `cmd/http`: HTTP server wiring. The server reads configuration via the container, attaches standard middleware (logging, recovery, request ID), and mounts route groups. APIs must accept request DTOs and return response DTOs; convert them to internal DTOs before passing work into the domain.
 - `config`: Configuration loader powered by Viper with an embedded `config.toml`. Environment variables override file values using the `APP_`, `HTTP_`, and feature-specific prefixes.
-- `container`: Simple service locator that bootstraps configuration, logging, and optional infrastructure clients (PostgreSQL, RabbitMQ, StatsD, outbound HTTP, LodestoneClient, TomestoneClient, ProxyRepository, ProxyHub). Generated code resolves these adapters through `ServiceContainer` accessors instead of constructing them inside handlers or domain services.
+- `container`: Simple service locator that bootstraps configuration, logging, and optional infrastructure clients (PostgreSQL, RabbitMQ, StatsD, outbound HTTP, LodestoneClient, ProxyRepository, ProxyHub). Generated code resolves these adapters through `ServiceContainer` accessors instead of constructing them inside handlers or domain services.
 - `domain`: Reserved for pure business logic. Keep this folder clean; avoid direct references to HTTP or CLI packages. Domain objects can be instantiated from `cmd/` but they interact with infrastructure solely via contracts and DTOs.
 - `infrastructure`: Adapters that speak to the outside world (logging, PostgreSQL, metrics, etc.). Code here implements interfaces defined in `port/contract` to honour dependency inversion.
 - `docs`: Living documentation. Extend these markdown files alongside code changes so future-you knows how to operate the system.
@@ -61,13 +61,13 @@ High-level modules (application/domain) depend on abstractions, never concrete i
 
 Durable async work is managed by RabbitMQ (see [docs/queue.md](queue.md) and [docs/events.md](events.md)). Messages are published to the `census` exchange and routed to per-event-type queues. Failed messages are retried with exponential backoff via a dedicated retry exchange; permanently failed messages land in a dead-letter queue. The ingest pipeline consists of three core events:
 
-1. **`id-sweep`**: Probes character ID ranges across Lodestone and Tomestone.gg. Discovered characters are upserted and chain downstream `achievement-census` jobs.
-2. **`character-census`**: Re-censuses known character profiles. Confirmed 404 on both providers marks the character deleted; successful fetches chain `achievement-census`.
+1. **`id-sweep`**: Probes character ID ranges across The Lodestone. Discovered characters are upserted and chain downstream `achievement-census` jobs.
+2. **`character-census`**: Re-censuses known character profiles. A genuine Lodestone 404 marks the character deleted; successful fetches chain `achievement-census`.
 3. **`achievement-census`**: Fetches character achievements from The Lodestone and tracks expansion/milestone progression (*leaf job*).
 
 The queue adapter is resolved via `container.Load.Queue()`.
 
-**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates proxy-aware Lodestone/Tomestone clients, and routes ALL requests through the proxy. Only fresh, evidence-backed rows are handed out (claim, destination check, and freshness/ownership revalidation against the database). A typed conclusive proxy failure is persisted as a version-fenced observation via `Proxy.MarkFailed()` before a replacement is acquired; destination rejections such as 429 raise only a destination cooldown and never mark the proxy unhealthy. See [docs/proxy.md](proxy.md) for the full design.
+**Proxy Mode:** The `consume --proxy` flag activates per-goroutine proxy isolation. Each worker goroutine acquires its own proxy from the `ProxyHub`, creates a proxy-aware Lodestone client, and routes ALL requests through the proxy. Only fresh, evidence-backed rows are handed out (claim, destination check, and freshness/ownership revalidation against the database). A typed conclusive proxy failure is persisted as a version-fenced observation via `Proxy.MarkFailed()` before a replacement is acquired; destination rejections such as 429 raise only a destination cooldown and never mark the proxy unhealthy. See [docs/proxy.md](proxy.md) for the full design.
 
 **Graceful Shutdown:** On SIGTERM, workers stop consuming new messages but in-flight deliveries continue processing. The queue adapter handles ack/nack semantics — successfully processed messages are acknowledged; failures trigger retry with backoff or permanent failure routing. Worker errors don't cancel other workers' in-flight jobs — each goroutine exits independently.
 ## Future Hooks

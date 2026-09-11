@@ -21,7 +21,6 @@ import (
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/pubproxy"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/rabbitmq"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/textproxy"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -33,7 +32,6 @@ type InfrastructureContainer struct {
 	databaseDriver        contract.DatabaseDriver
 	queue                 contract.Queue
 	lodestoneClient       contract.LodestoneClient
-	tomestoneClient       contract.TomestoneClient
 	characterRepository   contract.CharacterRepository
 	achievementRepository contract.AchievementRepository
 	censusRunRepository   contract.CensusRunRepository
@@ -73,7 +71,7 @@ func (s *ServiceContainer) HTTPClient() contract.HTTPClient {
 // DiscoveryHTTPClient returns an HTTPClient that routes requests through a
 // rotating pool of active proxies for public proxy-list providers. Falls back
 // to the direct client when no proxy is available. Must not be used for
-// Lodestone or Tomestone APIs.
+// Lodestone APIs.
 func (s *ServiceContainer) DiscoveryHTTPClient() contract.HTTPClient {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -241,26 +239,6 @@ func (s *ServiceContainer) LodestoneClient() contract.LodestoneClient {
 		return nil
 	}
 	s.infrastructure.lodestoneClient = client
-	return client
-}
-
-func (s *ServiceContainer) TomestoneClient() contract.TomestoneClient {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.infrastructure.tomestoneClient != nil {
-		return s.infrastructure.tomestoneClient
-	}
-	cfg := s.configUnlocked().Tomestone
-	if cfg == nil {
-		logging.Warn("container.tomestone", "tomestone config missing")
-		return nil
-	}
-	client, err := tomestone.NewClient(cfg, s.Logger(), tomestone.WithProviderRateLimiter(s.providerRateLimiterUnlocked()))
-	if err != nil {
-		logging.Error("container.tomestone", fmt.Sprintf("failed to create tomestone client: %v", err))
-		return nil
-	}
-	s.infrastructure.tomestoneClient = client
 	return client
 }
 

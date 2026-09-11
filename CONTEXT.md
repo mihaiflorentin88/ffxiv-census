@@ -45,14 +45,11 @@ A character whose achievement history is hidden from public view. This is record
 _Avoid_: hidden achievement list
 
 **The Lodestone**:
-FFXIV's official community site, read as web pages rather than through an official API, and the authoritative source of character existence and profile truth. Primary provider for the character census and exclusive provider for the achievement census.
+FFXIV's official community site, read as web pages rather than through an official API, and the authoritative source of character existence and profile truth. The sole provider for every census event.
 _Avoid_: official API
 
-**Tomestone**:
-A third-party character site with a fast API, used as the primary provider for the ID sweep and the fallback for the character census. It indexes only a subset of Lodestone characters, which is why a Tomestone miss never settles existence by itself.
-
 **Provider**:
-One of the two character-data sources, The Lodestone or Tomestone, ordered per event into a primary and a fallback: Tomestone first for discovery, The Lodestone first for refreshes.
+The character-data source: The Lodestone, the only one. Fetches happen per event through a Lodestone client, direct or proxy-aware.
 _Avoid_: source, dual-source
 
 **Proxy provider**:

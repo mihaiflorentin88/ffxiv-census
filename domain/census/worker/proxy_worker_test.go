@@ -85,23 +85,12 @@ func (c *fakeLodestoneClient) FetchAchievements(context.Context, uint32, []uint3
 	return nil, nil
 }
 
-// fakeTomestoneClient implements contract.TomestoneClient for tests.
-type fakeTomestoneClient struct{}
-
-func (c *fakeTomestoneClient) FetchCharacterProfile(context.Context, uint32, bool) (*contract.TomestoneCharacter, error) {
-	return nil, nil
-}
-
-func (c *fakeTomestoneClient) FetchCharacterProfileByName(context.Context, string, string, bool) (*contract.TomestoneCharacter, error) {
-	return nil, nil
-}
-func (c *fakeTomestoneClient) IsConfigured() bool { return false }
 func newTestCensusWorker(q contract.Queue, logger contract.Logger) *Worker {
 	return New(q, nil, logger)
 }
 
-func newTestHandlers() func(contract.LodestoneClient, contract.TomestoneClient, contract.ProviderRateLimiter) *censushandler.Registry {
-	return func(_ contract.LodestoneClient, _ contract.TomestoneClient, _ contract.ProviderRateLimiter) *censushandler.Registry {
+func newTestHandlers() func(contract.LodestoneClient, contract.ProviderRateLimiter) *censushandler.Registry {
+	return func(_ contract.LodestoneClient, _ contract.ProviderRateLimiter) *censushandler.Registry {
 		reg := censushandler.NewRegistry()
 		reg.Register(censushandler.EventIDSweep, &noopCensusHandler{})
 		return reg
@@ -123,7 +112,7 @@ func TestProxyWorkerLoop_WaitsForProxy(t *testing.T) {
 	proxyHub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil, 0, contract.ProxyScanPolicy{})
 
 	var started int32
-	handlers := func(_ contract.LodestoneClient, _ contract.TomestoneClient, _ contract.ProviderRateLimiter) *censushandler.Registry {
+	handlers := func(_ contract.LodestoneClient, _ contract.ProviderRateLimiter) *censushandler.Registry {
 		reg := censushandler.NewRegistry()
 		reg.Register(censushandler.EventIDSweep, &countingCensusHandler{count: &started})
 		return reg
@@ -143,9 +132,6 @@ func TestProxyWorkerLoop_WaitsForProxy(t *testing.T) {
 			handlers,
 			func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 				return &fakeLodestoneClient{}, nil
-			},
-			func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-				return &fakeTomestoneClient{}, nil
 			},
 			func() contract.ProviderRateLimiter { return nil },
 		)
@@ -205,16 +191,13 @@ func TestReplaceProxy_ReleasesBadBeforeReplacement(t *testing.T) {
 		t.Fatalf("NewProxy: proxy=%v err=%v", p1, err)
 	}
 
-	p2, _, _, _, _, err := w.replaceProxy(
+	p2, _, _, _, err := w.replaceProxy(
 		context.Background(),
 		p1,
 		owner,
 		proxyHub,
 		func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 			return &fakeLodestoneClient{}, nil
-		},
-		func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-			return &fakeTomestoneClient{}, nil
 		},
 		func() contract.ProviderRateLimiter { return nil },
 		newTestHandlers(),
@@ -267,16 +250,13 @@ func TestReplaceProxy_ReplacementTransportError(t *testing.T) {
 		t.Fatalf("NewProxy: proxy=%v err=%v", p1, err)
 	}
 
-	p2, _, _, _, _, err := w.replaceProxy(
+	p2, _, _, _, err := w.replaceProxy(
 		context.Background(),
 		p1,
 		owner,
 		proxyHub,
 		func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 			return &fakeLodestoneClient{}, nil
-		},
-		func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-			return &fakeTomestoneClient{}, nil
 		},
 		func() contract.ProviderRateLimiter { return nil },
 		newTestHandlers(),
@@ -321,9 +301,6 @@ func TestProxyWorkerLoop_CancellationWhileWaiting(t *testing.T) {
 		newTestHandlers(),
 		func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 			return &fakeLodestoneClient{}, nil
-		},
-		func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-			return &fakeTomestoneClient{}, nil
 		},
 		func() contract.ProviderRateLimiter { return nil },
 	)
@@ -398,20 +375,8 @@ func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
 		mu.Unlock()
 		return &fakeLodestoneClient{}, nil
 	}
-	newTomestoneClient := func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-		mu.Lock()
-		if tl, ok := limiter.(*trackingLimiter); ok {
-			if limiterPerGoroutine[proxyURL] == nil {
-				limiterPerGoroutine[proxyURL] = make(map[int]bool)
-			}
-			limiterPerGoroutine[proxyURL][tl.id] = true
-		}
-		mu.Unlock()
-		return &fakeTomestoneClient{}, nil
-	}
-
 	var jobsProcessed int32
-	newHandlers := func(_ contract.LodestoneClient, _ contract.TomestoneClient, limiter contract.ProviderRateLimiter) *censushandler.Registry {
+	newHandlers := func(_ contract.LodestoneClient, limiter contract.ProviderRateLimiter) *censushandler.Registry {
 		mu.Lock()
 		if tl, ok := limiter.(*trackingLimiter); ok {
 			allLimiters[tl.id] = tl
@@ -445,7 +410,6 @@ func TestRunEventsWithProxyCreatesIsolatedWorkerDependencies(t *testing.T) {
 		proxyHub,
 		newHandlers,
 		newLodestoneClient,
-		newTomestoneClient,
 		newRateLimiter,
 	)
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
@@ -663,7 +627,7 @@ func runOneJob(t *testing.T, hub *proxydomain.ProxyHub, script func(call int) er
 		t.Fatalf("Publish: %v", err)
 	}
 	handler := &scriptedHandler{script: script}
-	handlers := func(contract.LodestoneClient, contract.TomestoneClient, contract.ProviderRateLimiter) *censushandler.Registry {
+	handlers := func(contract.LodestoneClient, contract.ProviderRateLimiter) *censushandler.Registry {
 		reg := censushandler.NewRegistry()
 		reg.Register(censushandler.EventIDSweep, handler)
 		return reg
@@ -681,9 +645,6 @@ func runOneJob(t *testing.T, hub *proxydomain.ProxyHub, script func(call int) er
 			handlers,
 			func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 				return &fakeLodestoneClient{}, nil
-			},
-			func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-				return &fakeTomestoneClient{}, nil
 			},
 			func() contract.ProviderRateLimiter { return nil },
 		)
@@ -819,8 +780,8 @@ func TestConsumerJob_BusinessErrorStaysOrdinary(t *testing.T) {
 	hub := proxydomain.NewProxyHub(repo, 5*time.Minute, nil, time.Minute, workerPolicy)
 
 	calls, err := runOneJob(t, hub, func(call int) error {
-		// Mirrors the real Tomestone 429 error, which is an untyped string.
-		return errors.New("tomestone api rate limit exceeded (HTTP 429)")
+		// An ordinary untyped business error (e.g. an upstream 429 text).
+		return errors.New("upstream api rate limit exceeded (HTTP 429)")
 	})
 	if err == nil {
 		t.Fatal("expected the job error to reach the queue")

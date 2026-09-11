@@ -96,9 +96,9 @@ func (s *ServiceContainer) Handlers() *handler.Registry {
 	if svc == nil {
 		return reg
 	}
-	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), s.TomestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(s.LodestoneClient(), svc, s.Logger()))
 	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(s.LodestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
-	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), s.TomestoneClient(), svc, s.Logger(), s.ProviderRateLimiter()))
+	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(s.LodestoneClient(), svc, s.Logger()))
 	return reg
 }
 
@@ -168,17 +168,17 @@ func (s *ServiceContainer) ProxyHandlers() *proxyhandler.Registry {
 	return reg
 }
 
-// ProxyCensusHandlers returns a handler registry wired to proxy-aware Lodestone/Tomestone
-// clients. Used by proxy-mode consumer goroutines. The provided clients must route
+// ProxyCensusHandlers returns a handler registry wired to the proxy-aware Lodestone
+// client. Used by proxy-mode consumer goroutines. The provided client must route
 // ALL requests through a proxy.
-func (s *ServiceContainer) ProxyCensusHandlers(lodestoneClient contract.LodestoneClient, tomestoneClient contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry {
+func (s *ServiceContainer) ProxyCensusHandlers(lodestoneClient contract.LodestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry {
 	reg := handler.NewRegistry()
 	svc := s.CensusService()
 	if svc == nil {
 		return reg
 	}
-	reg.Register(handler.EventIDSweep, handler.NewIDSweep(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter))
+	reg.Register(handler.EventIDSweep, handler.NewIDSweep(lodestoneClient, svc, s.Logger()))
 	reg.Register(handler.EventAchievementCensus, handler.NewAchievementCensus(lodestoneClient, svc, s.Logger(), rateLimiter))
-	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(lodestoneClient, tomestoneClient, svc, s.Logger(), rateLimiter))
+	reg.Register(handler.EventCharacterCensus, handler.NewCharacterCensus(lodestoneClient, svc, s.Logger()))
 	return reg
 }

@@ -26,7 +26,6 @@ type Config struct {
 	RabbitMQ  *RabbitMQConfig  `mapstructure:"rabbitmq"`
 	Queue     *QueueConfig     `mapstructure:"queue"`
 	Lodestone *LodestoneConfig `mapstructure:"lodestone"`
-	Tomestone *TomestoneConfig `mapstructure:"tomestone"`
 	Census    *CensusConfig    `mapstructure:"census"`
 	Proxy     *ProxyConfig     `mapstructure:"proxy"`
 }
@@ -142,12 +141,6 @@ func (r *RabbitMQConfig) GetURL() string {
 type LodestoneConfig struct {
 	RateLimit  float64 `mapstructure:"rate_limit"`
 	MaxRetries int     `mapstructure:"max_retries"`
-}
-type TomestoneConfig struct {
-	APIToken  string  `mapstructure:"api_token"`
-	BaseURL   string  `mapstructure:"base_url"`
-	RateLimit float64 `mapstructure:"rate_limit"`
-	Timeout   string  `mapstructure:"timeout"`
 }
 type ExpansionConfig struct {
 	Name          string `mapstructure:"name"`

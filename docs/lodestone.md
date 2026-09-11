@@ -17,19 +17,19 @@ Every achievement census first requests `/achievement/` once. That list page sup
 
 Earned timestamps are extracted only from the completed achievement row, so new writes use the achievement-specific date. Historical incorrectly stored dates are not backfilled. `latest_achievement_*` reflects the global latest achievement from the list page.
 
-## Primary Provider & Fallback Integration
+## Sole Data Provider
 
-The Lodestone client serves as the **primary data provider for both `id-sweep` and `character-census`** across the census ingest pipeline, in proxy and direct workflows alike:
-- **ID Sweep (`id-sweep`)**: The Lodestone is probed first — it is authoritative for existence. Tomestone.gg is only a fallback when Lodestone returns a transient error; a Tomestone 404 in that state fails the delivery for a Lodestone retry instead of skipping the ID.
-- **Character Census (`character-census`)**: The Lodestone is fetched first as the authoritative source of truth, falling back to Tomestone.gg when unresolvable or rate-limited.
-- **Achievement Census (`achievement-census`)**: Lodestone is the exclusive provider. When Lodestone is rate-limited or paused, achievement messages remain queued in RabbitMQ while dual-source event types continue on Tomestone.
+The Lodestone client is the **only data provider for `id-sweep`, `character-census`, and `achievement-census`** across the census ingest pipeline, in proxy and direct workflows alike:
+- **ID Sweep (`id-sweep`)**: The Lodestone is authoritative for existence. A genuine 404 skips the ID; any transient error fails the delivery for a queue retry.
+- **Character Census (`character-census`)**: The Lodestone is the sole source of truth. A genuine 404 marks the character deleted.
+- **Achievement Census (`achievement-census`)**: Lodestone-only. When Lodestone is rate-limited or paused, the handler waits out the cooldown in-process; nothing is dropped.
 
 ## Hidden profiles
 
 Three Lodestone states leave a character without usable race data; the parse yields an empty race (or `----`) and the census skips the character via `census.ErrProfileHidden` (see `docs/census.md` → Hidden profiles):
 
 - **Private profile** — HTTP 200 with "This character's profile is private"; the page has name and world but no race/tribe block.
-- **Access-restricted profile** — HTTP 403 "Access Restricted", deterministic per character (typically actioned accounts); the Tomestone fallback then serves the character with an empty race.
+- **Access-restricted profile** — HTTP 403 "Access Restricted", deterministic per character (typically actioned accounts); parsed with an empty race.
 - **Suppressed race/clan** — HTTP 200 but the Race/Clan block renders `----` placeholders.
 
 ## Rate limiting

@@ -11,8 +11,6 @@ type Provider string
 const (
 	// ProviderLodestone represents the official FFXIV Lodestone.
 	ProviderLodestone Provider = "lodestone"
-	// ProviderTomestone represents Tomestone.gg.
-	ProviderTomestone Provider = "tomestone"
 )
 
 // ProviderRateLimiter tracks and controls rate limiting per external provider.

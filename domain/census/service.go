@@ -47,11 +47,10 @@ func NewService(
 
 // ErrProfileHidden is returned by the upsert entry points when a character
 // carries no usable race data. On Lodestone this happens for private profiles
-// (no race block at all), access-restricted profiles (HTTP 403, surfaced via
-// the Tomestone fallback with an empty race), and suppressed demographics
-// (race/clan rendered as "----"). Such characters exist but have no
-// censusable demographics: callers skip them without storing and without
-// failing the job.
+// (no race block at all), access-restricted profiles (HTTP 403), and
+// suppressed demographics (race/clan rendered as "----"). Such characters
+// exist but have no censusable demographics: callers skip them without
+// storing and without failing the job.
 var ErrProfileHidden = errors.New("character profile hidden: no race data")
 
 // hiddenRace reports whether a profile's race is unusable for the census.
@@ -179,45 +178,6 @@ func (s *Service) UpsertCharacter(ctx context.Context, char *contract.CharacterP
 	return s.characters.Upsert(ctx, rec, jobs)
 }
 
-// UpsertTomestoneCharacter converts a Tomestone character into a CharacterRecord and
-// persists it (profile + jobs + gear) atomically. Region is derived from the datacenter.
-// A profile without usable race data returns ErrProfileHidden and is not persisted.
-func (s *Service) UpsertTomestoneCharacter(ctx context.Context, char *contract.TomestoneCharacter) error {
-	if char == nil {
-		return errors.New("cannot upsert nil tomestone character")
-	}
-	if hiddenRace(char.Race) {
-		return ErrProfileHidden
-	}
-	if strings.TrimSpace(char.Name) == "" {
-		return fmt.Errorf("cannot upsert character %d: name is empty", char.ID)
-	}
-	rec := toTomestoneCharacterRecord(char)
-	jobs := toTomestoneJobRecords(char)
-	if err := s.characters.Upsert(ctx, rec, jobs); err != nil {
-		return err
-	}
-	if len(char.Gear) > 0 {
-		gearRecords := make([]contract.CharacterGearRecord, 0, len(char.Gear))
-		for _, g := range char.Gear {
-			gearRecords = append(gearRecords, contract.CharacterGearRecord{
-				CharacterID: char.ID,
-				Slot:        g.Slot,
-				ItemID:      g.ID,
-				Name:        g.Name,
-				ItemLevel:   g.ItemLevel,
-				Dye:         g.Dye,
-				Materia:     g.Materia,
-				UpdatedAt:   char.UpdatedAt,
-			})
-		}
-		if err := s.characters.UpsertGear(ctx, char.ID, gearRecords); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // MaxCharacterID returns the maximum character ID known to the census.
 func (s *Service) MaxCharacterID(ctx context.Context) (uint32, error) {
 	return s.characters.MaxID(ctx)
@@ -226,69 +186,6 @@ func (s *Service) MaxCharacterID(ctx context.Context) (uint32, error) {
 // FindUnscannedIDGaps returns missing/unscanned ID ranges between minID and maxID.
 func (s *Service) FindUnscannedIDGaps(ctx context.Context, minID, maxID uint32, limit int) ([][2]uint32, error) {
 	return s.characters.FindIDGaps(ctx, minID, maxID, limit)
-}
-
-func parseTomestoneGender(g string) uint8 {
-	if strings.EqualFold(g, "female") {
-		return 2
-	} else if strings.EqualFold(g, "male") {
-		return 1
-	}
-	return 0
-}
-
-func calculateAverageItemLevel(gear []contract.TomestoneGear) int {
-	if len(gear) == 0 {
-		return 0
-	}
-	sum := 0
-	count := 0
-	for _, g := range gear {
-		if g.ItemLevel > 0 {
-			sum += g.ItemLevel
-			count++
-		}
-	}
-	if count == 0 {
-		return 0
-	}
-	return sum / count
-}
-
-func toTomestoneCharacterRecord(char *contract.TomestoneCharacter) contract.CharacterRecord {
-	now := time.Now().UTC()
-	return contract.CharacterRecord{
-		ID:              char.ID,
-		Name:            char.Name,
-		World:           char.Server,
-		Datacenter:      char.Datacenter,
-		Region:          RegionForDatacenter(char.Datacenter),
-		Gender:          parseTomestoneGender(char.Gender),
-		Race:            char.Race,
-		Tribe:           char.Tribe,
-		GrandCompany:    char.GrandCompany,
-		FreeCompanyID:   char.FreeCompanyID,
-		FreeCompanyName: char.FreeCompanyName,
-		Bio:             char.Bio,
-		ActiveJob:       char.ActiveJob,
-		ItemLevel:       calculateAverageItemLevel(char.Gear),
-		FirstSeenAt:     now,
-		LastCensusAt:    &now,
-	}
-}
-
-func toTomestoneJobRecords(char *contract.TomestoneCharacter) []contract.ClassJobRecord {
-	jobs := make([]contract.ClassJobRecord, 0, len(char.Jobs))
-	for _, j := range char.Jobs {
-		jobs = append(jobs, contract.ClassJobRecord{
-			CharacterID: char.ID,
-			ClassJobID:  j.ID,
-			Name:        j.Name,
-			Level:       j.Level,
-			ExpLevel:    j.Exp,
-		})
-	}
-	return jobs
 }
 
 func profileToRecord(char *contract.CharacterProfile) contract.CharacterRecord {

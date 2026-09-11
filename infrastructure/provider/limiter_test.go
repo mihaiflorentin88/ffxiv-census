@@ -15,8 +15,8 @@ func TestRateLimiter_PauseAndAvailability(t *testing.T) {
 	if !limiter.IsAvailable(contract.ProviderLodestone) {
 		t.Fatal("expected Lodestone to be available initially")
 	}
-	if !limiter.IsAvailable(contract.ProviderTomestone) {
-		t.Fatal("expected Tomestone to be available initially")
+	if !limiter.IsAvailable(contract.Provider("other")) {
+		t.Fatal("expected other provider to be available initially")
 	}
 
 	// Pause Lodestone for 100ms
@@ -25,8 +25,8 @@ func TestRateLimiter_PauseAndAvailability(t *testing.T) {
 	if limiter.IsAvailable(contract.ProviderLodestone) {
 		t.Fatal("expected Lodestone to be paused")
 	}
-	if !limiter.IsAvailable(contract.ProviderTomestone) {
-		t.Fatal("expected Tomestone to remain available when Lodestone is paused")
+	if !limiter.IsAvailable(contract.Provider("other")) {
+		t.Fatal("expected other provider to remain available when Lodestone is paused")
 	}
 
 	until, paused := limiter.PausedUntil(contract.ProviderLodestone)
@@ -51,14 +51,14 @@ func TestRateLimiter_EarliestAvailable(t *testing.T) {
 
 	now := time.Now()
 	limiter.Pause(contract.ProviderLodestone, 200*time.Millisecond, "reason 1")
-	limiter.Pause(contract.ProviderTomestone, 100*time.Millisecond, "reason 2")
+	limiter.Pause(contract.Provider("other"), 100*time.Millisecond, "reason 2")
 
 	earliest := limiter.EarliestAvailable()
 	if earliest.IsZero() {
 		t.Fatal("expected non-zero earliest available")
 	}
 
-	// Earliest should be close to now + 100ms (Tomestone)
+	// Earliest should be close to now + 100ms (other provider)
 	diff := earliest.Sub(now)
 	if diff < 80*time.Millisecond || diff > 150*time.Millisecond {
 		t.Fatalf("unexpected earliest diff: %v", diff)

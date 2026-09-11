@@ -99,7 +99,7 @@ func TestComputeIDSweepRange_Invalid(t *testing.T) {
 }
 
 func TestBuildIDSweepJobs(t *testing.T) {
-	jobs := buildIDSweepJobs(1, 250, 100, "tomestone")
+	jobs := buildIDSweepJobs(1, 250, 100, "lodestone")
 	if len(jobs) != 3 {
 		t.Fatalf("jobs len = %d, want 3", len(jobs))
 	}
@@ -121,8 +121,8 @@ func TestBuildIDSweepJobs(t *testing.T) {
 		if p.From != expectedRanges[i][0] || p.To != expectedRanges[i][1] {
 			t.Errorf("job[%d] range = [%d, %d], want [%d, %d]", i, p.From, p.To, expectedRanges[i][0], expectedRanges[i][1])
 		}
-		if p.Source != "tomestone" {
-			t.Errorf("job[%d] source = %q, want tomestone", i, p.Source)
+		if p.Source != "lodestone" {
+			t.Errorf("job[%d] source = %q, want lodestone", i, p.Source)
 		}
 	}
 }

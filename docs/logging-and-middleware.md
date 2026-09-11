@@ -58,11 +58,9 @@ structured attributes carry the identifying context.
 | Debug | `Fetched character from Lodestone` | `character_id`, `name`, `world`, `datacenter`, `duration` |
 | Debug | `Stored character in database` | `character_id`, `name`, `world` |
 | Debug | `Character census complete` | `character_id`, `name`, `world`, `chained_jobs` |
-| Debug | `Fetched character from Tomestone` | `character_id`, `name`, `world`, `datacenter`, `duration` |
 | Debug | `Character marked as deleted` | `character_id` |
 | Warn | `Failed to fetch character` | `character_id`, `source`, `error` |
 | Error | `Failed to store character` | `character_id`, `name`, `world`, `source`, `error` |
-| Warn | `Character not found on Tomestone, retrying with Lodestone` | `character_id` |
 
 #### Achievement Census (`achievement-census`)
 
@@ -87,7 +85,6 @@ structured attributes carry the identifying context.
 | Debug | `ID range scan complete` | `from`, `to`, `discovered` |
 | Warn | `Failed to fetch character` | `character_id`, `source`, `error` |
 | Error | `Failed to store character` | `character_id`, `name`, `world`, `source`, `error` |
-| Warn | `Character not found on Tomestone, retrying with Lodestone` | `character_id` |
 
 #### Worker
 

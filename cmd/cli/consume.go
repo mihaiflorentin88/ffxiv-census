@@ -10,14 +10,12 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/time/rate"
 
 	"github.com/mihaiflorentin88/ffxiv-census/container"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/handler"
 	"github.com/mihaiflorentin88/ffxiv-census/domain/census/worker"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/lodestone"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/provider"
-	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/tomestone"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 )
 
@@ -101,13 +99,10 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 	// Read all config once — immutable for the lifetime of this function.
 	cfg := container.Load.Config()
 	lodestoneCfg := cfg.Lodestone
-	tomestoneCfg := cfg.Tomestone
 
 	var proxyLodestoneRate float64
-	var proxyRequestTimeout string
 	if pcfg := cfg.Proxy; pcfg != nil {
 		proxyLodestoneRate = pcfg.Consumer.LodestoneRateLimit
-		proxyRequestTimeout = pcfg.Consumer.RequestTimeout
 	}
 
 	// Prewarm CensusService on the command goroutine so milestone sync and
@@ -130,47 +125,11 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 		return lodestone.NewCustomClient(lodestoneCfg, logger, limiter, lodestone.WithProxy(proxyURL))
 	}
 
-	// Create a shared rate limiter for all proxy Tomestone clients.
-	var sharedTomestoneLimiter *rate.Limiter
-	if tomestoneCfg != nil {
-		r := tomestoneCfg.RateLimit
-		if r <= 0 {
-			r = 10.0
-		}
-		sharedTomestoneLimiter = rate.NewLimiter(rate.Limit(r), 1)
-	}
-
-	// Achievement-only proxy processes can omit the unused Tomestone transport.
-	needTomestone := proxyEventsNeedTomestone(eventTypes)
-
-	var newTomestoneClient func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error)
-	if needTomestone && tomestoneCfg != nil {
-		newTomestoneClient = func(proxyURL string, limiter contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-			opts := []tomestone.ClientOption{
-				tomestone.WithProviderRateLimiter(limiter),
-			}
-			if sharedTomestoneLimiter != nil {
-				opts = append(opts, tomestone.WithSharedRateLimiter(sharedTomestoneLimiter))
-			}
-			// Override timeout from proxy consumer config if set.
-			if proxyRequestTimeout != "" {
-				override := *tomestoneCfg
-				override.Timeout = proxyRequestTimeout
-				return tomestone.NewClientWithProxy(&override, proxyURL, logger, opts...)
-			}
-			return tomestone.NewClientWithProxy(tomestoneCfg, proxyURL, logger, opts...)
-		}
-	} else {
-		newTomestoneClient = func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-			return nil, nil
-		}
-	}
-
 	newRateLimiter := func() contract.ProviderRateLimiter {
 		return provider.NewProxyRateLimiter()
 	}
-	newHandlers := func(lodestoneClient contract.LodestoneClient, tomestoneClient contract.TomestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry {
-		return container.Load.ProxyCensusHandlers(lodestoneClient, tomestoneClient, rateLimiter)
+	newHandlers := func(lodestoneClient contract.LodestoneClient, rateLimiter contract.ProviderRateLimiter) *handler.Registry {
+		return container.Load.ProxyCensusHandlers(lodestoneClient, rateLimiter)
 	}
 
 	// Get ProxyHub for this process.
@@ -184,25 +143,7 @@ func runProxyConsumer(ctx context.Context, q contract.Queue, eventTypes []string
 	// Pass nil handlers — RunEventsWithProxy uses the per-goroutine registry
 	// returned by newHandlers, never reads w.handlers.
 	w := worker.New(q, nil, logger)
-	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, ownerPrefix, proxyHub, newHandlers, newLodestoneClient, newTomestoneClient, newRateLimiter)
-}
-
-// proxyEventsNeedTomestone returns true if the selected event set requires a
-// Tomestone client. Achievement-census is Lodestone-only, so an achievement-only
-// proxy process can skip creating unused Tomestone transports.
-func proxyEventsNeedTomestone(eventTypes []string) bool {
-	if len(eventTypes) == 0 {
-		return true
-	}
-	for _, eventType := range eventTypes {
-		switch eventType {
-		case handler.EventAchievementCensus:
-			continue
-		default:
-			return true
-		}
-	}
-	return false
+	return w.RunEventsWithProxy(ctx, eventTypes, concurrency, ownerPrefix, proxyHub, newHandlers, newLodestoneClient, newRateLimiter)
 }
 
 var consumeFailedCmd = &cobra.Command{

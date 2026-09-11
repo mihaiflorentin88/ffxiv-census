@@ -97,7 +97,7 @@ func TestProxyRateLimiter_EarliestAvailable(t *testing.T) {
 	}
 
 	r.Pause(contract.ProviderLodestone, 1*time.Second, "test")
-	r.Pause(contract.ProviderTomestone, 2*time.Second, "test")
+	r.Pause(contract.ProviderLodestone, 2*time.Second, "test2")
 	earliest := r.EarliestAvailable()
 	if earliest.IsZero() {
 		t.Fatal("expected non-zero earliest available")

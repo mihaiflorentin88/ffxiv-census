@@ -30,7 +30,7 @@ func (h *simpleHandler) Count() int {
 	return h.handledCount
 }
 
-func TestWorker_LodestoneRateLimit_PausesLodestoneQueues_RunsDualSourceQueuesOnTomestone(t *testing.T) {
+func TestWorker_RunEvents_HandlesAllEventTypes(t *testing.T) {
 	q := mockqueue.NewFake()
 
 	reg := handler.NewRegistry()
@@ -77,7 +77,7 @@ func TestWorker_LodestoneRateLimit_PausesLodestoneQueues_RunsDualSourceQueuesOnT
 	_ = <-done
 }
 
-func TestWorker_AllProvidersPaused_SleepsUntilEarliestCooldown(t *testing.T) {
+func TestWorker_RunEvents_ProcessesPublishedJobs(t *testing.T) {
 	q := mockqueue.NewFake()
 
 	reg := handler.NewRegistry()

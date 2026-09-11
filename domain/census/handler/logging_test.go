@@ -28,7 +28,7 @@ func TestCharacterCensus_LogsFetchAndStore(t *testing.T) {
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	var buf bytes.Buffer
-	h := NewCharacterCensus(ls, nil, svc, newBufLogger(&buf))
+	h := NewCharacterCensus(ls, svc, newBufLogger(&buf))
 
 	if _, err := h.Handle(context.Background(), characterPayload(42)); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -48,7 +48,7 @@ func TestCharacterCensus_LogsFetchError(t *testing.T) {
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	var buf bytes.Buffer
-	h := NewCharacterCensus(ls, nil, svc, newBufLogger(&buf))
+	h := NewCharacterCensus(ls, svc, newBufLogger(&buf))
 
 	if _, err := h.Handle(context.Background(), characterPayload(1)); err == nil {
 		t.Fatal("expected error on fetch failure")
@@ -101,7 +101,7 @@ func TestIDSweep_LogsRealTimeProbesAndDiscoveries(t *testing.T) {
 	}
 	svc := census.NewService(mockrepo.NewCharacterFake(), mockrepo.NewAchievementFake(), mockrepo.NewCensusRunFake())
 	var buf bytes.Buffer
-	h := NewIDSweep(ls, nil, svc, newBufLogger(&buf))
+	h := NewIDSweep(ls, svc, newBufLogger(&buf))
 
 	payload, _ := json.Marshal(IDSweepPayload{From: 9, To: 11})
 	if _, err := h.Handle(context.Background(), payload); err != nil {
@@ -141,7 +141,7 @@ func TestSuccessfulHandlersTraceAtInfo(t *testing.T) {
 
 	var buf bytes.Buffer
 	infoLogger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	h := NewIDSweep(ls, nil, svc, infoLogger)
+	h := NewIDSweep(ls, svc, infoLogger)
 
 	payload, _ := json.Marshal(IDSweepPayload{From: 1, To: 1})
 	if _, err := h.Handle(context.Background(), payload); err != nil {

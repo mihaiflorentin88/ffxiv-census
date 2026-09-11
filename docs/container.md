@@ -9,14 +9,14 @@ container.Load = serviceContainer
 
 ## Structure
 
-- `infrastructure.go` — lazily instantiates outbound adapters such as the PostgreSQL driver, queue, StatsD, outbound HTTP clients, LodestoneClient, TomestoneClient, ProviderRateLimiter, ProxyRepository, ProxyHub, and `UIStatsRepository` behind `port/contract` interfaces.
+- `infrastructure.go` — lazily instantiates outbound adapters such as the PostgreSQL driver, queue, StatsD, outbound HTTP clients, LodestoneClient, ProviderRateLimiter, ProxyRepository, ProxyHub, and `UIStatsRepository` behind `port/contract` interfaces.
 - `infrastructure/postgres` — hosts the PostgreSQL driver and embedded goose migrations.
 - `domain.go` — constructs domain services (added as features are built).
 - `main.go` — fetches the embedded config and exposes helper methods.
 
 ## Usage Tips
 
-1. Always request dependencies through container accessors (e.g., `container.Load.Database()`, `container.Load.Queue()`, `container.Load.LodestoneClient()`, `container.Load.TomestoneClient()`, `container.Load.ProxyHub()`).
+1. Always request dependencies through container accessors (e.g., `container.Load.Database()`, `container.Load.Queue()`, `container.Load.LodestoneClient()`, `container.Load.ProxyHub()`).
 2. Keep constructors pure; inject interfaces from `port/contract`.
 3. Infrastructure accessors are lazy singletons, so the first call constructs the adapter and subsequent calls reuse it.
 4. When adding a new service, update `DomainContainer` and document it here.
@@ -30,9 +30,9 @@ Previous versions used MySQL, then SQLite. The project now runs on PostgreSQL. T
 **Proxy accessors:**
 - `ProxyRepository()` — proxy persistence layer; the returned adapter serves both `contract.ProxyRepository` and the scan-store contract (`contract.ProxyScanStore`) used by the scanner
 - `ProxyHub()` — creates a proxy acquisition hub from `[proxy.consumer].lock_ttl`, the destination checker, the destination cooldown floor and the shared scan policy. The owner is constructed by the CLI command (e.g. `census-consume-<hostname>-p<pid>-w<workerID>`) and passed to `RunEventsWithProxy`, not to the hub accessor
-- `ProxyCensusHandlers(lodestone, tomestone, rateLimiter)` — handler registry wired to proxy-aware clients. Used by `consume --proxy` — each goroutine creates its own handlers with its own proxy-aware clients
+- `ProxyCensusHandlers(lodestone, rateLimiter)` — handler registry wired to a proxy-aware Lodestone client. Used by `consume --proxy` — each goroutine creates its own handlers with its own proxy-aware client
 - `ProxyScrapeProvider()` / `GeonodeProvider()` — proxy discovery providers
 - `ProxyChecker()` — general availability checker: proxied GET against the configured health target (`[proxy].test_url`, default The Lodestone) requiring HTTP 200 and a complete non-empty body; used by the scan worker for every general check, so an active proxy is proven usable for Lodestone traffic
 - `DestinationChecker()` — Lodestone destination checker (`[proxy.consumer].test_url`); used only for consumer handout validation
 - `ProxyScanPolicy()` / `ProxyScanWeights()` — the single parsed scheduler policy and queue capacity shares shared by the repository and the scan worker
-- `DiscoveryHTTPClient()` — rotating-proxy HTTP client for public proxy-list providers. Falls back to the direct client when no active proxy exists. Must not be used for Lodestone or Tomestone APIs
+- `DiscoveryHTTPClient()` — rotating-proxy HTTP client for public proxy-list providers. Falls back to the direct client when no active proxy exists. Must not be used for Lodestone API traffic

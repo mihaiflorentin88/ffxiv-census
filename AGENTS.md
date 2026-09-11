@@ -63,7 +63,7 @@ Detailed architecture and operational guides are maintained under `docs/`:
 - System Architecture &amp; Locator: `docs/architecture.md` and `docs/container.md`
 - Database &amp; Migrations: `docs/postgres.md`, `docs/external-postgres.md`, and `docs/census.md`
 - Queue &amp; Worker Engine: `docs/queue.md` and `docs/events.md`
-- External Adapters: `docs/lodestone.md` and `docs/tomestone.md`
+- External Adapters: `docs/lodestone.md`
 - HTTP REST APIs &amp; Metrics: `docs/http-api.md`, `docs/metrics.md`, and `docs/logging-and-middleware.md`
 - Web Interface: `docs/ui.md`
 

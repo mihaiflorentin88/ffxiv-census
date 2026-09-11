@@ -62,7 +62,7 @@ When you need infrastructure dependencies, resolve them through the service cont
 
 ```
 ├── cmd
-│   ├── cli          # Cobra commands (server, refresh, migrate, export, queue, publish, tomestone, proxy, consume)
+│   ├── cli          # Cobra commands (server, refresh, migrate, export, queue, publish, proxy, consume)
 │   └── http         # HTTP server, routes, middleware
 ├── config           # Viper-powered config loader + embedded defaults
 ├── container        # Service locator wiring (infrastructure + domain)
@@ -71,7 +71,7 @@ When you need infrastructure dependencies, resolve them through the service cont
 │   ├── census/      # Census bounded context (characters, achievements, FCs)
 │   └── proxy/       # Proxy pool bounded context (discovery, scanning, lifecycle)
 ├── docs             # Living documentation (update frequently!)
-├── infrastructure   # Adapters (logging, postgres, queue, lodestone, tomestone, proxy, metrics)
+├── infrastructure   # Adapters (logging, postgres, queue, lodestone, proxy, metrics)
 ├── mock             # Test doubles for contracts
 ├── port             # Contracts and DTO definitions
 └── main.go          # Thin entrypoint bootstrapping the container then running the CLI

@@ -17,7 +17,7 @@ Recurring proxy scans are performed directly by the `proxy scan` database worker
 
 Queue job payloads are JSON. Types are declared in `domain/census/handler/event.go`.
 
-- **id-sweep**: `{"from": 1, "to": 1000, "source": "auto"}` — inclusive range of character IDs to probe, with optional source (`"auto"`, `"tomestone"`, `"lodestone"`).
+- **id-sweep**: `{"from": 1, "to": 1000, "source": "auto"}` — inclusive range of character IDs to probe. `source` is `"auto"` or `"lodestone"` (both probe The Lodestone); the legacy value `"tomestone"` is tolerated on in-flight messages and behaves as `"auto"`.
 - **character-census**: `{"character_id": 123}` — a character to re-census.
 - **achievement-census**: `{"character_id": 123}` — a character to run an achievement census on.
 - **new-proxy**: `{"protocol": "http", "ip": "1.2.3.4", "port": 8080, "country": "US", "anonymity": "elite", "source": "proxyscrape", "uptime_percent": 95.5}` — a proxy to register and test.
@@ -36,51 +36,51 @@ Handlers return the downstream jobs they want published; the worker publishes ea
 
 Handlers are idempotent (`UpsertCharacter` is a conflict-upsert), so a retried `id-sweep` chunk re-probes safely without duplicating chained jobs. RabbitMQ does not deduplicate at the queue level — idempotency is enforced by the database layer. The `proxy discover` command checks PostgreSQL read-only before publishing each `new-proxy` event; existing tuples are counted as `skipped_existing` and never published. Lookup errors fail closed per provider. The consumer independently checks then inserts conflict-safely via `INSERT ... ON CONFLICT DO NOTHING`.
 
-## Dual-source ingest, Fallback & Provider Rate-Limit Coordination
+## Ingest behavior
 
-**`id-sweep` (character discovery):** Lodestone primary, Tomestone fallback.
-1. Handlers probe **The Lodestone** first — it is authoritative for existence for
-   both the proxy and direct workflows.
-2. When Lodestone returns a transient error (HTTP 202 challenge, timeout, 5xx),
-   handlers fall back to **Tomestone.gg**.
-3. A Tomestone 404 is **never** treated as conclusive: because Lodestone itself
-   did not answer, the delivery fails so the queue can retry it on Lodestone
-   later — silently skipping here would lose characters that exist on Lodestone
-   but are missing from Tomestone's index.
-4. If Lodestone returns 404, the character is confirmed missing and skipped
-   without consulting Tomestone.
-5. If Lodestone is paused/unavailable, handlers probe Tomestone directly; a
-   Tomestone 404 in that state also fails the delivery for a Lodestone retry.
+**`id-sweep` (character discovery):**
+1. Handlers probe **The Lodestone** — the sole data source and the authority for
+   existence for both the proxy and direct workflows.
+2. A genuine Lodestone 404 means the ID has no character: it is skipped without
+   failing the chunk.
+3. Any transient error (HTTP 202 challenge, timeout, 5xx, dial failure) fails
+   the delivery so the queue can retry it later — silently skipping here would
+   lose characters.
 
-**`character-census` (profile re-census):** Lodestone primary, Tomestone fallback.
-1. Handlers query **The Lodestone** first as the authoritative source of truth.
-2. When Lodestone returns a 404, handlers check Tomestone.gg. If Tomestone also 404s (or is unavailable), the character is confirmed deleted.
-3. When Lodestone encounters a transient error or is paused, Tomestone.gg is probed as a fallback. If Tomestone returns 404, the job retries on Lodestone with backoff.
+**`character-census` (profile re-census):**
+1. Handlers query **The Lodestone** as the sole source of truth.
+2. A genuine Lodestone 404 marks the character deleted immediately — no second
+   provider is consulted for confirmation.
+3. A transient error fails the delivery for retry with backoff.
 
 **Shared rules:**
-- Downstream dependent jobs (`achievement-census`) are uniformly chained using `BuildDependentCharacterJobs` regardless of which provider ingested the record.
-- **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is paused in the `ProviderRateLimiter`, workers pause Lodestone-exclusive queues (`achievement-census`) and process dual-source queues (`id-sweep`, `character-census`) via Tomestone. If a character is not indexed on Tomestone, the job retries on Lodestone with backoff. When Tomestone is rate-limited, dual-source queues route to Lodestone. If all providers are rate-limited, workers sleep until the earliest cooldown expires without wasting CPU cycles.
+- Downstream `achievement-census` jobs are uniformly chained using
+  `BuildDependentCharacterJobs` after a successful store.
+- **Worker Rate-Limit Coordination**: When Lodestone encounters HTTP 429 or is
+  paused in the `ProviderRateLimiter`, workers wait out the cooldown before the
+  next attempt — deliveries are never dropped and never burned against the
+  database while paused.
 
-### Lodestone-Only Event Rate-Limit Handling
+### Rate-Limit Handling
 
 Achievement checks always request the achievement list once to refresh global latest activity and detect HTTP 403 privacy. They then request only missing milestones in chain order and stop at the first public unearned detail result; already stored checkpoints are not rechecked. A complete tracked history makes one list request and no detail requests.
 
-`achievement-census` is a Lodestone-exclusive event (no Tomestone fallback). When Lodestone is rate-limited or paused, the handler calls `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retries the fetch inline. This is more efficient than returning an error immediately (which triggers queue retry + backoff).
+`achievement-census` waits for the Lodestone cooldown in-handler: when Lodestone is rate-limited or paused, the handler calls `WaitUntilAvailable(ctx, ProviderLodestone)` to block until the cooldown expires, then retries the fetch inline. This is more efficient than returning an error immediately (which triggers queue retry + backoff).
 
 `WaitUntilAvailable` blocks exactly once per rate-limit cooldown. If the subsequent fetch fails again (new 429), the handler returns an error and the queue's exponential backoff kicks in. The handler does NOT loop on `WaitUntilAvailable`.
 
 One worker goroutine blocks during the wait. With the default `concurrency=4`, the other 3 goroutines continue processing. Kubernetes' 180s termination grace period covers extended Lodestone cooldowns.
 
-Explicit `tomestone` or `lodestone` source modes on `id-sweep` skip the other client entirely.
+The explicit `lodestone` source mode behaves identically to `auto`; it is kept for payload compatibility with legacy queued messages.
 
 ### Proxy Mode Behavior
 
 When `consume --proxy` is used, the event pipeline runs through proxy-aware clients:
 
-- **`id-sweep` in proxy mode**: Lodestone is the primary provider (not Tomestone). Proxies bypass Lodestone's per-IP rate limit, so the faster Tomestone-first strategy is unnecessary. Tomestone is used only as a fallback when Lodestone returns an error.
-- **`achievement-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting. Achievement-only proxy processes omit the unused Tomestone HTTP transport per goroutine.
+- **`id-sweep` in proxy mode**: The Lodestone is the only provider. Proxies bypass Lodestone's per-IP rate limit, so each goroutine probes through its own proxy.
+- **`achievement-census` in proxy mode**: Same as non-proxy — Lodestone-only, with rate-limit waiting.
 - **Proxy rotation on failure**: If a proxy fails during any request (connection refused, timeout, host unreachable), the worker immediately marks it as failed and acquires a fresh proxy from the pool. This ensures workers quickly rotate through bad proxies.
-- **Per-goroutine isolation**: Each goroutine has its own proxy, its own LodestoneClient, its own TomestoneClient, and its own rate limiter. No shared state between goroutines.
+- **Per-goroutine isolation**: Each goroutine has its own proxy, its own LodestoneClient, and its own rate limiter. No shared state between goroutines.
 
 ## CLI
 

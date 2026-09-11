@@ -37,7 +37,7 @@ func TestConsumerJob_MissingHandlerWrapsErrNoHandler(t *testing.T) {
 	// Empty registry: no process in this deployment can ever handle the
 	// event, so the only sane outcomes are dead-park (this sentinel) or
 	// observable loss — never an endless retry ladder.
-	handlers := func(contract.LodestoneClient, contract.TomestoneClient, contract.ProviderRateLimiter) *handler.Registry {
+	handlers := func(contract.LodestoneClient, contract.ProviderRateLimiter) *handler.Registry {
 		return handler.NewRegistry()
 	}
 
@@ -54,9 +54,6 @@ func TestConsumerJob_MissingHandlerWrapsErrNoHandler(t *testing.T) {
 			handlers,
 			func(string, contract.ProviderRateLimiter) (contract.LodestoneClient, error) {
 				return &fakeLodestoneClient{}, nil
-			},
-			func(string, contract.ProviderRateLimiter) (contract.TomestoneClient, error) {
-				return &fakeTomestoneClient{}, nil
 			},
 			func() contract.ProviderRateLimiter { return nil },
 		)
