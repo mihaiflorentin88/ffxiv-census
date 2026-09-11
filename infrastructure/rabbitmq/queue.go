@@ -18,6 +18,7 @@ const (
 	exchangeMain     = "census"
 	queuePrefix      = "census."
 	headerAttempts   = "x-attempts"
+	headerNotBefore  = "x-not-before-ms"
 	backoffBaseSec   = 5
 	maxBackoffSec    = 3600
 	slowAckThreshold = 30 * time.Second
@@ -372,6 +373,31 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 			continue
 		}
 
+		// Honor the retry ladder: hold the delivery until the not-before
+		// instant set when the message entered the failed queue. Without
+		// this wait a live failed-queue consumer would bypass the per-
+		// message TTL and re-fire failures at full broker speed.
+		if wait := remainingBackoff(msg.Headers, time.Now()); wait > 0 {
+			q.logger.DebugContext(
+				processCtx, "rabbitmq.failed.backoff_wait",
+				slog.String("event_type", eventType),
+				slog.Int("attempts", attempts),
+				slog.Duration("wait", wait),
+			)
+			timer := time.NewTimer(wait)
+			select {
+			case <-stopClaiming.Done():
+				timer.Stop()
+				_ = msg.Nack(false, true)
+				return nil
+			case <-processCtx.Done():
+				timer.Stop()
+				_ = msg.Nack(false, true)
+				return nil
+			case <-timer.C:
+			}
+		}
+
 		dc, pubErr := ch.PublishWithDeferredConfirmWithContext(processCtx, exchangeMain, eventType, false, false, amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			Body:         msg.Body,
@@ -588,11 +614,18 @@ func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, jobType st
 // dead) through the default exchange and waits for broker confirmation.
 // The header table is rebuilt with the incremented attempt count.
 func (q *Queue) publishToFailed(queueName string, body []byte, headers amqp.Table, attempts, backoffSec int) error {
+	hdrs := copyHeaders(headers, attempts)
+	if backoffSec > 0 {
+		// The failedWorker sleeps until this instant before republishing;
+		// deployments without a failed-queue consumer rely on the matching
+		// per-message Expiration plus the queue's dead-letter exchange.
+		hdrs[headerNotBefore] = time.Now().Add(time.Duration(backoffSec) * time.Second).UnixMilli()
+	}
 	pub := amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
-		Headers:      copyHeaders(headers, attempts),
+		Headers:      hdrs,
 	}
 	if backoffSec > 0 {
 		pub.Expiration = fmt.Sprintf("%d000", backoffSec)
@@ -637,6 +670,28 @@ func getAttempts(headers amqp.Table) int {
 		}
 	}
 	return 0
+}
+
+// remainingBackoff reports how long a failed-queue delivery must still wait
+// before it may be republished to the main queue. Missing, malformed, or
+// already-elapsed x-not-before-ms headers mean no wait.
+func remainingBackoff(headers amqp.Table, now time.Time) time.Duration {
+	if headers == nil {
+		return 0
+	}
+	v, ok := headers[headerNotBefore]
+	if !ok {
+		return 0
+	}
+	ms, ok := v.(int64)
+	if !ok {
+		return 0
+	}
+	notBefore := time.UnixMilli(ms)
+	if !notBefore.After(now) {
+		return 0
+	}
+	return notBefore.Sub(now)
 }
 
 // copyHeaders creates a new headers table with updated attempt count.

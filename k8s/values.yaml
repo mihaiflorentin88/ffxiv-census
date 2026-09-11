@@ -359,7 +359,7 @@ cronjobs:
     #     - --count
     #     - "500"
     #     - --chunk-size
-    #     - "100"
+    #     - "1"
     - name: proxy-discover
       schedule: "*/2 * * * *"
       command:
