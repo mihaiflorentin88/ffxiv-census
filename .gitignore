@@ -20,3 +20,4 @@ backups/
 *.sql.gz
 .scratch
 .worktrees/
+.omp/
