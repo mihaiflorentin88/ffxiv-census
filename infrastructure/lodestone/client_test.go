@@ -12,6 +12,7 @@ import (
 
 	"github.com/mihaiflorentin88/ffxiv-census/config"
 	"github.com/mihaiflorentin88/ffxiv-census/infrastructure/httpclient"
+	"github.com/mihaiflorentin88/ffxiv-census/mock"
 	"github.com/mihaiflorentin88/ffxiv-census/port/contract"
 	"golang.org/x/time/rate"
 )
@@ -635,7 +636,7 @@ func TestDoRequest_ProxyDialFailureIsTypedCheckProxy(t *testing.T) {
 	}
 }
 
-func TestDoRequest_429ExhaustedIsTypedCheckTargetWithRetryAfter(t *testing.T) {
+func TestDoRequest_429IsTypedCheckTargetWithRetryAfter(t *testing.T) {
 	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		header := make(http.Header)
 		header.Set("Retry-After", "90")
@@ -755,7 +756,7 @@ func TestDoRequest_403CloudflareChallengeIsTypedCheckTargetWithoutRetry(t *testi
 		t.Fatalf("expected typed CheckTarget error for a Cloudflare 403 challenge, got %v", err)
 	}
 	if !checkErr.Challenge {
-		t.Fatal("the typed error must flag the challenge so the queue skips the attempt budget")
+		t.Fatal("the typed error must flag the challenge for diagnostics")
 	}
 	if attempts != 1 {
 		t.Fatalf("expected exactly 1 attempt, got %d", attempts)
@@ -793,5 +794,123 @@ func TestDoRequest_Genuine403PassesThroughToCaller(t *testing.T) {
 	var checkErr *contract.ProxyCheckError
 	if errors.As(err, &checkErr) {
 		t.Fatal("a genuine Lodestone 403 must not be typed as a proxy check error")
+	}
+}
+
+func testCustomClientWithLimiter(rt http.RoundTripper, rl contract.ProviderRateLimiter, maxRetries int) *CustomClient {
+	return &CustomClient{
+		httpClient:  &http.Client{Transport: rt},
+		limiter:     rate.NewLimiter(rate.Inf, 1),
+		logger:      loggerOrDiscard(nil),
+		rateLimiter: rl,
+		maxRetries:  maxRetries,
+		backoffBase: time.Millisecond,
+	}
+}
+
+func TestCustomClient_FetchAchievements_404IsCharacterNotFound(t *testing.T) {
+	requests := 0
+	c := testCustomClient(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("<html>Not Found</html>")),
+			Header:     make(http.Header),
+		}, nil
+	}))
+	_, err := c.FetchAchievements(context.Background(), 1, nil)
+	if !errors.Is(err, contract.ErrCharacterNotFound) {
+		t.Fatalf("a genuine Lodestone 404 must surface as contract.ErrCharacterNotFound, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", requests)
+	}
+}
+
+func TestDoRequest_429PausesAndReturnsImmediately(t *testing.T) {
+	requests := 0
+	rl := mock.NewProviderRateLimiter()
+	c := testCustomClientWithLimiter(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		header := make(http.Header)
+		header.Set("Retry-After", "90")
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader("slow down")),
+			Header:     header,
+		}, nil
+	}), rl, 3)
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || checkErr.Kind != contract.CheckTarget {
+		t.Fatalf("expected typed CheckTarget error, got %v", err)
+	}
+	// The destination needs quiet: no in-client retry ladder on a 429.
+	if requests != 1 {
+		t.Fatalf("HTTP requests = %d, want 1 (429 must return immediately)", requests)
+	}
+	if rl.IsAvailable(contract.ProviderLodestone) {
+		t.Fatal("lodestone provider must be paused after a 429")
+	}
+	until, ok := rl.PausedUntil(contract.ProviderLodestone)
+	if !ok {
+		t.Fatal("expected paused-until to be set after a 429")
+	}
+	if remain := time.Until(until); remain < 80*time.Second {
+		t.Fatalf("pause must honor the 90s Retry-After, got %v remaining", remain)
+	}
+}
+
+func TestDoRequest_202ChallengePausesLimiter(t *testing.T) {
+	rl := mock.NewProviderRateLimiter()
+	c := testCustomClientWithLimiter(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusAccepted,
+			Body:       io.NopCloser(strings.NewReader("challenge interstitial")),
+		}, nil
+	}), rl, 3)
+	_, _, _ = c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	if rl.IsAvailable(contract.ProviderLodestone) {
+		t.Fatal("lodestone provider must be paused after a 202 challenge")
+	}
+}
+
+func TestDoRequest_403ChallengePausesLimiter(t *testing.T) {
+	rl := mock.NewProviderRateLimiter()
+	c := testCustomClientWithLimiter(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Cf-Mitigated": []string{"challenge"}},
+			Body:       io.NopCloser(strings.NewReader("<html>Just a moment...</html>")),
+		}, nil
+	}), rl, 3)
+	_, _, _ = c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	if rl.IsAvailable(contract.ProviderLodestone) {
+		t.Fatal("lodestone provider must be paused after a 403 challenge")
+	}
+}
+
+func TestDoRequest_WaitsForPausedProviderBeforeRequest(t *testing.T) {
+	rl := mock.NewProviderRateLimiter()
+	rl.Pause(contract.ProviderLodestone, 150*time.Millisecond, "test pause")
+	requestedAt := time.Time{}
+	c := testCustomClientWithLimiter(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		requestedAt = time.Now()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("<html>ok</html>")),
+			Header:     make(http.Header),
+		}, nil
+	}), rl, 0)
+	_, _, err := c.doRequest(context.Background(), "https://na.finalfantasyxiv.com/lodestone/character/1/")
+	if err != nil {
+		t.Fatalf("doRequest: %v", err)
+	}
+	if requestedAt.IsZero() {
+		t.Fatal("expected a request to be made")
+	}
+	until, _ := rl.PausedUntil(contract.ProviderLodestone)
+	if requestedAt.Before(until.Add(-50 * time.Millisecond)) {
+		t.Fatalf("request must wait out the provider pause: requested at %v, pause until %v", requestedAt, until)
 	}
 }

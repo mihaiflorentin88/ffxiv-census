@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -360,5 +361,32 @@ func TestCharacterCensus_LodestonePaused_UsesTomestoneDirectly_HiddenProfileSkip
 	}
 	if got, _ := chars.Get(context.Background(), 620); got != nil {
 		t.Errorf("hidden-profile character was stored: %+v", got)
+	}
+}
+
+func TestCharacterCensus_DecodeErrorIsPoison(t *testing.T) {
+	h, _, _ := newTestCharacterCensus(t)
+	_, err := h.Handle(context.Background(), []byte("{not json"))
+	if !errors.Is(err, contract.ErrPoisonPayload) {
+		t.Fatalf("undecodable payload must wrap contract.ErrPoisonPayload, got %v", err)
+	}
+}
+
+func TestCharacterCensus_LodestoneError_Tomestone404_ErrorUnwrapsToProxyCheckError(t *testing.T) {
+	h, ls, _, _, _ := newTestDualCharacterCensus(t)
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return nil, fmt.Errorf("character-census lodestone fetch: %w", &contract.ProxyCheckError{
+			Kind: contract.CheckTarget, Reason: "status 202", Challenge: true, Err: errors.New("HTTP 202"),
+		})
+	}
+	// ts has no character 880 (returns ErrCharacterNotFound)
+
+	_, err := h.Handle(context.Background(), characterPayload(880))
+	if err == nil {
+		t.Fatal("expected the dual-source fallback error, got nil")
+	}
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || !checkErr.Challenge {
+		t.Fatalf("fallback error must unwrap to the typed challenge error so the worker can cool the destination, got %v", err)
 	}
 }

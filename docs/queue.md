@@ -16,9 +16,13 @@ census (exchange, direct)
 census.<type>.failed (queue, per event type)
   └─ x-dead-letter-exchange = census
   └─ x-dead-letter-routing-key = <type>
+
+census.<type>.dead (queue, per event type)
+  └─ terminal park: poison payloads, no-handler deliveries, and
+     failed-queue ladder exhaustion; inspectable, never auto-consumed
 ```
 
-Each event type gets a **main queue** (`census.<type>`) bound to the `census` exchange with routing key equal to the event type, and a **failed queue** (`census.<type>.failed`) that dead-letters back to the main exchange. Retry messages in the failed queue have a TTL — when the TTL expires, RabbitMQ dead-letters them back to the main queue automatically. Permanent failures (no TTL) stay in the failed queue indefinitely.
+Each event type gets a **main queue** (`census.<type>`) bound to the `census` exchange with routing key equal to the event type, a **failed queue** (`census.<type>.failed`) that dead-letters back to the main exchange, and a **dead queue** (`census.<type>.dead`) for terminal parking. Retry messages in the failed queue have a TTL — when the TTL expires, RabbitMQ dead-letters them back to the main queue automatically. Nothing is ever silently dropped: deliveries the consumers cannot route are parked on the dead queue.
 
 ## Message Flow
 
@@ -29,38 +33,47 @@ Publish(ctx, job)
   │
   ├─ exchange: census
   ├─ routing key: job.Type
-  └─ body: JSON payload
-                                census.<type> queue
-                                  │
-                                  ├─ push to consumer
-                                  │
-                                  │   handler(ctx, job)
-                                  │     ├─ success → Ack
-                                  │     └─ error   → handleFailure()
-                                  │                    ├─ attempts < 5
-                                  │                    │   publish to census.<type>.failed
-                                  │                    │   with TTL (auto-retry)
-                                  │                    └─ attempts >= 5
-                                  │                        publish to census.<type>.failed
-                                  │                        without TTL (permanent)
-                                  │
-                                census.<type>.failed
-                                  ├─ TTL message: expires → dead-letter → census.<type>
-                                  └─ no TTL message: stays permanently
+  └─ body: JSON payload      census.<type> queue
+                                │
+                                ├─ push to consumer (job.Type comes
+                                │  from the consumer tag, never the
+                                │  delivery routing key)
+                                │
+                                │   handler(ctx, job)
+                                │     ├─ success            → Ack
+                                │     ├─ poison/no handler  → park on
+                                │     │                        census.<type>.dead, Ack
+                                │     └─ other error        → publish to
+                                │           census.<type>.failed with TTL, Ack
+                                │
+                              census.<type>.failed
+                                ├─ TTL message: expires → dead-letter → census.<type>
+                                │   (retry worker also republishes on sight)
+                                └─ attempts >= max_attempts → census.<type>.dead
 ```
 
 ## Retry Mechanism
 
-When a handler returns an error, the adapter inspects the `x-attempts` header and decides:
+When a handler returns an error, the adapter classifies it via `failureDecision` and the `x-attempts` header:
 
 | Condition | Action | TTL | Result |
 |-----------|--------|-----|--------|
-| `attempts < max_attempts` | Publish to `census.<type>.failed` | `min(5 × 2^(attempts-1), 3600)` seconds | Auto-dead-letters back to main queue after TTL |
-| `attempts >= max_attempts` | Publish to `census.<type>.failed` | None | Stays in failed queue permanently |
+| Error chain carries `contract.ErrPoisonPayload` (undecodable JSON, invalid range) or `contract.ErrNoHandler` (event type not registered in this process) | Publish to `census.<type>.dead` | None | Terminal park — inspectable and recoverable, never retried |
+| Any other error (Lodestone challenge, timeout, 429, 5xx, connection errors) | Publish to `census.<type>.failed` | `min(5 × 2^(attempts-1), 3600)` seconds | Auto-dead-letters back to the main queue after the TTL — retried forever until the handler succeeds or acks a terminal outcome (genuine Lodestone 404/403) |
 
-`max_attempts` comes from `[queue] max_attempts` (default **50** in the embedded `config.toml`, overridable via `QUEUE_MAX_ATTEMPTS` — the value Kubernetes already sets on every worker). The first backoff steps follow the same schedule: **5, 10, 20, 40, 80** … capped at 3600s. After `max_attempts` failed deliveries the message is parked permanently in the failed queue for manual inspection.
+Only the handler itself can end the retry ladder, by acking a terminal outcome: handlers mark characters deleted on genuine `contract.ErrCharacterNotFound` and treat private profiles as complete. There is no attempt-based dead-lettering for retryable failures.
 
-The attempt count is tracked in the `x-attempts` message header. On each retry the header is incremented. The original message is always acked after being forwarded to the failed queue — there is no requeue.
+`max_attempts` comes from `[queue] max_attempts` (default **50** in the embedded `config.toml`, overridable via `QUEUE_MAX_ATTEMPTS`). It is the **failed-worker safety net**: a delivery that reaches `census.<type>.failed` with `attempts >= max_attempts` is dead-parked on `census.<type>.dead` instead of republished. The first backoff steps are **5, 10, 20, 40, 80** … capped at 3600s.
+
+The attempt count is tracked in the `x-attempts` message header and incremented on every republish. The original message is always acked after the replacement publish was broker-confirmed; a failed publish Nacks with requeue so no message is lost.
+
+## Failed-Queue Retry Worker
+
+`ConsumeFailed` runs the `census-retry` worker: it consumes the failed queues, normalizes each delivery's event type from the **consumer tag** (`census.id-sweep.failed` → `id-sweep`), and republishes to the `census` exchange under that canonical routing key. Legacy or misrouted deliveries that arrived with prefixed routing keys (`census.census.id-sweep.failed`) are therefore routed correctly instead of dying with `no handler registered`. The worker enables publisher confirms and Acks only after the broker confirms the republish. Unknown event types dead-park on `<failed queue>.dead`.
+
+Lifecycle logs (visible at `LOGGING_LEVEL=debug`, set on the `census-retry` deployment): `rabbitmq.failed.received` (debug), `rabbitmq.failed.republished` (info), `rabbitmq.failed.dead_letter` / `rabbitmq.failed.unknown_event` (error).
+
+Slow acks are visible cluster-wide: any consumer whose claim→ack window exceeds 30s logs a `queue.slow_ack` warning with the event type, attempt count, and handler duration.
 
 ## Consumer Pattern
 
@@ -77,11 +90,10 @@ type Queue interface {
 
 **`Publish`** sends a single job to the `census` exchange with routing key = `job.Type`. The payload is JSON bytes. It uses deferred publisher confirms (`PublishWithDeferredConfirmWithContext`) so a successful return guarantees the durable target queue accepted the message. After confirmation, `Publish` drains the mandatory return channel — if RabbitMQ reports the message as unroutable, the call returns an error with the AMQP reply code and routing key. This fail-fast behaviour means callers never silently lose messages to misconfigured bindings.
 
-**`Consume`** starts `concurrency` worker goroutines. Each worker opens a dedicated AMQP channel with `prefetch(1)`, consumes from all specified event type queues, and dispatches messages to the handler. On handler return:
+**`Consume`** starts `concurrency` worker goroutines. Each worker opens a dedicated AMQP channel with `prefetch(1)`, consumes from all specified event type queues (including `.failed` queues — their deliveries are normalized to the canonical event type and dispatched normally), and dispatches messages to the handler. On handler return:
 - `nil` → message is acked
-- `error` → message is published to the failed queue (retry or permanent), then acked
-
-The original message is always acked — failed messages are forwarded, not requeued. This prevents redelivery loops.
+- `ErrPoisonPayload` / `ErrNoHandler` in the error chain → message is dead-parked on `census.<type>.dead`
+- any other error → message is forwarded to `census.<type>.failed` with a retry TTL
 
 **Dual-context shutdown:** `Consume` creates two independent contexts:
 1. **`stopClaiming`** — derived from the caller's `ctx`. When `ctx` is cancelled (SIGTERM), `stopClaiming` cancels immediately. Workers stop claiming new deliveries; any unclaimed delivery is Nack'd with `requeue=true` so RabbitMQ redelivers it to another consumer.
@@ -303,7 +315,7 @@ leaving an ID hole. Completion logs expose `from_id`, `to_id`, and `next_id`.
 
 ## Contract
 
-`port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/rabbitmq` and `mock/queue` (in-memory fake for tests). The simplified interface has three methods: `Publish`, `Consume`, and `Close`. All retry and dead-letter logic is internal to the adapter — callers only see success or error from the handler.
+`port/contract.Queue` (see `port/contract/queue.go`) is implemented by `infrastructure/rabbitmq` and `mock/queue` (in-memory fake for tests). The interface has four methods: `Publish`, `Consume`, `ConsumeFailed`, and `Close`. All retry and dead-letter logic is internal to the adapter — callers only see success or error from the handler.
 
 ## Connection Resilience
 

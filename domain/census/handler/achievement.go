@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -32,7 +33,7 @@ func NewAchievementCensus(lodestone contract.LodestoneClient, svc *census.Servic
 func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
 	var p AchievementCensusPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return nil, fmt.Errorf("achievement-census payload: %w", err)
+		return nil, errors.Join(contract.ErrPoisonPayload, fmt.Errorf("achievement-census payload: %w", err))
 	}
 	h.logger.DebugContext(ctx, "handler.achievement_census", slog.Uint64("character_id", uint64(p.CharacterID)))
 
@@ -62,6 +63,17 @@ func (h *AchievementCensus) Handle(ctx context.Context, payload []byte) ([]contr
 	start := time.Now()
 	summary, err := h.lodestone.FetchAchievements(ctx, p.CharacterID, milestoneIDs)
 	if err != nil {
+		if errors.Is(err, contract.ErrCharacterNotFound) {
+			// Terminal: genuine Lodestone 404 — the character does not
+			// exist anymore. Mark it deleted and ack; retrying can never
+			// succeed.
+			if derr := h.census.MarkCharacterDeleted(ctx, p.CharacterID, time.Now().UTC()); derr != nil {
+				return nil, fmt.Errorf("achievement-census mark-deleted %d: %w", p.CharacterID, derr)
+			}
+			h.logger.InfoContext(ctx, "handler.achievement_census.deleted",
+				slog.Uint64("character_id", uint64(p.CharacterID)))
+			return nil, nil
+		}
 		h.logger.ErrorContext(ctx, "handler.achievement_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("error", err))
 		return nil, fmt.Errorf("achievement-census fetch %d: %w", p.CharacterID, err)
 	}

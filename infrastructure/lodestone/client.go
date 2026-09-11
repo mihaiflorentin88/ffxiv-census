@@ -28,6 +28,7 @@ const (
 	userAgent      = "Mozilla/5.0 (compatible; FFXIV-Census-Engine/1.0)"
 	requestTimeout = 30 * time.Second
 	rateLimitPause = 30 * time.Second
+	challengePause = 5 * time.Second
 	maxSafeRate    = 1.0
 )
 
@@ -231,6 +232,15 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 		if err := ctx.Err(); err != nil {
 			return nil, 0, err
 		}
+		// The provider-wide limiter (e.g. a Lodestone 429 cooldown) gates
+		// every attempt, including the first: without this wait a paused
+		// provider keeps getting hit at full speed.
+		if c.rateLimiter != nil {
+			if err := c.rateLimiter.WaitUntilAvailable(ctx, contract.ProviderLodestone); err != nil {
+				return nil, 0, err
+			}
+		}
+
 		if err := c.limiter.Wait(ctx); err != nil {
 			return nil, 0, err
 		}
@@ -283,36 +293,34 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 			if c.rateLimiter != nil {
-				c.rateLimiter.Pause(contract.ProviderLodestone, rateLimitPause, "lodestone 429 rate limited")
+				pause := retryAfter
+				if pause <= 0 {
+					pause = rateLimitPause
+				}
+				c.rateLimiter.Pause(contract.ProviderLodestone, pause, "lodestone 429 rate limited")
 			}
-			backoff := c.backoffBase * time.Duration(1<<uint(attempt))
 			c.logger.WarnContext(ctx, "lodestone.rate_limited",
 				slog.String("url", url),
-				slog.Int("attempt", attempt+1),
-				slog.Duration("backoff", backoff))
+				slog.Int("status", resp.StatusCode),
+				slog.Duration("retry_after", retryAfter))
 			// The destination itself is rate limiting this identity: surface a
-			// typed target error carrying the Retry-After hint so consumers
-			// cool the proxy's destination down instead of rotating identity.
-			lastErr = &contract.ProxyCheckError{
+			// typed target error carrying the Retry-After hint and return
+			// immediately — an in-client retry cannot help while the provider
+			// is paused, and the queue's retry ladder re-delivers after the
+			// pause instead.
+			return nil, resp.StatusCode, fmt.Errorf("request %s: %w", url, &contract.ProxyCheckError{
 				Kind:       contract.CheckTarget,
 				Reason:     "status 429",
-				RetryAfter: httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+				RetryAfter: retryAfter,
 				Err:        fmt.Errorf("HTTP %d from %s", resp.StatusCode, url),
-			}
-			if attempt < c.maxRetries {
-				timer := time.NewTimer(jittered(backoff))
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return nil, 0, ctx.Err()
-				case <-timer.C:
-				}
-			}
-			continue
+			})
 		}
 
 		if resp.StatusCode == http.StatusAccepted {
+			c.pauseForChallenge(resp)
+
 			lastErr = &contract.ProxyCheckError{
 				Kind:       contract.CheckTarget,
 				Reason:     "status 202",
@@ -336,6 +344,7 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 			// profile, private achievements) carries none of the
 			// Cloudflare markers and keeps its conclusive handling in
 			// the callers.
+			c.pauseForChallenge(resp)
 			lastErr = &contract.ProxyCheckError{
 				Kind:       contract.CheckTarget,
 				Reason:     "status 403 challenge",
@@ -355,6 +364,22 @@ func (c *CustomClient) doRequest(ctx context.Context, url string) ([]byte, int, 
 		lastErr = fmt.Errorf("request %s: all attempts failed", url)
 	}
 	return nil, 0, fmt.Errorf("request %s: %w", url, lastErr)
+}
+
+// pauseForChallenge applies a short provider pause after a Cloudflare
+// interstitial (202 or a 403 block page): the destination is hostile to
+// this identity right now. The Retry-After hint is honored when present;
+// otherwise a 5s default keeps the next delivery from hammering the
+// challenge page.
+func (c *CustomClient) pauseForChallenge(resp *http.Response) {
+	if c.rateLimiter == nil {
+		return
+	}
+	pause := httpclient.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	if pause <= 0 {
+		pause = challengePause
+	}
+	c.rateLimiter.Pause(contract.ProviderLodestone, pause, "lodestone challenge")
 }
 
 // FetchCharacter scrapes a character profile from The Lodestone.
@@ -421,6 +446,14 @@ func (c *CustomClient) FetchAchievements(ctx context.Context, charID uint32, mil
 	body, statusCode, err := c.doRequest(ctx, listURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch achievement list for character %d: %w", charID, err)
+	}
+	if statusCode == http.StatusNotFound {
+		// A genuine Lodestone 404 is terminal: the character does not exist
+		// (or was deleted). Callers mark the character deleted instead of
+		// retrying forever.
+		c.logger.InfoContext(ctx, "lodestone.fetch_achievements.not_found",
+			slog.Uint64("character_id", uint64(charID)))
+		return nil, contract.ErrCharacterNotFound
 	}
 	if statusCode == http.StatusForbidden {
 		return &contract.AchievementSummary{Private: true}, nil

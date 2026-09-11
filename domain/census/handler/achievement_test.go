@@ -325,3 +325,34 @@ func TestAchievementCensus_ScrapesWhenMilestonesMissing(t *testing.T) {
 		t.Error("FetchAchievements was not called when milestones are missing")
 	}
 }
+
+func TestAchievementCensus_CharacterNotFoundMarksDeleted(t *testing.T) {
+	h, ls, chars, _ := newTestAchievementCensus(t)
+	_ = chars.Upsert(context.Background(), contract.CharacterRecord{ID: 410, Name: "Doomed Character", FirstSeenAt: time.Now()}, nil)
+	ls.FetchAchievementsFunc = func(ctx context.Context, id uint32, milestoneIDs []uint32) (*contract.AchievementSummary, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+
+	next, err := h.Handle(context.Background(), achievementPayload(410))
+	if err != nil {
+		t.Fatalf("a genuine Lodestone 404 is terminal and must ack the job, got %v", err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("expected no chained jobs for a deleted character, got %d", len(next))
+	}
+	got, gerr := chars.Get(context.Background(), 410)
+	if gerr != nil {
+		t.Fatalf("Get: %v", gerr)
+	}
+	if got == nil || got.DeletedAt == nil {
+		t.Fatalf("character 410 must be marked deleted, got %+v", got)
+	}
+}
+
+func TestAchievementCensus_DecodeErrorIsPoison(t *testing.T) {
+	h, _, _, _ := newTestAchievementCensus(t)
+	_, err := h.Handle(context.Background(), []byte("{not json"))
+	if !errors.Is(err, contract.ErrPoisonPayload) {
+		t.Fatalf("undecodable payload must wrap contract.ErrPoisonPayload, got %v", err)
+	}
+}

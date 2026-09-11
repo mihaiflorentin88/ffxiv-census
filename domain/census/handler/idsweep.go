@@ -50,10 +50,10 @@ func NewIDSweep(
 func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
 	var p IDSweepPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return nil, fmt.Errorf("id-sweep payload: %w", err)
+		return nil, errors.Join(contract.ErrPoisonPayload, fmt.Errorf("id-sweep payload: %w", err))
 	}
 	if p.From > p.To {
-		return nil, fmt.Errorf("id-sweep range invalid: from %d > to %d", p.From, p.To)
+		return nil, errors.Join(contract.ErrPoisonPayload, fmt.Errorf("id-sweep range invalid: from %d > to %d", p.From, p.To))
 	}
 	h.logger.InfoContext(ctx, "handler.id_sweep.start", slog.Uint64("from", uint64(p.From)), slog.Uint64("to", uint64(p.To)), slog.Uint64("count", uint64(p.To-p.From+1)))
 
@@ -144,7 +144,7 @@ func (h *IDSweep) Handle(ctx context.Context, payload []byte) ([]contract.QueueJ
 							// census.id-sweep.failed with a retry TTL instead of
 							// silently skipping the ID.
 							h.logger.WarnContext(ctx, "handler.id_sweep.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(id)))
-							return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone error (%v), retrying on lodestone", id, err)
+							return nil, fmt.Errorf("id-sweep %d: not found on tomestone and lodestone error (%w), retrying on lodestone", id, err)
 						} else {
 							h.logger.ErrorContext(ctx, "handler.id_sweep.fetch_error", slog.Uint64("character_id", uint64(id)), slog.String("source", "lodestone+tomestone"), slog.Any("error", terr))
 							return nil, fmt.Errorf("id-sweep tomestone fetch %d: %w", id, terr)

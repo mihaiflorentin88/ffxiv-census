@@ -119,7 +119,7 @@ func (w *Worker) RunEvents(ctx context.Context, eventTypes []string, concurrency
 		h, ok := w.handlers.Get(job.Type)
 		if !ok {
 			w.logger.ErrorContext(processCtx, "worker.missing_handler", slog.String("event_type", job.Type))
-			return fmt.Errorf("no handler registered for event %s", job.Type)
+			return missingHandlerError(job.Type)
 		}
 
 		// Wait for required providers to become available before processing.
@@ -244,6 +244,14 @@ func (w *Worker) waitForProviders(ctx context.Context, eventType string) error {
 func isGeneralProxyFailure(err error) bool {
 	var checkErr *contract.ProxyCheckError
 	return errors.As(err, &checkErr) && checkErr.Kind == contract.CheckProxy
+}
+
+// missingHandlerError builds the sentinel-classified error for a delivery
+// whose event type has no registered handler. Wrapping contract.ErrNoHandler
+// lets the queue adapter dead-park the delivery: no process in the
+// deployment can ever handle the event, so retrying would never succeed.
+func missingHandlerError(eventType string) error {
+	return fmt.Errorf("%w: no handler registered for event %s", contract.ErrNoHandler, eventType)
 }
 
 // It retries on nil results and transient acquisition errors with exponential
@@ -544,7 +552,8 @@ func (w *Worker) proxyWorkerLoop(
 
 		h, ok := handlers.Get(job.Type)
 		if !ok {
-			return fmt.Errorf("no handler registered for event %s", job.Type)
+			w.logger.ErrorContext(ctx, "worker.missing_handler", slog.String("event_type", job.Type))
+			return missingHandlerError(job.Type)
 		}
 
 		start := time.Now()
@@ -628,7 +637,8 @@ func (w *Worker) proxyWorkerLoop(
 				}
 				retryH, retryOk := handlers.Get(job.Type)
 				if !retryOk {
-					return fmt.Errorf("no handler registered for event %s", job.Type)
+					w.logger.ErrorContext(ctx, "worker.missing_handler", slog.String("event_type", job.Type))
+					return missingHandlerError(job.Type)
 				}
 
 				retryStart := time.Now()

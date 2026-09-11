@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -13,11 +15,12 @@ import (
 )
 
 const (
-	exchangeMain      = "census"
-	headerAttempts    = "x-attempts"
-	maxFailedAttempts = 100
-	backoffBaseSec    = 5
-	maxBackoffSec     = 3600
+	exchangeMain     = "census"
+	queuePrefix      = "census."
+	headerAttempts   = "x-attempts"
+	backoffBaseSec   = 5
+	maxBackoffSec    = 3600
+	slowAckThreshold = 30 * time.Second
 )
 
 // Queue is a RabbitMQ-backed work queue implementing contract.Queue.
@@ -66,9 +69,9 @@ func (q *Queue) openSession() (*amqp.Connection, *amqp.Channel, <-chan amqp.Retu
 
 // New creates a new RabbitMQ Queue. It dials the broker, declares the full
 // topology (exchanges, queues, bindings), enables publisher confirms, and
-// returns a ready-to-use Queue. maxAttempts is the per-delivery attempt
-// budget before a message parks permanently in its failed queue; it must
-// be at least 1.
+// returns a ready-to-use Queue. maxAttempts is the failed-worker safety
+// net: a delivery that reaches a failed queue with attempts >= maxAttempts
+// is dead-parked instead of republished; it must be at least 1.
 func New(url string, logger contract.Logger, maxAttempts int) (*Queue, error) {
 	if maxAttempts < 1 {
 		return nil, fmt.Errorf("rabbitmq max attempts must be >= 1, got %d", maxAttempts)
@@ -122,6 +125,19 @@ func (q *Queue) declareTopology(ch *amqp.Channel) error {
 // and waits for broker confirmation. A successful return means the durable
 // target queue accepted the message.
 func (q *Queue) Publish(ctx context.Context, job contract.QueueJob) error {
+	return q.publishConfirmed(ctx, exchangeMain, job.Type, amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent,
+		Body:         job.Payload,
+		Headers:      amqp.Table{headerAttempts: int32(0)},
+	})
+}
+
+// publishConfirmed publishes one message on the shared publishing channel
+// and waits for the broker confirmation. A successful return means a durable
+// queue accepted the message; an unroutable mandatory publish (missing
+// queue or binding) is surfaced as an error instead of being dropped.
+func (q *Queue) publishConfirmed(ctx context.Context, exchange, key string, pub amqp.Publishing) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -137,12 +153,7 @@ func (q *Queue) Publish(ctx context.Context, job contract.QueueJob) error {
 	default:
 	}
 
-	dc, err := q.ch.PublishWithDeferredConfirmWithContext(ctx, exchangeMain, job.Type, true, false, amqp.Publishing{
-		ContentType:  "application/json",
-		DeliveryMode: amqp.Persistent,
-		Body:         job.Payload,
-		Headers:      amqp.Table{headerAttempts: int32(0)},
-	})
+	dc, err := q.ch.PublishWithDeferredConfirmWithContext(ctx, exchange, key, true, false, pub)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
@@ -155,7 +166,7 @@ func (q *Queue) Publish(ctx context.Context, job contract.QueueJob) error {
 		return fmt.Errorf("publish confirm: %w", err)
 	}
 	if !acked {
-		return fmt.Errorf("publish: broker nacked message for %q", job.Type)
+		return fmt.Errorf("publish: broker nacked message for %q", key)
 	}
 
 	// RabbitMQ notifies returns before confirming mandatory messages.
@@ -270,7 +281,12 @@ func (q *Queue) ConsumeFailed(ctx context.Context, types []string, concurrency i
 	return nil
 }
 
-// failedWorker consumes from failed queues and re-publishes to main exchange.
+// failedWorker consumes from failed queues and re-publishes to the main
+// exchange under the canonical event type. The consumer tag carries the
+// event type, so routing never depends on the delivery's routing key
+// (default-exchange publishes carry queue-name keys). Republishes wait for
+// broker confirmation before acking; exhausted or unclassifiable deliveries
+// dead-park on an inspectable dead queue — nothing is silently dropped.
 func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Context, failedQueues []string, workerID int) error {
 	ch, err := q.conn.Channel()
 	if err != nil {
@@ -281,10 +297,22 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 	if err := ch.Qos(1, 0, false); err != nil {
 		return fmt.Errorf("failed worker %d qos: %w", workerID, err)
 	}
+	if err := ch.Confirm(false); err != nil {
+		return fmt.Errorf("failed worker %d confirm: %w", workerID, err)
+	}
 
 	var deliveries []<-chan amqp.Delivery
+	seen := make(map[string]bool, len(failedQueues))
 	for _, fq := range failedQueues {
-		del, err := ch.Consume(fq, "", false, false, false, false, nil)
+		if seen[fq] {
+			continue
+		}
+		seen[fq] = true
+		// The consumer tag doubles as the canonical event type: every
+		// redelivered message carries it, whatever routing key it arrived
+		// with (legacy failures were published with prefixed keys).
+		et := failedQueueEventType(fq)
+		del, err := ch.Consume(fq, et, false, false, false, false, nil)
 		if err != nil {
 			return fmt.Errorf("failed worker %d consume %s: %w", workerID, fq, err)
 		}
@@ -301,35 +329,53 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 		default:
 		}
 
+		eventType := canonicalEventType(msg.ConsumerTag)
 		attempts := getAttempts(msg.Headers) + 1
-		eventType := msg.RoutingKey
 
-		if attempts >= maxFailedAttempts {
+		if !knownEventType(eventType) {
+			// An unknown event type cannot be re-routed: dead-park the
+			// body so it stays inspectable and recoverable.
+			q.logger.ErrorContext(
+				processCtx, "rabbitmq.failed.unknown_event",
+				slog.String("event_type", eventType),
+				slog.String("consumer_tag", msg.ConsumerTag),
+				slog.Int("attempts", attempts),
+			)
+			if q.parkDelivery(ch, processCtx, queuePrefix+eventType+".dead", msg.Body, msg.Headers, attempts) {
+				_ = msg.Ack(false)
+			} else {
+				_ = msg.Nack(false, true)
+			}
+			continue
+		}
+
+		q.logger.DebugContext(
+			processCtx, "rabbitmq.failed.received",
+			slog.String("event_type", eventType),
+			slog.Int("attempts", attempts),
+			slog.String("queue", msg.ConsumerTag),
+		)
+
+		if attempts >= q.maxAttempts {
+			// Safety net for deliveries that exhaust the failed-queue
+			// ladder: park on the durable dead queue, never discard.
 			q.logger.ErrorContext(
 				processCtx, "rabbitmq.failed.dead_letter",
 				slog.String("event_type", eventType),
 				slog.Int("attempts", attempts),
 			)
-			// Never silently drop a delivery: park the body on the
-			// durable dead queue so it stays inspectable and recoverable.
-			if err := q.publishToFailed("census."+eventType+".dead", eventType, msg.Body, msg.Headers, attempts, 0); err != nil {
-				q.logger.ErrorContext(
-					processCtx, "rabbitmq.failed.dead_letter_error",
-					slog.String("event_type", eventType),
-					slog.Int("attempts", attempts),
-					slog.Any("error", err),
-				)
+			if q.parkDelivery(ch, processCtx, deadQueueFor(eventType), msg.Body, msg.Headers, attempts) {
+				_ = msg.Ack(false)
+			} else {
 				_ = msg.Nack(false, true)
-				continue
 			}
-			_ = msg.Ack(false)
 			continue
 		}
-		newHeaders := copyHeaders(msg.Headers, attempts)
-		pubErr := ch.PublishWithContext(processCtx, exchangeMain, eventType, false, false, amqp.Publishing{
+
+		dc, pubErr := ch.PublishWithDeferredConfirmWithContext(processCtx, exchangeMain, eventType, false, false, amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			Body:         msg.Body,
-			Headers:      newHeaders,
+			Headers:      copyHeaders(msg.Headers, attempts),
 		})
 		if pubErr != nil {
 			q.logger.ErrorContext(
@@ -337,6 +383,18 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 				slog.String("event_type", eventType),
 				slog.Int("attempts", attempts),
 				slog.Any("error", pubErr),
+			)
+			_ = msg.Nack(false, true)
+			continue
+		}
+		acked, waitErr := dc.WaitContext(processCtx)
+		if waitErr != nil || !acked {
+			q.logger.ErrorContext(
+				processCtx, "rabbitmq.failed.republish_unconfirmed",
+				slog.String("event_type", eventType),
+				slog.Int("attempts", attempts),
+				slog.Any("error", waitErr),
+				slog.Bool("acked", acked),
 			)
 			_ = msg.Nack(false, true)
 			continue
@@ -353,7 +411,26 @@ func (q *Queue) failedWorker(stopClaiming context.Context, processCtx context.Co
 	return nil
 }
 
-// consumeWorker creates a dedicated channel and consumes from the specified queues.
+// parkDelivery declares the dead queue if needed and publishes the delivery
+// body to it, waiting for broker confirmation. It reports whether the park
+// succeeded; callers must not ack when it returns false.
+func (q *Queue) parkDelivery(ch *amqp.Channel, ctx context.Context, deadQueue string, body []byte, headers amqp.Table, attempts int) bool {
+	if _, err := ch.QueueDeclare(deadQueue, true, false, false, false, nil); err != nil {
+		q.logger.ErrorContext(ctx, "rabbitmq.failed.park_declare_error",
+			slog.String("queue", deadQueue), slog.Any("error", err))
+		return false
+	}
+	if err := q.publishToFailed(deadQueue, body, headers, attempts, 0); err != nil {
+		q.logger.ErrorContext(ctx, "rabbitmq.failed.park_error",
+			slog.String("queue", deadQueue), slog.Any("error", err))
+		return false
+	}
+	return true
+}
+
+// consumeWorker creates a dedicated channel and consumes from the specified
+// queues. The consumer tag carries the event type; job.Type is derived from
+// it so dispatch never depends on the delivery's routing key.
 func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.Context, eventTypes []string, workerID int, handler func(ctx context.Context, job contract.QueueJob) error) error {
 	ch, err := q.conn.Channel()
 	if err != nil {
@@ -366,9 +443,14 @@ func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.C
 	}
 
 	var deliveries []<-chan amqp.Delivery
+	seen := make(map[string]bool, len(eventTypes))
 	for _, et := range eventTypes {
-		queueName := "census." + et
-		del, err := ch.Consume(queueName, "", false, false, false, false, nil)
+		if seen[et] {
+			continue
+		}
+		seen[et] = true
+		queueName := queuePrefix + et
+		del, err := ch.Consume(queueName, et, false, false, false, false, nil)
 		if err != nil {
 			return fmt.Errorf("worker %d consume %s: %w", workerID, queueName, err)
 		}
@@ -385,123 +467,137 @@ func (q *Queue) consumeWorker(stopClaiming context.Context, processCtx context.C
 		default:
 		}
 
+		claimedAt := time.Now()
 		job := contract.QueueJob{
-			Type:    msg.RoutingKey,
+			Type:    canonicalEventType(msg.ConsumerTag),
 			Payload: msg.Body,
 		}
 
 		err := handler(processCtx, job)
+		handlerDuration := time.Since(claimedAt)
 		if err != nil {
-			q.handleFailure(processCtx, msg, err)
+			q.handleFailure(processCtx, msg, job.Type, err)
 		} else {
 			_ = msg.Ack(false)
+		}
+
+		// The unacked window is handler time plus publish/confirm time.
+		// Anything past the threshold shows up here so delayed acks stay
+		// visible cluster-wide instead of silently inflating redelivery
+		// risk.
+		if elapsed := time.Since(claimedAt); elapsed > slowAckThreshold {
+			q.logger.WarnContext(
+				processCtx, "queue.slow_ack",
+				slog.String("event_type", job.Type),
+				slog.Int("attempts", getAttempts(msg.Headers)),
+				slog.Duration("handler_duration", handlerDuration),
+				slog.Duration("claim_to_ack", elapsed),
+			)
 		}
 	}
 
 	return nil
 }
 
-// failureAction returns the retry backoff in seconds for a failing delivery
-// after the given number of attempts, or (0, true) when the attempt budget
-// is exhausted and the message must park permanently in its failed queue.
-func failureAction(attempts, maxAttempts int) (backoffSec int, permanent bool) {
-	if attempts >= maxAttempts {
-		return 0, true
+// retryBackoffSec returns the exponential backoff in seconds for the Nth
+// failed attempt: 5, 10, 20, 40, ... capped at one hour. Retryable failures
+// are retried forever, so there is no permanent outcome on this ladder.
+func retryBackoffSec(attempts int) int {
+	shift := attempts - 1
+	if shift < 0 {
+		shift = 0
 	}
 	// 5s * 2^shift saturates the 3600s cap from shift 10 onwards; clamping
 	// early keeps the shift well inside every int width.
-	shift := attempts - 1
 	if shift > 10 {
-		return maxBackoffSec, false
+		return maxBackoffSec
 	}
 	backoff := backoffBaseSec * (1 << shift)
 	if backoff > maxBackoffSec {
-		backoff = maxBackoffSec
+		return maxBackoffSec
 	}
-	return backoff, false
+	return backoff
 }
 
-// republishMain republishes a message body to its main queue with the
-// given headers and waits for broker confirmation.
-func (q *Queue) republishMain(eventType string, body []byte, headers amqp.Table) error {
-	return q.ch.PublishWithContext(context.Background(), "", "census."+eventType, false, false, amqp.Publishing{
-		ContentType:  "application/json",
-		DeliveryMode: amqp.Persistent,
-		Body:         body,
-		Headers:      headers,
-	})
+// failureOutcome is the classified fate of a failed delivery: dead-park on
+// the event's dead queue, or requeue onto the failed queue with a backoff.
+type failureOutcome struct {
+	dead       bool
+	backoffSec int
 }
 
-// handleFailure requeues a failed delivery: challenge rejections go
-// straight back to the main queue without consuming the attempt budget,
-// everything else enters the per-event-type failed queue with the
-// attempt-incremented backoff ladder.
-func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, handlerErr error) {
-	eventType := msg.RoutingKey
+// failureDecision classifies a failed delivery. Poison payloads and
+// unrouteable event types dead-park immediately: retrying them can never
+// succeed and would churn the cluster forever. Everything else —
+// challenges, timeouts, 429s, 5xx, connection errors — retries on the
+// exponential ladder until a handler ends it with a terminal outcome
+// (genuine Lodestone 404/403 are acked by the handler itself).
+func failureDecision(handlerErr error, attempts int) failureOutcome {
+	if errors.Is(handlerErr, contract.ErrPoisonPayload) || errors.Is(handlerErr, contract.ErrNoHandler) {
+		return failureOutcome{dead: true}
+	}
+	return failureOutcome{backoffSec: retryBackoffSec(attempts)}
+}
 
-	// A Cloudflare challenge rejected this delivery's identity, not the
-	// message itself. Requeue straight onto the main queue with the
-	// attempt counter untouched: the challenged proxy's destination
-	// cooldown (floor 60s) keeps it out of handout, so the redelivery
-	// lands on a clean identity. Burning the attempt budget here would
-	// let a challenge storm park or discard otherwise deliverable jobs.
-	if contract.IsChallenge(handlerErr) {
-		q.logger.WarnContext(
-			ctx, "rabbitmq.challenge_requeue",
-			slog.String("event_type", eventType),
-			slog.Int("attempts", getAttempts(msg.Headers)),
+// handleFailure requeues a failed delivery according to failureDecision:
+// poison payloads and no-handler deliveries dead-park on the event's dead
+// queue, everything else enters the per-event-type failed queue with the
+// attempt-incremented backoff ladder. The delivery is acked only after the
+// replacement publish was confirmed; a failed publish nacks with requeue so
+// no message is ever dropped. jobType is the normalized event type from the
+// consumer, never the delivery's routing key.
+func (q *Queue) handleFailure(ctx context.Context, msg amqp.Delivery, jobType string, handlerErr error) {
+	attempts := getAttempts(msg.Headers) + 1
+	decision := failureDecision(handlerErr, attempts)
+
+	if decision.dead {
+		deadQueue := deadQueueFor(jobType)
+		q.logger.ErrorContext(
+			ctx, "rabbitmq.dead_park",
+			slog.String("event_type", jobType),
+			slog.Int("attempts", attempts),
+			slog.String("queue", deadQueue),
 			slog.Any("error", handlerErr),
 		)
-		if err := q.republishMain(eventType, msg.Body, msg.Headers); err != nil {
-			q.logger.ErrorContext(ctx, "rabbitmq.challenge_requeue_error", slog.Any("error", err))
+		if err := q.publishToFailed(deadQueue, msg.Body, msg.Headers, attempts, 0); err != nil {
+			q.logger.ErrorContext(ctx, "rabbitmq.dead_park_error", slog.String("event_type", jobType), slog.Any("error", err))
+			_ = msg.Nack(false, true)
+			return
 		}
 		_ = msg.Ack(false)
 		return
 	}
 
-	attempts := getAttempts(msg.Headers) + 1
-	failedQueue := "census." + eventType + ".failed"
-
-	backoff, permanent := failureAction(attempts, q.maxAttempts)
-	if permanent {
-		q.logger.ErrorContext(
-			ctx, "rabbitmq.permanent_failure",
-			slog.String("event_type", eventType),
-			slog.Int("attempts", attempts),
-			slog.Any("error", handlerErr),
-		)
-		if err := q.publishToFailed(failedQueue, eventType, msg.Body, msg.Headers, attempts, 0); err != nil {
-			q.logger.ErrorContext(ctx, "rabbitmq.failed_publish_error", slog.Any("error", err))
-		}
-	} else {
-		q.logger.ErrorContext(
-			ctx, "rabbitmq.retry",
-			slog.String("event_type", eventType),
-			slog.Int("attempts", attempts),
-			slog.Int("backoff_sec", backoff),
-			slog.Any("error", handlerErr),
-		)
-		if err := q.publishToFailed(failedQueue, eventType, msg.Body, msg.Headers, attempts, backoff); err != nil {
-			q.logger.ErrorContext(ctx, "rabbitmq.retry_publish_error", slog.Any("error", err))
-		}
+	q.logger.ErrorContext(
+		ctx, "rabbitmq.retry",
+		slog.String("event_type", jobType),
+		slog.Int("attempts", attempts),
+		slog.Int("backoff_sec", decision.backoffSec),
+		slog.Any("error", handlerErr),
+	)
+	if err := q.publishToFailed(failedQueueFor(jobType), msg.Body, msg.Headers, attempts, decision.backoffSec); err != nil {
+		q.logger.ErrorContext(ctx, "rabbitmq.retry_publish_error", slog.String("event_type", jobType), slog.Any("error", err))
+		_ = msg.Nack(false, true)
+		return
 	}
 
 	_ = msg.Ack(false)
 }
 
-// publishToFailed publishes to the per-event-type failed queue.
-func (q *Queue) publishToFailed(failedQueue, eventType string, body []byte, headers amqp.Table, attempts, backoffSec int) error {
-	newHeaders := copyHeaders(headers, attempts)
+// publishToFailed publishes a persistent body to a side queue (failed or
+// dead) through the default exchange and waits for broker confirmation.
+// The header table is rebuilt with the incremented attempt count.
+func (q *Queue) publishToFailed(queueName string, body []byte, headers amqp.Table, attempts, backoffSec int) error {
 	pub := amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
-		Headers:      newHeaders,
+		Headers:      copyHeaders(headers, attempts),
 	}
 	if backoffSec > 0 {
 		pub.Expiration = fmt.Sprintf("%d000", backoffSec)
 	}
-	return q.ch.PublishWithContext(context.Background(), "", failedQueue, false, false, pub)
+	return q.publishConfirmed(context.Background(), "", queueName, pub)
 }
 
 // Close closes the publishing channel and then the AMQP connection.
@@ -564,6 +660,39 @@ func eventTypes() []string {
 		"achievement-census",
 		"new-proxy",
 	}
+}
+
+// knownEventType reports whether et is a registered event type.
+func knownEventType(et string) bool {
+	for _, known := range eventTypes() {
+		if et == known {
+			return true
+		}
+	}
+	return false
+}
+
+// canonicalEventType strips a trailing ".failed" suffix, normalizing a
+// queue-derived or consumer-tag event name to the main event type
+// ("id-sweep.failed" and "id-sweep" both map to "id-sweep").
+func canonicalEventType(et string) string {
+	return strings.TrimSuffix(et, ".failed")
+}
+
+// failedQueueEventType extracts the canonical event type from a failed
+// queue name ("census.id-sweep.failed" → "id-sweep").
+func failedQueueEventType(failedQueue string) string {
+	return canonicalEventType(strings.TrimPrefix(failedQueue, queuePrefix))
+}
+
+// failedQueueFor returns the per-event-type failed queue name.
+func failedQueueFor(eventType string) string {
+	return queuePrefix + eventType + ".failed"
+}
+
+// deadQueueFor returns the per-event-type dead queue name.
+func deadQueueFor(eventType string) string {
+	return queuePrefix + eventType + ".dead"
 }
 
 // mergeDeliveries merges multiple amqp.Delivery channels into one.

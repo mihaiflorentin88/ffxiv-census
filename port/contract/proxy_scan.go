@@ -2,7 +2,6 @@ package contract
 
 import (
 	"context"
-	"errors"
 	"time"
 )
 
@@ -48,19 +47,11 @@ type ProxyCheckError struct {
 	Reason string
 	// Challenge marks a Cloudflare challenge served to the delivery's
 	// identity (HTTP 202 interstitial or a 403 block page). Challenges are
-	// destination-side: the queue republishes them without consuming the
-	// message's attempt budget.
+	// destination-side. Diagnostic only: they flow the queue's standard
+	// retry ladder while the worker cools the proxy's destination down.
 	Challenge  bool
 	RetryAfter time.Duration
 	Err        error
-}
-
-// IsChallenge reports whether the error chain carries a Cloudflare
-// challenge rejection. Use it to keep challenge storms from parking or
-// discarding otherwise deliverable messages.
-func IsChallenge(err error) bool {
-	var checkErr *ProxyCheckError
-	return errors.As(err, &checkErr) && checkErr.Challenge
 }
 
 // Error returns a bounded diagnostic string for logs. Decision code must use

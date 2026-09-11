@@ -46,7 +46,7 @@ func NewCharacterCensus(
 func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contract.QueueJob, error) {
 	var p CharacterCensusPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return nil, fmt.Errorf("character-census payload: %w", err)
+		return nil, errors.Join(contract.ErrPoisonPayload, fmt.Errorf("character-census payload: %w", err))
 	}
 	h.logger.DebugContext(ctx, "handler.character_census", slog.Uint64("character_id", uint64(p.CharacterID)))
 
@@ -98,7 +98,7 @@ func (h *CharacterCensus) Handle(ctx context.Context, payload []byte) ([]contrac
 			}
 			if errors.Is(terr, contract.ErrCharacterNotFound) {
 				h.logger.WarnContext(ctx, "handler.character_census.tomestone_miss_retrying_lodestone", slog.Uint64("character_id", uint64(p.CharacterID)), slog.Any("lodestone_error", err))
-				return nil, fmt.Errorf("character-census %d: not found on tomestone and lodestone error (%v), retrying on lodestone", p.CharacterID, err)
+				return nil, fmt.Errorf("character-census %d: not found on tomestone and lodestone error (%w), retrying on lodestone", p.CharacterID, err)
 			}
 			h.logger.ErrorContext(ctx, "handler.character_census.fetch_error", slog.Uint64("character_id", uint64(p.CharacterID)), slog.String("source", "tomestone"), slog.Any("error", terr))
 			return nil, fmt.Errorf("character-census tomestone fetch %d: %w", p.CharacterID, terr)

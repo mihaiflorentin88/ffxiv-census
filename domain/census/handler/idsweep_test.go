@@ -696,3 +696,41 @@ func BenchmarkIDSweepNotFoundInfo(b *testing.B) {
 		}
 	}
 }
+
+func TestIDSweep_DecodeErrorIsPoison(t *testing.T) {
+	h, _, _ := newTestIDSweep(t)
+	_, err := h.Handle(context.Background(), []byte("{not json"))
+	if !errors.Is(err, contract.ErrPoisonPayload) {
+		t.Fatalf("undecodable payload must wrap contract.ErrPoisonPayload, got %v", err)
+	}
+}
+
+func TestIDSweep_InvalidRangeIsPoison(t *testing.T) {
+	h, _, _ := newTestIDSweep(t)
+	payload, _ := json.Marshal(IDSweepPayload{From: 10, To: 5})
+	_, err := h.Handle(context.Background(), payload)
+	if !errors.Is(err, contract.ErrPoisonPayload) {
+		t.Fatalf("inverted range must wrap contract.ErrPoisonPayload, got %v", err)
+	}
+}
+
+func TestIDSweep_LodestoneError_Tomestone404_ErrorUnwrapsToProxyCheckError(t *testing.T) {
+	h, ls, ts, _ := newTestDualIDSweep(t)
+	ls.FetchCharacterFunc = func(ctx context.Context, id uint32) (*contract.CharacterProfile, error) {
+		return nil, fmt.Errorf("id-sweep lodestone fetch: %w", &contract.ProxyCheckError{
+			Kind: contract.CheckTarget, Reason: "status 202", Challenge: true, Err: errors.New("HTTP 202"),
+		})
+	}
+	ts.FetchCharacterProfileFunc = func(ctx context.Context, id uint32, update bool) (*contract.TomestoneCharacter, error) {
+		return nil, contract.ErrCharacterNotFound
+	}
+
+	_, err := h.Handle(context.Background(), idsweepPayload(900, 900))
+	if err == nil {
+		t.Fatal("expected the dual-source fallback error, got nil")
+	}
+	var checkErr *contract.ProxyCheckError
+	if !errors.As(err, &checkErr) || !checkErr.Challenge {
+		t.Fatalf("fallback error must unwrap to the typed challenge error so the worker can cool the destination, got %v", err)
+	}
+}
