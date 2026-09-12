@@ -184,7 +184,7 @@ workers:
         - "10"
     # --- Proxy consumers (per-event-type with proxy rotation) ---
     - name: proxy-id-sweep
-      replicaCount: 2
+      replicaCount: 3
       command:
         - /app/ffxiv-census
         - consume
@@ -220,7 +220,7 @@ workers:
         - name: POSTGRES_MAX_IDLE_CONNS
           value: "10"
     - name: proxy-achievement-census
-      replicaCount: 1
+      replicaCount: 2
       command:
         - /app/ffxiv-census
         - consume
@@ -345,7 +345,7 @@ cronjobs:
         - id-sweep
         - --auto
         - --count
-        - "1500"
+        - "1200"
         - --chunk-size
         - "1"
 
